@@ -7,6 +7,8 @@
 
 target/
 !.mvn/wrapper/maven-wrapper.jar
+node_modules/
+dist/
 
 .flattened-pom.xml
 
@@ -49,6 +51,19 @@ nbdist/
 rebel.xml
 
 application-my.yaml
+
+# Local environment and runtime data
+.env
+.env.local
+deploy/data/
+uploads/
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
 
 /yudao-ui-app/unpackage/
 .DS_Store
