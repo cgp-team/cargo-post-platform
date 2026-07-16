@@ -1,0 +1,382 @@
+openapi: 3.1.0
+info:
+  title: 客货邮路线规划算法 API
+  version: 0.1.0
+  description: 业务后端与路线规划算法服务之间的异步接口草案。浏览器不得直接调用。
+servers:
+  - url: http://mock-algorithm:8000
+    description: Docker 内部开发地址
+paths:
+  /api/algorithm/v1/planning-jobs:
+    post:
+      operationId: createPlanningJob
+      summary: 创建规划任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanningJobRequest'
+            example:
+              requestId: req-20260716-001
+              snapshotId: snapshot-001
+              planningTime: '2026-07-16T19:30:00+08:00'
+              rollingWindowMinutes: 30
+              scenario: SUCCESS
+              algorithmConfig:
+                algorithmVersion: mock-1.0.0
+                parameterVersion: default-v1
+              vehicles:
+                - vehicleId: 1001
+                  shiftId: 2001
+                  longitude: 104.0668
+                  latitude: 30.5728
+                  passengerLoad: 2
+                  remainingCargoCapacityKg: 500
+                  status: AVAILABLE
+              orders:
+                - orderId: O-001
+                  orderType: CARGO
+                  pickupNodeId: N-001
+                  deliveryNodeId: N-002
+                  itemCount: 1
+                  weightKg: 20
+                  volumeM3: 0.1
+                  earliestPickupTime: '2026-07-16T19:30:00+08:00'
+                  latestDeliveryTime: '2026-07-16T21:30:00+08:00'
+                  priority: 5
+      responses:
+        '202':
+          description: 已接受
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningJobAcceptedResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /api/algorithm/v1/planning-jobs/{jobId}:
+    get:
+      operationId: getPlanningJobStatus
+      summary: 查询规划任务状态
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: 任务状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningJobStatusResponse'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/algorithm/v1/planning-jobs/{jobId}/result:
+    get:
+      operationId: getPlanningJobResult
+      summary: 获取规划结果
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: 规划结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningJobResultResponse'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /health:
+    get:
+      operationId: health
+      summary: 存活检查
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, algorithmVersion]
+                properties:
+                  status:
+                    type: string
+                    const: UP
+                  algorithmVersion:
+                    type: string
+                    example: mock-1.0.0
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: 标准错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    PlanningJobRequest:
+      type: object
+      required: [requestId, snapshotId, planningTime, rollingWindowMinutes, algorithmConfig, vehicles, orders]
+      properties:
+        requestId:
+          type: string
+        snapshotId:
+          type: string
+        planningTime:
+          type: string
+          format: date-time
+          example: '2026-07-16T19:30:00+08:00'
+        rollingWindowMinutes:
+          type: integer
+          minimum: 1
+        scenario:
+          type: string
+          enum: [SUCCESS, PARTIAL_REJECTION, NO_FEASIBLE_SOLUTION, TIMEOUT, INTERNAL_ERROR]
+          default: SUCCESS
+          description: 仅供 Mock 测试，真实算法可忽略。
+        algorithmConfig:
+          $ref: '#/components/schemas/AlgorithmConfig'
+        vehicles:
+          type: array
+          items:
+            $ref: '#/components/schemas/VehicleState'
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanningOrder'
+    PlanningJobAcceptedResponse:
+      type: object
+      required: [jobId, requestId, snapshotId, status, acceptedAt]
+      properties:
+        jobId:
+          type: string
+        requestId:
+          type: string
+        snapshotId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PlanningStatus'
+        acceptedAt:
+          type: string
+          format: date-time
+    PlanningJobStatusResponse:
+      type: object
+      required: [jobId, requestId, snapshotId, status, algorithmVersion, parameterVersion, updatedAt]
+      properties:
+        jobId:
+          type: string
+        requestId:
+          type: string
+        snapshotId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PlanningStatus'
+        algorithmVersion:
+          type: string
+        parameterVersion:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        error:
+          $ref: '#/components/schemas/ErrorResponse'
+    PlanningJobResultResponse:
+      type: object
+      required: [jobId, requestId, snapshotId, algorithmVersion, parameterVersion, status, score, vehiclePlans, rejectedOrders, metrics]
+      properties:
+        jobId:
+          type: string
+        requestId:
+          type: string
+        snapshotId:
+          type: string
+        algorithmVersion:
+          type: string
+        parameterVersion:
+          type: string
+        status:
+          $ref: '#/components/schemas/PlanningStatus'
+        score:
+          type: number
+          format: double
+        vehiclePlans:
+          type: array
+          items:
+            $ref: '#/components/schemas/VehiclePlan'
+        rejectedOrders:
+          type: array
+          items:
+            $ref: '#/components/schemas/RejectedOrder'
+        metrics:
+          $ref: '#/components/schemas/Metrics'
+    PlanningStatus:
+      type: string
+      enum: [ACCEPTED, RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILED, TIMEOUT, NO_FEASIBLE_SOLUTION]
+    AlgorithmConfig:
+      type: object
+      required: [algorithmVersion, parameterVersion]
+      additionalProperties: true
+      properties:
+        algorithmVersion:
+          type: string
+        parameterVersion:
+          type: string
+        maxCalculationSeconds:
+          type: integer
+          minimum: 1
+    VehicleState:
+      type: object
+      required: [vehicleId, longitude, latitude, passengerLoad, remainingCargoCapacityKg, status]
+      properties:
+        vehicleId:
+          type: integer
+          format: int64
+        shiftId:
+          type: integer
+          format: int64
+        longitude:
+          type: number
+          format: double
+        latitude:
+          type: number
+          format: double
+        roadNodeId:
+          type: string
+        roadEdgeId:
+          type: string
+        passengerLoad:
+          type: integer
+          minimum: 0
+        remainingCargoCapacityKg:
+          type: number
+          minimum: 0
+        status:
+          type: string
+        estimatedArrivals:
+          type: array
+          items:
+            $ref: '#/components/schemas/EstimatedArrival'
+    EstimatedArrival:
+      type: object
+      required: [stationId, estimatedArrivalTime]
+      properties:
+        stationId:
+          type: integer
+          format: int64
+        estimatedArrivalTime:
+          type: string
+          format: date-time
+    PlanningOrder:
+      type: object
+      required: [orderId, orderType, pickupNodeId, deliveryNodeId, itemCount, weightKg, volumeM3, earliestPickupTime, latestDeliveryTime, priority]
+      properties:
+        orderId:
+          type: string
+        orderType:
+          type: string
+          enum: [PASSENGER, CARGO, FRESH, POSTAL]
+        pickupNodeId:
+          type: string
+        deliveryNodeId:
+          type: string
+        itemCount:
+          type: integer
+          minimum: 1
+        weightKg:
+          type: number
+          minimum: 0
+        volumeM3:
+          type: number
+          minimum: 0
+        earliestPickupTime:
+          type: string
+          format: date-time
+        latestDeliveryTime:
+          type: string
+          format: date-time
+        priority:
+          type: integer
+          minimum: 0
+    VehiclePlan:
+      type: object
+      required: [vehicleId, assignedOrderIds, routeNodes]
+      properties:
+        vehicleId:
+          type: integer
+          format: int64
+        shiftId:
+          type: integer
+          format: int64
+        assignedOrderIds:
+          type: array
+          items:
+            type: string
+        routeNodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteNode'
+    RouteNode:
+      type: object
+      required: [nodeId, action, longitude, latitude, estimatedArrivalTime]
+      properties:
+        nodeId:
+          type: string
+        orderId:
+          type: string
+        action:
+          type: string
+          enum: [START, PICKUP, DROPOFF, STATION, END]
+        longitude:
+          type: number
+        latitude:
+          type: number
+        estimatedArrivalTime:
+          type: string
+          format: date-time
+    RejectedOrder:
+      type: object
+      required: [orderId, reasonCode, reasonMessage]
+      properties:
+        orderId:
+          type: string
+        reasonCode:
+          type: string
+        reasonMessage:
+          type: string
+    Metrics:
+      type: object
+      required: [extraDistanceKm, estimatedPassengerDelayMinutes, estimatedRevenue, estimatedCost]
+      properties:
+        extraDistanceKm:
+          type: number
+        estimatedPassengerDelayMinutes:
+          type: number
+        estimatedRevenue:
+          type: number
+        estimatedCost:
+          type: number
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_INPUT, NO_FEASIBLE_SOLUTION, TIMEOUT, ROAD_NETWORK_UNAVAILABLE, ALGORITHM_INTERNAL_ERROR, VERSION_NOT_SUPPORTED, JOB_NOT_FOUND, JOB_NOT_READY]
+        message:
+          type: string
+        requestId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
