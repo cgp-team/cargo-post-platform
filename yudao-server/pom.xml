@@ -153,6 +153,12 @@
             <artifactId>yudao-spring-boot-starter-protection</artifactId>
         </dependency>
 
+        <!-- 监控相关：Actuator 健康检查端点（/actuator/health），供部署健康检查与运维探活使用 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>
