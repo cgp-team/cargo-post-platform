@@ -15,48 +15,40 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
   APP_DIR: /opt/cargo-post
   JAR_PATH: yudao-server/target/yudao-server.jar
+  JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # self-hosted runner 运行在开发云服务器上（deploy 用户），构建与部署同机完成。
+    # 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），故放弃 SSH 上传方案。
+    runs-on: [self-hosted, cargo-post]
+    timeout-minutes: 45
     environment: dev
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: maven
 
       # 测试已在 ci.yml 的 PR 门禁中执行，这里只打包
+      # 服务器本机 JDK 21 + Maven，依赖走 ~/.m2/settings.xml 的阿里云镜像
       - name: Package backend
         run: mvn -B -pl yudao-server -am clean package -DskipTests
 
-      - name: Setup SSH key
+      - name: Deploy and restart
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${DEPLOY_PORT}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Upload jar
-        run: scp -i ~/.ssh/deploy_key -P "${DEPLOY_PORT}" "${JAR_PATH}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${APP_DIR}/yudao-server.jar.new"
-
-      - name: Restart service and verify health
-        run: |
-          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" bash -s <<'EOF'
           set -euo pipefail
-          cd /opt/cargo-post
+          cd "${APP_DIR}"
           # 旧包保留为 .bak，出问题可手工回滚
           if [[ -f yudao-server.jar ]]; then
             cp -a yudao-server.jar yudao-server.jar.bak
           fi
+          cp "${GITHUB_WORKSPACE}/${JAR_PATH}" yudao-server.jar.new
           mv yudao-server.jar.new yudao-server.jar
-          sudo systemctl restart cargo-post
+          sudo /usr/bin/systemctl restart cargo-post
+
+      - name: Health check
+        run: |
+          set -euo pipefail
           for i in $(seq 1 40); do
             sleep 3
             if curl -fsS http://127.0.0.1:48080/actuator/health | grep -q '"status":"UP"'; then
@@ -67,4 +59,3 @@ jobs:
           echo "Backend failed health check, recent status:" >&2
           systemctl status cargo-post -n 50 --no-pager >&2 || true
           exit 1
-          EOF
