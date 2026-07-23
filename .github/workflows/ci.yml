@@ -55,7 +55,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Type check
         if: steps.frontend.outputs.ready == 'true'
-        run: pnpm type-check
+        run: pnpm ts:check
       - name: Build
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm build:prod
@@ -99,7 +99,8 @@ jobs:
       - name: Reject tracked local environment files
         shell: bash
         run: |
-          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; then
+          # yudao-ui 前端工程的 .env* 是 Vite 构建配置（内容会打包进 JS，非密钥），按上游惯例纳入仓库
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$' | grep -vE '^yudao-ui/'; then
             echo "Tracked local environment file detected" >&2
             exit 1
           fi
