@@ -1,0 +1,20 @@
+# cargo-post 后端 systemd 服务（部署到云服务器 /etc/systemd/system/cargo-post.service）
+# 安装步骤见 docs/deployment.md 或 CI/CD 配置说明
+[Unit]
+Description=cargo-post platform backend (yudao-server)
+After=network.target
+
+[Service]
+Type=simple
+# 改成实际的部署用户（与 GitHub Secret DEPLOY_USER 一致）
+User=deploy
+WorkingDirectory=/opt/cargo-post
+# 可选：把 DB/Redis 密码等写入 /opt/cargo-post/app.env（chmod 600），不要在仓库提交
+EnvironmentFile=-/opt/cargo-post/app.env
+ExecStart=/usr/bin/java -Xms512m -Xmx512m -Djava.security.egd=file:/dev/./urandom -jar /opt/cargo-post/yudao-server.jar
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
