@@ -80,4 +80,6 @@ jobs:
             fi
           done
           echo "Checking frontend via nginx..."
-          curl -fsS http://127.0.0.1/ | grep -q "客货邮运营管理平台" && echo "Frontend is served"
+          # 先落盘再 grep：grep -q 提前退出会让 curl 收到 SIGPIPE（exit 23），pipefail 下误判失败
+          curl -fsS http://127.0.0.1/ -o /tmp/fe-index.html
+          grep -q "客货邮运营管理平台" /tmp/fe-index.html && echo "Frontend is served"
