@@ -55,6 +55,9 @@ application-my.yaml
 # Local environment and runtime data
 .env
 .env.local
+# 前端工程的 Vite 构建环境文件（.env、.env.local 等）属于源代码，按上游惯例跟踪
+!yudao-ui/**/.env
+!yudao-ui/**/.env.local
 deploy/data/
 uploads/
 backups/

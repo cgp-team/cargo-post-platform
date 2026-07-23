@@ -34,7 +34,20 @@ jobs:
       - name: Package backend
         run: mvn -B -pl yudao-server -am clean package -DskipTests
 
-      - name: Deploy and restart
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # package.json 的 packageManager 字段锁定 pnpm 版本，corepack 自动生效
+      - name: Build frontend
+        working-directory: yudao-ui/yudao-ui-admin-vue3
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build:prod
+
+      - name: Deploy backend and restart
         run: |
           set -euo pipefail
           cd "${APP_DIR}"
@@ -46,6 +59,11 @@ jobs:
           mv yudao-server.jar.new yudao-server.jar
           sudo /usr/bin/systemctl restart cargo-post
 
+      - name: Deploy frontend
+        run: |
+          set -euo pipefail
+          rsync -a --delete "${GITHUB_WORKSPACE}/yudao-ui/yudao-ui-admin-vue3/dist-prod/" /opt/cargo-post-web/
+
       - name: Health check
         run: |
           set -euo pipefail
@@ -53,9 +71,15 @@ jobs:
             sleep 3
             if curl -fsS http://127.0.0.1:48080/actuator/health | grep -q '"status":"UP"'; then
               echo "Backend is UP after ${i} checks"
-              exit 0
+              break
+            fi
+            if [[ $i -eq 40 ]]; then
+              echo "Backend failed health check, recent status:" >&2
+              systemctl status cargo-post -n 50 --no-pager >&2 || true
+              exit 1
             fi
           done
-          echo "Backend failed health check, recent status:" >&2
-          systemctl status cargo-post -n 50 --no-pager >&2 || true
-          exit 1
+          echo "Checking frontend via nginx..."
+          # 先落盘再 grep：grep -q 提前退出会让 curl 收到 SIGPIPE（exit 23），pipefail 下误判失败
+          curl -fsS http://127.0.0.1/ -o /tmp/fe-index.html
+          grep -q "客货邮运营管理平台" /tmp/fe-index.html && echo "Frontend is served"
