@@ -53,12 +53,14 @@ jobs:
       - name: Install dependencies
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm install --frozen-lockfile
-      - name: Type check
-        if: steps.frontend.outputs.ready == 'true'
-        run: pnpm ts:check
+      # 先构建：unplugin-auto-import / unplugin-vue-components 在构建时生成
+      # src/types/auto-*.d.ts，ts:check 依赖这些声明文件
       - name: Build
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm build:prod
+      - name: Type check
+        if: steps.frontend.outputs.ready == 'true'
+        run: pnpm ts:check
 
   mock-algorithm:
     runs-on: ubuntu-latest
