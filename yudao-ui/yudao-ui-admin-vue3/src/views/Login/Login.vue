@@ -13,7 +13,7 @@
       <Transition appear enter-active-class="animate__animated animate__bounceInRight">
         <div class="w-[100%] max-w-420px px-30px">
           <!-- logo + 系统标题 -->
-          <div class="mb-20px flex items-center justify-center">
+          <div class="mb-20px flex items-center justify-center text-white">
             <img alt="" class="mr-10px h-48px w-48px" src="@/assets/imgs/logo.png" />
             <span class="text-20px font-bold">{{ underlineToHump(appStore.getTitle) }}</span>
           </div>
@@ -54,6 +54,15 @@ $prefix-cls: #{$namespace}-login;
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
+
+  // 深色背景上的文字可读性
+  :deep(.login-form) {
+    --el-checkbox-text-color: rgba(255, 255, 255, 0.85);
+
+    h2 {
+      color: #fff;
+    }
+  }
 }
 </style>
 
