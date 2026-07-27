@@ -44,7 +44,6 @@ export const getCurrentUserId = (): number => {
 }
 
 export type LoginFormType = {
-  tenantName: string
   username: string
   password: string
   rememberMe: boolean
