@@ -10,21 +10,9 @@
     size="large"
   >
     <el-row class="mx-[-10px]">
-      <!-- 租户名 -->
       <el-col :span="24" class="px-10px">
         <el-form-item>
           <LoginFormTitle class="w-full" />
-        </el-form-item>
-      </el-col>
-      <el-col :span="24" class="px-10px">
-        <el-form-item v-if="resetPasswordData.tenantEnable === 'true'" prop="tenantName">
-          <el-input
-            v-model="resetPasswordData.tenantName"
-            :placeholder="t('login.tenantNamePlaceholder')"
-            :prefix-icon="iconHouse"
-            type="primary"
-            link
-          />
         </el-form-item>
       </el-col>
       <!-- 手机号 -->
@@ -113,25 +101,19 @@
   </el-form>
 </template>
 <script lang="ts" setup>
-import type { RouteLocationNormalizedLoaded } from 'vue-router'
-
 import { useIcon } from '@/hooks/web/useIcon'
 
 import { sendSmsCode, smsResetPassword } from '@/api/login'
 import LoginFormTitle from './LoginFormTitle.vue'
 import { LoginStateEnum, useFormValid, useLoginState } from './useLogin'
 import { ElLoading } from 'element-plus'
-import * as authUtil from '@/utils/auth'
-import * as LoginApi from '@/api/login'
 defineOptions({ name: 'ForgetPasswordForm' })
 const verify = ref()
 
 const { t } = useI18n()
 const message = useMessage()
-const { currentRoute } = useRouter()
 const formSmsResetPassword = ref()
 const loginLoading = ref(false)
-const iconHouse = useIcon({ icon: 'ep:house' })
 const iconCellphone = useIcon({ icon: 'ep:cellphone' })
 const iconCircleCheck = useIcon({ icon: 'ep:circle-check' })
 const { validForm } = useFormValid(formSmsResetPassword)
@@ -150,7 +132,6 @@ const validatePass2 = (_rule, value, callback) => {
 }
 
 const rules = {
-  tenantName: [{ required: true, min: 2, max: 20, trigger: 'blur', message: '长度为4到16位' }],
   mobile: [{ required: true, min: 11, max: 11, trigger: 'blur', message: '手机号长度为11位' }],
   password: [
     {
@@ -168,8 +149,6 @@ const rules = {
 
 const resetPasswordData = reactive({
   captchaEnable: import.meta.env.VITE_APP_CAPTCHA_ENABLE,
-  tenantEnable: import.meta.env.VITE_APP_TENANT_ENABLE,
-  tenantName: '',
   username: '',
   password: '',
   check_password: '',
@@ -178,13 +157,11 @@ const resetPasswordData = reactive({
 })
 
 const smsVO = reactive({
-  tenantName: '',
   mobile: '',
   captchaVerification: '',
   scene: 23
 })
 const mobileCodeTimer = ref(0)
-const redirect = ref<string>('')
 
 // 获取验证码
 const getCode = async () => {
@@ -199,9 +176,6 @@ const getCode = async () => {
 }
 
 const getSmsCode = async (params) => {
-  if (resetPasswordData.tenantEnable === 'true') {
-    await getTenantId()
-  }
   smsVO.captchaVerification = params.captchaVerification
   smsVO.mobile = resetPasswordData.mobile
   await sendSmsCode(smsVO).then(async () => {
@@ -216,32 +190,11 @@ const getSmsCode = async (params) => {
     }, 1000)
   })
 }
-watch(
-  () => currentRoute.value,
-  (route: RouteLocationNormalizedLoaded) => {
-    redirect.value = route?.query?.redirect as string
-  },
-  {
-    immediate: true
-  }
-)
-
-const getTenantId = async () => {
-  if (resetPasswordData.tenantEnable === 'true') {
-    const res = await LoginApi.getTenantIdByName(resetPasswordData.tenantName)
-    if (res == null) {
-      message.error(t('login.invalidTenantName'))
-      throw t('login.invalidTenantName')
-    }
-    authUtil.setTenantId(res)
-  }
-}
 
 // 重置密码
 const resetPassword = async () => {
   const data = await validForm()
   if (!data) return
-  await getTenantId()
   loginLoading.value = true
   await smsResetPassword(resetPasswordData)
     .then(async () => {
