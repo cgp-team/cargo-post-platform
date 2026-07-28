@@ -72,3 +72,6 @@ venv/
 .DS_Store
 **/.DS_Store
 outputs/
+
+# 微信小程序 - 本地个人配置
+miniprogram/project.private.config.json

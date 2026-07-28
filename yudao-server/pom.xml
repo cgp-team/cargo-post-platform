@@ -36,12 +36,12 @@
             <artifactId>yudao-module-transport</artifactId>
             <version>${revision}</version>
         </dependency>
-        <!-- 会员中心。默认注释，保证编译速度 -->
-<!--        <dependency>-->
-<!--            <groupId>cn.iocoder.boot</groupId>-->
-<!--            <artifactId>yudao-module-member</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
+        <!-- 会员中心。已启用，为小程序提供用户认证 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-module-member</artifactId>
+            <version>${revision}</version>
+        </dependency>
 
         <!-- 数据报表。默认注释，保证编译速度 -->
 <!--        <dependency>-->
