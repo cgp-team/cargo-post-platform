@@ -27,9 +27,9 @@ import { Dialog } from '@/components/Dialog'
 const message = useMessage()
 const formLoading = ref(false); const dialogVisible = ref(false); const dialogTitle = ref(''); const formType = ref('')
 const formRef = ref(); const emit = defineEmits(['success'])
-const formData = ref<DriverApi.DriverVO>({ name: undefined, mobile: undefined, licenseNo: undefined, licenseExpireDate: undefined })
+const formData = ref<DriverApi.DriverVO>({ name: '', mobile: '', licenseNo: '', licenseExpireDate: '' })
 const formRules = reactive({ name: [{ required: true, message: '司机姓名不能为空', trigger: 'blur' }] })
-const resetForm = () => { formData.value = { name: undefined, mobile: undefined, licenseNo: undefined, licenseExpireDate: undefined }; formRef.value?.resetFields() }
+const resetForm = () => { formData.value = { name: '', mobile: '', licenseNo: '', licenseExpireDate: '' }; formRef.value?.resetFields() }
 const open = (type: string, id?: number) => {
   dialogVisible.value = true; dialogTitle.value = type === 'create' ? '新增司机' : '编辑司机'; formType.value = type; resetForm()
   if (id) { formLoading.value = true; DriverApi.getDriver(id).then((data) => { formData.value = data; formLoading.value = false }) }

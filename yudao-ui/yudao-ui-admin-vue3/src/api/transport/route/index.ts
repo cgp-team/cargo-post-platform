@@ -1,5 +1,4 @@
 import request from '@/config/axios'
-import type { PageParam } from '@/types/common'
 
 export interface RouteVO {
   id?: number

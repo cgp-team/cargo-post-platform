@@ -34,13 +34,13 @@ const dialogTitle = ref('')
 const formType = ref('')
 const formRef = ref()
 const emit = defineEmits(['success'])
-const formData = ref<RouteApi.RouteVO>({ routeCode: undefined, routeName: undefined, startStationId: undefined, endStationId: undefined, distanceKm: undefined })
+const formData = ref<RouteApi.RouteVO>({ routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: '' })
 const formRules = reactive({
   routeCode: [{ required: true, message: '线路编码不能为空', trigger: 'blur' }],
   routeName: [{ required: true, message: '线路名称不能为空', trigger: 'blur' }],
 })
 const resetForm = () => {
-  formData.value = { routeCode: undefined, routeName: undefined, startStationId: undefined, endStationId: undefined, distanceKm: undefined }
+  formData.value = { routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: '' }
   formRef.value?.resetFields()
 }
 const open = (type: string, id?: number) => {
