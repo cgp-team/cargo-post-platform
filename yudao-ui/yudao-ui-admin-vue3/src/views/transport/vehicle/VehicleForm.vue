@@ -11,7 +11,7 @@
         <el-input-number v-model="formData.passengerCapacity" :min="0" style="width:100%" />
       </el-form-item>
       <el-form-item label="载货重量(kg)" prop="cargoCapacityKg">
-        <el-input v-model="formData.cargoCapacityKg" placeholder="请输入载货重量(kg)" />
+        <el-input v-model.number="formData.cargoCapacityKg" placeholder="请输入载货重量(kg)" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -37,7 +37,7 @@ const formData = ref<VehicleApi.VehicleVO>({
   plateNo: '',
   vehicleType: undefined,
   passengerCapacity: undefined,
-  cargoCapacityKg: '',
+  cargoCapacityKg: undefined,
 })
 
 const formRules = reactive({
@@ -45,7 +45,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: '' }
+  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined }
   formRef.value?.resetFields()
 }
 

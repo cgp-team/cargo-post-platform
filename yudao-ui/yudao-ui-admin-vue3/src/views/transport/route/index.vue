@@ -43,7 +43,19 @@ import * as RouteApi from '@/api/transport/route'
 import RouteForm from './RouteForm.vue'
 defineOptions({ name: 'TransportRoute' })
 const message = useMessage(); const loading = ref(true); const total = ref(0); const list = ref([])
-const queryParams = reactive({ pageNo: 1, pageSize: 10 }); const formRef = ref()
+type RouteQueryParams = {
+  pageNo: number
+  pageSize: number
+  routeCode?: string
+  routeName?: string
+}
+
+const queryParams = reactive<RouteQueryParams>({
+  pageNo: 1,
+  pageSize: 10,
+  routeCode: '',
+  routeName: '',
+}); const formRef = ref()
 const getList = async () => { loading.value = true; try { const res = await RouteApi.getRoutePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)

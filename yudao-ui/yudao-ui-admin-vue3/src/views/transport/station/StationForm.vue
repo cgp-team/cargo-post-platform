@@ -11,10 +11,10 @@
         <el-input-number v-model="formData.stationLevel" :min="0" style="width:100%" />
       </el-form-item>
       <el-form-item label="经度" prop="longitude">
-        <el-input v-model="formData.longitude" placeholder="请输入经度" />
+        <el-input v-model.number="formData.longitude" placeholder="请输入经度" />
       </el-form-item>
       <el-form-item label="纬度" prop="latitude">
-        <el-input v-model="formData.latitude" placeholder="请输入纬度" />
+        <el-input v-model.number="formData.latitude" placeholder="请输入纬度" />
       </el-form-item>
       <el-form-item label="站点地址" prop="address">
         <el-input v-model="formData.address" placeholder="请输入站点地址" />
