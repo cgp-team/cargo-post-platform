@@ -1,0 +1,21 @@
+package cn.iocoder.yudao.module.transport.controller.admin.transport.vehicle.vo;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import java.math.BigDecimal;
+
+@Schema(description="Vehicle Base VO")
+@Data
+public class VehicleBaseVO {
+    @Schema(description="plate number")
+    private String plateNo;
+
+    @Schema(description="vehicle type")
+    private Integer vehicleType;
+
+    @Schema(description="passenger capacity")
+    private Integer passengerCapacity;
+
+    @Schema(description="cargo capacity kg")
+    private BigDecimal cargoCapacityKg;
+}
