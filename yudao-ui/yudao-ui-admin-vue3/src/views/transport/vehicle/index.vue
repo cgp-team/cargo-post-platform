@@ -42,7 +42,17 @@ const message = useMessage()
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])
-const queryParams = reactive({ pageNo: 1, pageSize: 10 })
+type VehicleQueryParams = {
+  pageNo: number
+  pageSize: number
+  plateNo?: string
+}
+
+const queryParams = reactive<VehicleQueryParams>({
+  pageNo: 1,
+  pageSize: 10,
+  plateNo: '',
+})
 const formRef = ref()
 const getList = async () => {
   loading.value = true

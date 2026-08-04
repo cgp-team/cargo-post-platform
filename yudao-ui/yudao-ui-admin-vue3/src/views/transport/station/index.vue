@@ -47,7 +47,19 @@ const message = useMessage()
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])
-const queryParams = reactive({ pageNo: 1, pageSize: 10 })
+type StationQueryParams = {
+  pageNo: number
+  pageSize: number
+  stationCode?: string
+  stationName?: string
+}
+
+const queryParams = reactive<StationQueryParams>({
+  pageNo: 1,
+  pageSize: 10,
+  stationCode: '',
+  stationName: '',
+})
 const formRef = ref()
 
 const getList = async () => {

@@ -14,7 +14,7 @@
         <el-input-number v-model="formData.endStationId" :min="0" style="width:100%" />
       </el-form-item>
       <el-form-item label="里程(km)" prop="distanceKm">
-        <el-input v-model="formData.distanceKm" placeholder="请输入里程(km)" />
+        <el-input v-model.number="formData.distanceKm" placeholder="请输入里程(km)" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -34,13 +34,13 @@ const dialogTitle = ref('')
 const formType = ref('')
 const formRef = ref()
 const emit = defineEmits(['success'])
-const formData = ref<RouteApi.RouteVO>({ routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: '' })
+const formData = ref<RouteApi.RouteVO>({ routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: undefined })
 const formRules = reactive({
   routeCode: [{ required: true, message: '线路编码不能为空', trigger: 'blur' }],
   routeName: [{ required: true, message: '线路名称不能为空', trigger: 'blur' }],
 })
 const resetForm = () => {
-  formData.value = { routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: '' }
+  formData.value = { routeCode: '', routeName: '', startStationId: undefined, endStationId: undefined, distanceKm: undefined }
   formRef.value?.resetFields()
 }
 const open = (type: string, id?: number) => {

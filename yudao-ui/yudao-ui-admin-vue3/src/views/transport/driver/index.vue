@@ -42,7 +42,19 @@ import * as DriverApi from '@/api/transport/driver'
 import DriverForm from './DriverForm.vue'
 defineOptions({ name: 'TransportDriver' })
 const message = useMessage(); const loading = ref(true); const total = ref(0); const list = ref([])
-const queryParams = reactive({ pageNo: 1, pageSize: 10 }); const formRef = ref()
+type DriverQueryParams = {
+  pageNo: number
+  pageSize: number
+  name?: string
+  mobile?: string
+}
+
+const queryParams = reactive<DriverQueryParams>({
+  pageNo: 1,
+  pageSize: 10,
+  name: '',
+  mobile: '',
+}); const formRef = ref()
 const getList = async () => { loading.value = true; try { const res = await DriverApi.getDriverPage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
