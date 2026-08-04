@@ -40,12 +40,12 @@ const formRef = ref()
 const emit = defineEmits(['success'])
 
 const formData = ref<StationApi.StationVO>({
-  stationCode: undefined,
-  stationName: undefined,
+  stationCode: '',
+  stationName: '',
   stationLevel: undefined,
   longitude: undefined,
   latitude: undefined,
-  address: undefined,
+  address: '',
 })
 
 const formRules = reactive({
@@ -55,12 +55,12 @@ const formRules = reactive({
 
 const resetForm = () => {
   formData.value = {
-    stationCode: undefined,
-    stationName: undefined,
+    stationCode: '',
+    stationName: '',
     stationLevel: undefined,
     longitude: undefined,
     latitude: undefined,
-    address: undefined,
+    address: '',
   }
   formRef.value?.resetFields()
 }

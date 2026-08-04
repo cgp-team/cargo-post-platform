@@ -34,10 +34,10 @@ const formRef = ref()
 const emit = defineEmits(['success'])
 
 const formData = ref<VehicleApi.VehicleVO>({
-  plateNo: undefined,
+  plateNo: '',
   vehicleType: undefined,
   passengerCapacity: undefined,
-  cargoCapacityKg: undefined,
+  cargoCapacityKg: '',
 })
 
 const formRules = reactive({
@@ -45,7 +45,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { plateNo: undefined, vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined }
+  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: '' }
   formRef.value?.resetFields()
 }
 
