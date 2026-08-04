@@ -47,6 +47,15 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build:prod
 
+      - name: Run database migration
+        run: |
+          set -euo pipefail
+          # Apply transport module schema and menu changes
+          if [ -f sql/mysql/transport-menu.sql ]; then
+            mysql -u root -p"${DB_ROOT_PASSWORD:-123456}" ruoyi-vue-pro < sql/mysql/transport-menu.sql || true
+            echo "Database migration applied."
+          fi
+
       - name: Deploy backend and restart
         run: |
           set -euo pipefail
