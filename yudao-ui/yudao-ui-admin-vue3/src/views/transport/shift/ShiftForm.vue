@@ -6,7 +6,7 @@
       </el-form-item>
       <el-form-item label="所属线路" prop="routeId">
         <el-select v-model="formData.routeId" placeholder="请选择线路" style="width:100%">
-          <el-option v-for="r in routeList" :key="r.id" :label="r.routeName" :value="r.id" />
+          <el-option v-for="r in routeList" :key="r.id!" :label="r.routeName" :value="r.id!" />
         </el-select>
       </el-form-item>
       <el-form-item label="计划发车时间" prop="plannedDepartureTime">
