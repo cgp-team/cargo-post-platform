@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS `member_user` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会员表';
 
 -- ---------- 客货邮管理菜单 ----------
-DELETE FROM system_role_menu WHERE menu_id BETWEEN 6800 AND 6844;
-DELETE FROM system_menu WHERE id BETWEEN 6800 AND 6844;
+DELETE FROM system_role_menu WHERE menu_id BETWEEN 6800 AND 6899;
+DELETE FROM system_menu WHERE id BETWEEN 6800 AND 6899;
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 -- Root directory
@@ -86,5 +86,4 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6864, '班次删除', 'transport:shift:delete', 3, 4, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
 -- 将菜单分配给超级管理员角色
-INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6844;
-INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6850 AND 6864;
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
