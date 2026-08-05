@@ -99,6 +99,19 @@ jobs:
             fi
           done
           echo "Checking frontend via nginx..."
-          # 先落盘再 grep：grep -q 提前退出会让 curl 收到 SIGPIPE（exit 23），pipefail 下误判失败
-          curl -fsS http://127.0.0.1/ -o /tmp/fe-index.html
-          grep -q "客货邮运营管理平台" /tmp/fe-index.html && echo "Frontend is served"
+          TMP_HTML=$(mktemp)
+          if curl -fsS --max-time 10 http://127.0.0.1/ -o "$TMP_HTML" 2>/dev/null; then
+            if grep -q "客货邮运营管理平台" "$TMP_HTML"; then
+              echo "Frontend is served"
+            else
+              echo "Frontend check failed: expected text not found" >&2
+              head -50 "$TMP_HTML" >&2 || true
+              rm -f "$TMP_HTML"
+              exit 1
+            fi
+          else
+            echo "Failed to fetch frontend from nginx (curl exit $?)" >&2
+            rm -f "$TMP_HTML"
+            exit 1
+          fi
+          rm -f "$TMP_HTML"
