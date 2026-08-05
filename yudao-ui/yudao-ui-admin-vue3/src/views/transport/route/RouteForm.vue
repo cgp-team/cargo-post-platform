@@ -9,12 +9,12 @@
       </el-form-item>
       <el-form-item label="起点站点" prop="startStationId">
         <el-select v-model="formData.startStationId" placeholder="请选择起点站点" style="width:100%">
-          <el-option v-for="s in stationList" :key="s.id" :label="s.stationName" :value="s.id" />
+          <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
         </el-select>
       </el-form-item>
       <el-form-item label="终点站点" prop="endStationId">
         <el-select v-model="formData.endStationId" placeholder="请选择终点站点" style="width:100%">
-          <el-option v-for="s in stationList" :key="s.id" :label="s.stationName" :value="s.id" />
+          <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
         </el-select>
       </el-form-item>
       <el-form-item label="里程(km)" prop="distanceKm">

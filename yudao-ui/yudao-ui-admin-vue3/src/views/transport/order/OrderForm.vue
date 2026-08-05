@@ -10,12 +10,12 @@
       </el-form-item>
       <el-form-item label="取货站点" prop="pickupStationId">
         <el-select v-model="formData.pickupStationId" placeholder="请选择取货站点" style="width:100%">
-          <el-option v-for="s in stationList" :key="s.id" :label="s.stationName" :value="s.id" />
+          <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
         </el-select>
       </el-form-item>
       <el-form-item label="送达站点" prop="deliveryStationId">
         <el-select v-model="formData.deliveryStationId" placeholder="请选择送达站点" style="width:100%">
-          <el-option v-for="s in stationList" :key="s.id" :label="s.stationName" :value="s.id" />
+          <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
         </el-select>
       </el-form-item>
       <el-form-item label="最早取货时间" prop="earliestPickupTime">
