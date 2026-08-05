@@ -24,3 +24,8 @@ export const updateVehicle = (data: VehicleVO) => {
 export const deleteVehicle = (id: number) => {
   return request.delete({ url: '/transport/vehicle/delete', params: { id } })
 }
+
+/** 获取车辆精简列表 */
+export const getSimpleVehicleList = (): Promise<VehicleVO[]> => {
+  return request.get({ url: '/transport/vehicle/simple-list' })
+}

@@ -5,10 +5,13 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.route.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import jakarta.validation.Valid;
 
+import java.util.List;
+
 public interface RouteService {
     Long create(@Valid RouteCreateReqVO reqVO);
     void update(@Valid RouteUpdateReqVO reqVO);
     void delete(Long id);
     RouteDO get(Long id);
     PageResult<RouteDO> getPage(RoutePageReqVO reqVO);
+    List<RouteDO> getSimpleList();
 }

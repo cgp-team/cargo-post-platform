@@ -35,3 +35,8 @@ export const updateStation = (data: StationVO) => {
 export const deleteStation = (id: number) => {
   return request.delete({ url: '/transport/station/delete', params: { id } })
 }
+
+/** 获取站点精简列表 */
+export const getSimpleStationList = (): Promise<StationVO[]> => {
+  return request.get({ url: '/transport/station/simple-list' })
+}

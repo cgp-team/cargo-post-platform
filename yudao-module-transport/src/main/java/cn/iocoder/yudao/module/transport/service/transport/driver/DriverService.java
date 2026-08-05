@@ -5,10 +5,13 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import jakarta.validation.Valid;
 
+import java.util.List;
+
 public interface DriverService {
     Long create(@Valid DriverCreateReqVO reqVO);
     void update(@Valid DriverUpdateReqVO reqVO);
     void delete(Long id);
     DriverDO get(Long id);
     PageResult<DriverDO> getPage(DriverPageReqVO reqVO);
+    List<DriverDO> getSimpleList();
 }
