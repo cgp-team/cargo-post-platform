@@ -25,3 +25,8 @@ export const updateRoute = (data: RouteVO) => {
 export const deleteRoute = (id: number) => {
   return request.delete({ url: '/transport/route/delete', params: { id } })
 }
+
+/** 获取线路精简列表 */
+export const getSimpleRouteList = (): Promise<RouteVO[]> => {
+  return request.get({ url: '/transport/route/simple-list' })
+}

@@ -49,4 +49,10 @@ public class StationController {
     @Operation(summary="Get Page")
     @PreAuthorize("@ss.hasPermission('transport:station:query')")
     public CommonResult<PageResult<StationRespVO>> page(@Valid StationPageReqVO reqVO) { return success(BeanUtils.toBean(stationService.getPage(reqVO), StationRespVO.class)); }
+
+    @GetMapping("/simple-list")
+    @Operation(summary="Get Simple List")
+    public CommonResult<java.util.List<StationSimpleRespVO>> simpleList() {
+        return success(BeanUtils.toBean(stationService.getSimpleList(), StationSimpleRespVO.class));
+    }
 }

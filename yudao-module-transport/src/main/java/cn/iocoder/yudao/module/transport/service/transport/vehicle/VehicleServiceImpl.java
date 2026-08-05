@@ -8,6 +8,9 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
+
+import java.util.List;
+
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.VEHICLE_NOT_EXISTS;
 
@@ -19,5 +22,6 @@ public class VehicleServiceImpl implements VehicleService {
     @Override public void delete(Long id) { validateExists(id); mapper.deleteById(id); }
     @Override public VehicleDO get(Long id) { return validateExists(id); }
     @Override public PageResult<VehicleDO> getPage(VehiclePageReqVO reqVO) { return mapper.selectPage(reqVO); }
+    @Override public List<VehicleDO> getSimpleList() { return mapper.selectList(); }
     private VehicleDO validateExists(Long id) { VehicleDO o = mapper.selectById(id); if (o == null) throw exception(VEHICLE_NOT_EXISTS); return o; }
 }
