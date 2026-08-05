@@ -69,7 +69,8 @@ const queryParams = reactive<OrderQueryParams>({ pageNo: 1, pageSize: 10, orderN
 const formRef = ref()
 
 const orderTypeLabel = (type: number) => ({ 1: '客运', 2: '货运', 3: '邮快件' }[type] || '未知')
-const orderTypeTag = (type: number) => ({ 1: 'success', 2: 'warning', 3: 'info' }[type] || '')
+const typeTagMap: Record<number, 'success' | 'warning' | 'info'> = { 1: 'success', 2: 'warning', 3: 'info' }
+const orderTypeTag = (type: number): 'success' | 'warning' | 'info' => typeTagMap[type] || 'info'
 
 const getList = async () => {
   loading.value = true
