@@ -62,7 +62,7 @@ const open = (type: string, id?: number) => {
   loadRouteList()
   if (id) {
     formLoading.value = true
-    ShiftApi.getShift(id).then((data) => { formData.value = data; formLoading.value = false })
+    ShiftApi.getShift(id).then((data) => { formData.value = { ...formData.value, ...data }; formLoading.value = false })
   }
 }
 

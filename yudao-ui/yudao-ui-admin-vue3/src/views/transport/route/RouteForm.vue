@@ -52,7 +52,7 @@ const resetForm = () => {
 const open = (type: string, id?: number) => {
   dialogVisible.value = true; dialogTitle.value = type === 'create' ? '新增线路' : '编辑线路'; formType.value = type; resetForm()
   loadStationList()
-  if (id) { formLoading.value = true; RouteApi.getRoute(id).then((data) => { formData.value = data; formLoading.value = false }) }
+  if (id) { formLoading.value = true; RouteApi.getRoute(id).then((data) => { formData.value = { ...formData.value, ...data }; formLoading.value = false }) }
 }
 const loadStationList = async () => {
   try { stationList.value = await StationApi.getSimpleStationList() } catch (e) { /* ignore */ }
