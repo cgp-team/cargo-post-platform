@@ -37,11 +37,11 @@ const formRef = ref()
 const emit = defineEmits(['success'])
 const routeList = ref<RouteApi.RouteVO[]>([])
 
-const formData = ref<ShiftApi.ShiftVO>({
+const formData = ref<any>({
   shiftCode: '',
-  routeId: undefined,
-  plannedDepartureTime: undefined,
-  plannedDurationMinutes: undefined,
+  routeId: null,
+  plannedDepartureTime: null,
+  plannedDurationMinutes: null,
 })
 
 const formRules = reactive({
@@ -50,7 +50,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { shiftCode: '', routeId: undefined, plannedDepartureTime: undefined, plannedDurationMinutes: undefined }
+  formData.value = { shiftCode: '', routeId: null, plannedDepartureTime: null, plannedDurationMinutes: null }
   formRef.value?.resetFields()
 }
 

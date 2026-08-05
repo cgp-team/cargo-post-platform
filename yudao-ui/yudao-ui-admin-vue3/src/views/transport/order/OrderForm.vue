@@ -100,26 +100,26 @@ const formRef = ref()
 const emit = defineEmits(['success'])
 const stationList = ref<StationApi.StationVO[]>([])
 
-const formData = ref<OrderApi.OrderVO>({
+const formData = ref<any>({
   orderNo: '',
-  orderType: undefined,
-  pickupStationId: undefined,
-  deliveryStationId: undefined,
-  earliestPickupTime: undefined,
-  latestDeliveryTime: undefined,
-  totalAmount: undefined,
-  passengerCount: undefined,
+  orderType: null,
+  pickupStationId: null,
+  deliveryStationId: null,
+  earliestPickupTime: null,
+  latestDeliveryTime: null,
+  totalAmount: null,
+  passengerCount: null,
   contactName: '',
   contactMobile: '',
   cargoCategory: '',
   freshFlag: false,
-  cargoItemCount: undefined,
-  cargoWeightKg: undefined,
-  cargoVolumeM3: undefined,
+  cargoItemCount: null,
+  cargoWeightKg: null,
+  cargoVolumeM3: null,
   mailNo: '',
   carrierCode: '',
-  postalItemCount: undefined,
-  postalWeightKg: undefined,
+  postalItemCount: null,
+  postalWeightKg: null,
 })
 
 const formRules = reactive({
@@ -130,11 +130,11 @@ const formRules = reactive({
 
 const resetForm = () => {
   formData.value = {
-    orderNo: '', orderType: undefined, pickupStationId: undefined, deliveryStationId: undefined,
-    earliestPickupTime: undefined, latestDeliveryTime: undefined, totalAmount: undefined,
-    passengerCount: undefined, contactName: '', contactMobile: '',
-    cargoCategory: '', freshFlag: false, cargoItemCount: undefined, cargoWeightKg: undefined, cargoVolumeM3: undefined,
-    mailNo: '', carrierCode: '', postalItemCount: undefined, postalWeightKg: undefined,
+    orderNo: '', orderType: null, pickupStationId: null, deliveryStationId: null,
+    earliestPickupTime: null, latestDeliveryTime: null, totalAmount: null,
+    passengerCount: null, contactName: '', contactMobile: '',
+    cargoCategory: '', freshFlag: false, cargoItemCount: null, cargoWeightKg: null, cargoVolumeM3: null,
+    mailNo: '', carrierCode: '', postalItemCount: null, postalWeightKg: null,
   }
   formRef.value?.resetFields()
 }
