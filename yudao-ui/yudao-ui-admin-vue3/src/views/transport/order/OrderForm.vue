@@ -151,7 +151,7 @@ const open = (type: string, id?: number) => {
   loadStationList()
   if (id) {
     formLoading.value = true
-    OrderApi.getOrder(id).then((data) => { formData.value = data; formLoading.value = false })
+    OrderApi.getOrder(id).then((data) => { formData.value = { ...formData.value, ...data }; formLoading.value = false })
   }
 }
 
