@@ -49,4 +49,10 @@ public class DriverController {
     @Operation(summary="Get Page")
     @PreAuthorize("@ss.hasPermission('transport:driver:query')")
     public CommonResult<PageResult<DriverRespVO>> page(@Valid DriverPageReqVO reqVO) { return success(BeanUtils.toBean(driverService.getPage(reqVO), DriverRespVO.class)); }
+
+    @GetMapping("/simple-list")
+    @Operation(summary="Get Simple List")
+    public CommonResult<java.util.List<DriverSimpleRespVO>> simpleList() {
+        return success(BeanUtils.toBean(driverService.getSimpleList(), DriverSimpleRespVO.class));
+    }
 }

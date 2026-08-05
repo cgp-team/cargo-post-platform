@@ -8,6 +8,9 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
+
+import java.util.List;
+
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_EXISTS;
 
@@ -19,5 +22,6 @@ public class StationServiceImpl implements StationService {
     @Override public void delete(Long id) { validateExists(id); mapper.deleteById(id); }
     @Override public StationDO get(Long id) { return validateExists(id); }
     @Override public PageResult<StationDO> getPage(StationPageReqVO reqVO) { return mapper.selectPage(reqVO); }
+    @Override public List<StationDO> getSimpleList() { return mapper.selectList(); }
     private StationDO validateExists(Long id) { StationDO o = mapper.selectById(id); if (o == null) throw exception(STATION_NOT_EXISTS); return o; }
 }

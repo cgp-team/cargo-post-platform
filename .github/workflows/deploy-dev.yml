@@ -52,8 +52,12 @@ jobs:
           set -euo pipefail
           # Apply transport module schema and menu changes
           if [ -f sql/mysql/transport-menu.sql ]; then
-            mysql -u root -p"${DB_ROOT_PASSWORD:-123456}" ruoyi-vue-pro < sql/mysql/transport-menu.sql || true
-            echo "Database migration applied."
+            mysql -u root -p"${DB_ROOT_PASSWORD:-123456}" ruoyi-vue-pro < sql/mysql/transport-menu.sql
+            echo "Database migration (menu) applied."
+          fi
+          if [ -f sql/mysql/transport-demo-data.sql ]; then
+            mysql -u root -p"${DB_ROOT_PASSWORD:-123456}" ruoyi-vue-pro < sql/mysql/transport-demo-data.sql
+            echo "Database migration (demo data) applied."
           fi
 
       - name: Deploy backend and restart

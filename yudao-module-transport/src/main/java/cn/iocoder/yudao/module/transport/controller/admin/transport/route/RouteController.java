@@ -49,4 +49,10 @@ public class RouteController {
     @Operation(summary="Get Page")
     @PreAuthorize("@ss.hasPermission('transport:route:query')")
     public CommonResult<PageResult<RouteRespVO>> page(@Valid RoutePageReqVO reqVO) { return success(BeanUtils.toBean(routeService.getPage(reqVO), RouteRespVO.class)); }
+
+    @GetMapping("/simple-list")
+    @Operation(summary="Get Simple List")
+    public CommonResult<java.util.List<RouteSimpleRespVO>> simpleList() {
+        return success(BeanUtils.toBean(routeService.getSimpleList(), RouteSimpleRespVO.class));
+    }
 }
