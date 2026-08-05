@@ -24,3 +24,8 @@ export const updateDriver = (data: DriverVO) => {
 export const deleteDriver = (id: number) => {
   return request.delete({ url: '/transport/driver/delete', params: { id } })
 }
+
+/** 获接司机精简列表 */
+export const getSimpleDriverList = (): Promise<DriverVO[]> => {
+  return request.get({ url: '/transport/driver/simple-list' })
+}

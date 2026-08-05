@@ -71,5 +71,20 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6843, '司机编辑', 'transport:driver:update', 3, 3, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6844, '司机删除', 'transport:driver:delete', 3, 4, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Order
+(6850, '订单管理', '', 1, 6, 6800, 'order', 'ep:document', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6851, '订单列表', 'transport:order:query', 2, 1, 6850, 'list', '', 'transport/order/index', 'TransportOrder', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6852, '订单新增', 'transport:order:create', 3, 2, 6851, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6853, '订单编辑', 'transport:order:update', 3, 3, 6851, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6854, '订单删除', 'transport:order:delete', 3, 4, 6851, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+-- Shift
+(6860, '班次管理', '', 1, 7, 6800, 'shift', 'ep:clock', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6861, '班次列表', 'transport:shift:query', 2, 1, 6860, 'list', '', 'transport/shift/index', 'TransportShift', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6862, '班次新增', 'transport:shift:create', 3, 2, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6863, '班次编辑', 'transport:shift:update', 3, 3, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6864, '班次删除', 'transport:shift:delete', 3, 4, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6844;
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6850 AND 6864;

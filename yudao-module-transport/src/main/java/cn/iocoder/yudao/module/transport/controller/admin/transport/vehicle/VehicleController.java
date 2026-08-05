@@ -49,4 +49,10 @@ public class VehicleController {
     @Operation(summary="Get Page")
     @PreAuthorize("@ss.hasPermission('transport:vehicle:query')")
     public CommonResult<PageResult<VehicleRespVO>> page(@Valid VehiclePageReqVO reqVO) { return success(BeanUtils.toBean(vehicleService.getPage(reqVO), VehicleRespVO.class)); }
+
+    @GetMapping("/simple-list")
+    @Operation(summary="Get Simple List")
+    public CommonResult<java.util.List<VehicleSimpleRespVO>> simpleList() {
+        return success(BeanUtils.toBean(vehicleService.getSimpleList(), VehicleSimpleRespVO.class));
+    }
 }

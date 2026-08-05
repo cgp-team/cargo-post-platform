@@ -5,10 +5,13 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.*
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import jakarta.validation.Valid;
 
+import java.util.List;
+
 public interface StationService {
     Long create(@Valid StationCreateReqVO reqVO);
     void update(@Valid StationUpdateReqVO reqVO);
     void delete(Long id);
     StationDO get(Long id);
     PageResult<StationDO> getPage(StationPageReqVO reqVO);
+    List<StationDO> getSimpleList();
 }
