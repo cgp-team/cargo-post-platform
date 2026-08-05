@@ -50,32 +50,30 @@ jobs:
       - name: Run database migration
         run: |
           set -euo pipefail
-          # Detect docker (try sudo if needed)
-          DOCKER="docker"
-          if ! $DOCKER ps >/dev/null 2>&1; then
-            DOCKER="sudo docker"
-          fi
-          DB_PASS="${DB_ROOT_PASSWORD:-123456}"
+          # Read DB password from .env (same file docker compose uses)
+          export $(grep -v '^#' .env | grep DB_PASSWORD | xargs)
+          PASS="${DB_PASSWORD:-123456}"
 
-          # Wait for MySQL to be ready
+          # Wait for MySQL container to be ready
           echo "Waiting for MySQL..."
           for i in $(seq 1 30); do
-            if echo "SELECT 1" | $DOCKER run --rm -i --network host mysql:8.0 mysql -h 127.0.0.1 -u root -p"${DB_PASS}" --silent 2>/dev/null; then
+            if docker compose -f deploy/docker-compose.yml exec -T mysql mysqladmin ping -u root -p"${PASS}" --silent 2>/dev/null; then
               echo "MySQL is ready"
               break
             fi
             sleep 2
             if [ $i -eq 30 ]; then
-              echo "ERROR: Cannot connect to MySQL at 127.0.0.1" >&2
+              echo "ERROR: MySQL not ready. Check: docker compose -f deploy/docker-compose.yml ps" >&2
+              docker compose -f deploy/docker-compose.yml ps >&2 || true
               exit 1
             fi
           done
 
-          # Run migrations
+          # Run migrations via docker compose (auto-finds correct container by service name)
           for f in transport-schema transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
-              cat "sql/mysql/${f}.sql" | $DOCKER run --rm -i --network host mysql:8.0 mysql -h 127.0.0.1 -u root -p"${DB_PASS}" ruoyi-vue-pro
+              docker compose -f deploy/docker-compose.yml exec -T mysql mysql -u root -p"${PASS}" ruoyi-vue-pro < "sql/mysql/${f}.sql"
               echo "${f}.sql done."
             fi
           done
