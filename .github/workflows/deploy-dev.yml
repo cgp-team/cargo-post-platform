@@ -50,30 +50,26 @@ jobs:
       - name: Run database migration
         run: |
           set -euo pipefail
-          # Read DB password from .env (same file docker compose uses)
-          export $(grep -v '^#' .env | grep DB_PASSWORD | xargs)
-          PASS="${DB_PASSWORD:-123456}"
 
-          # Wait for MySQL container to be ready
-          echo "Waiting for MySQL..."
-          for i in $(seq 1 30); do
-            if docker compose -f deploy/docker-compose.yml exec -T mysql mysqladmin ping -u root -p"${PASS}" --silent 2>/dev/null; then
-              echo "MySQL is ready"
-              break
-            fi
-            sleep 2
-            if [ $i -eq 30 ]; then
-              echo "ERROR: MySQL not ready. Check: docker compose -f deploy/docker-compose.yml ps" >&2
-              docker compose -f deploy/docker-compose.yml ps >&2 || true
-              exit 1
-            fi
-          done
+          # Load all env vars required by docker compose
+          set -a
+          if [ -f .env ]; then
+            source .env
+          else
+            echo "ERROR: .env file not found in workspace" >&2
+            exit 1
+          fi
+          set +a
 
-          # Run migrations via docker compose (auto-finds correct container by service name)
+          echo "MySQL ready check (DB: ${DB_NAME})..."
+          docker compose -f deploy/docker-compose.yml exec -T mysql \
+            mysqladmin ping -u root -p"${DB_PASSWORD}" --silent
+
           for f in transport-schema transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
-              docker compose -f deploy/docker-compose.yml exec -T mysql mysql -u root -p"${PASS}" ruoyi-vue-pro < "sql/mysql/${f}.sql"
+              docker compose -f deploy/docker-compose.yml exec -T mysql \
+                mysql -u root -p"${DB_PASSWORD}" "${DB_NAME}" < "sql/mysql/${f}.sql"
               echo "${f}.sql done."
             fi
           done
@@ -101,7 +97,8 @@ jobs:
           set -euo pipefail
           for i in $(seq 1 40); do
             sleep 3
-            if curl -fsS http://127.0.0.1:48080/actuator/health | grep -q '"status":"UP"'; then
+            HEALTH=$(curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health 2>/dev/null || echo '')
+            if echo "$HEALTH" | grep -q '"status":"UP"'; then
               echo "Backend is UP after ${i} checks"
               break
             fi
