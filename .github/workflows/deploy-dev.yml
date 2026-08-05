@@ -50,22 +50,36 @@ jobs:
       - name: Run database migration
         run: |
           set -euo pipefail
-          MYSQL_CMD="docker exec -i mysql mysql -u root -p${DB_ROOT_PASSWORD:-123456} ruoyi-vue-pro"
-          # Create tables (safe: uses IF NOT EXISTS)
-          if [ -f sql/mysql/transport-schema.sql ]; then
-            $MYSQL_CMD < sql/mysql/transport-schema.sql
-            echo "Database migration (schema) applied."
+          # Detect docker (try sudo if needed)
+          DOCKER="docker"
+          if ! $DOCKER ps >/dev/null 2>&1; then
+            DOCKER="sudo docker"
           fi
-          # Apply menu and permissions
-          if [ -f sql/mysql/transport-menu.sql ]; then
-            $MYSQL_CMD < sql/mysql/transport-menu.sql
-            echo "Database migration (menu) applied."
-          fi
-          # Insert demo data (uses INSERT IGNORE, safe to re-run)
-          if [ -f sql/mysql/transport-demo-data.sql ]; then
-            $MYSQL_CMD < sql/mysql/transport-demo-data.sql
-            echo "Database migration (demo data) applied."
-          fi
+          DB_PASS="${DB_ROOT_PASSWORD:-123456}"
+
+          # Wait for MySQL to be ready
+          echo "Waiting for MySQL..."
+          for i in $(seq 1 30); do
+            if echo "SELECT 1" | $DOCKER run --rm -i --network host mysql:8.0 mysql -h 127.0.0.1 -u root -p"${DB_PASS}" --silent 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            sleep 2
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Cannot connect to MySQL at 127.0.0.1" >&2
+              exit 1
+            fi
+          done
+
+          # Run migrations
+          for f in transport-schema transport-menu transport-demo-data; do
+            if [ -f "sql/mysql/${f}.sql" ]; then
+              echo "Applying ${f}.sql..."
+              cat "sql/mysql/${f}.sql" | $DOCKER run --rm -i --network host mysql:8.0 mysql -h 127.0.0.1 -u root -p"${DB_PASS}" ruoyi-vue-pro
+              echo "${f}.sql done."
+            fi
+          done
+          echo "All migrations applied."
 
       - name: Deploy backend and restart
         run: |
