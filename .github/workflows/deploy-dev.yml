@@ -51,24 +51,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Load all env vars required by docker compose
-          set -a
-          if [ -f .env ]; then
-            source .env
-          else
-            echo "ERROR: .env file not found in workspace" >&2
+          # .env 不提交仓库，且 runner 工作区每次 checkout 都会清理，无法存放。
+          # 从服务器持久检出的仓库根目录加载（见 docs/deployment.md「服务器一次性配置」），
+          # 迁移用的 SQL 文件仍取自当前构建对应的工作区（与提交版本一致）。
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "ERROR: ${ENV_FILE} not found. 请按 docs/deployment.md 在服务器持久检出根目录创建 .env（可参考 .env.example）" >&2
             exit 1
           fi
+          set -a
+          source "${ENV_FILE}"
           set +a
 
           echo "MySQL ready check (DB: ${DB_NAME})..."
-          docker compose -f deploy/docker-compose.yml exec -T mysql \
+          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
             mysqladmin ping -u root -p"${DB_PASSWORD}" --silent
 
           for f in transport-schema transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
-              docker compose -f deploy/docker-compose.yml exec -T mysql \
+              docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
                 mysql -u root -p"${DB_PASSWORD}" "${DB_NAME}" < "sql/mysql/${f}.sql"
               echo "${f}.sql done."
             fi
