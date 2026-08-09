@@ -21,4 +21,20 @@ public interface ErrorCodeConstants {
     // Order
     ErrorCode ORDER_NOT_EXISTS = new ErrorCode(1_005_006_000, "订单不存在");
     ErrorCode ORDER_NO_DUPLICATE = new ErrorCode(1_005_006_001, "订单号已存在");
+    // 算法适配层
+    ErrorCode ALGORITHM_SERVICE_UNAVAILABLE = new ErrorCode(1_005_007_000, "算法服务不可用");
+    ErrorCode ALGORITHM_INVALID_INPUT = new ErrorCode(1_005_007_001, "算法请求参数错误：{}");
+    ErrorCode ALGORITHM_OVER_LIMIT = new ErrorCode(1_005_007_002, "算法任务超出规模上限（30 站点 / 25 订单 / 3 车）");
+    ErrorCode ALGORITHM_RESULT_INVALID = new ErrorCode(1_005_007_003, "算法结果校验失败：{}");
+    ErrorCode ALGORITHM_RESULT_NOT_FOUND = new ErrorCode(1_005_007_004, "算法结果不存在或已过期：{}");
+    ErrorCode ALGORITHM_TASK_TIMEOUT = new ErrorCode(1_005_007_005, "算法任务轮询超时：{}");
+    ErrorCode ALGORITHM_CALL_FAILED = new ErrorCode(1_005_007_006, "算法服务调用失败（HTTP {}）：{}");
+    // 调度闭环
+    ErrorCode DISPATCH_TASK_NOT_EXISTS = new ErrorCode(1_005_008_000, "调度任务不存在");
+    ErrorCode DISPATCH_PLAN_NOT_EXISTS = new ErrorCode(1_005_008_001, "调度方案不存在");
+    ErrorCode DISPATCH_PLAN_STATUS_ILLEGAL = new ErrorCode(1_005_008_002, "方案当前状态不允许该操作");
+    ErrorCode DISPATCH_POOL_EMPTY = new ErrorCode(1_005_008_003, "当前批次订单池为空");
+    ErrorCode DISPATCH_ORDER_NOT_POOLED = new ErrorCode(1_005_008_004, "订单不在订单池中");
+    ErrorCode DISPATCH_DEPOT_NOT_EXISTS = new ErrorCode(1_005_008_005, "场站不存在");
+    ErrorCode DISPATCH_NO_FEASIBLE = new ErrorCode(1_005_008_006, "算法判定无可行解:{}");
 }

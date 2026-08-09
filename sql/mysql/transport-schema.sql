@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle` (
   `vehicle_type` tinyint NOT NULL COMMENT '车辆类型',
   `passenger_capacity` int NOT NULL DEFAULT 0 COMMENT '核定载客数',
   `cargo_capacity_kg` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '载货重量上限(kg)',
+  `cargo_capacity` int NOT NULL DEFAULT 4 COMMENT '货仓件数上限（算法容量约束按件数）',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '车辆状态',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
@@ -194,9 +195,12 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_task` (
   `task_no` varchar(64) NOT NULL COMMENT '调度任务号',
   `snapshot_id` varchar(64) NOT NULL COMMENT '规划快照编号',
   `planning_time` datetime NOT NULL COMMENT '规划时间',
+  `batch_start` datetime DEFAULT NULL COMMENT '批次区间开始（半小时）',
+  `batch_end` datetime DEFAULT NULL COMMENT '批次区间结束（半小时）',
   `algorithm_job_id` varchar(64) DEFAULT NULL COMMENT '算法任务编号',
   `scenario` varchar(32) DEFAULT NULL COMMENT '规划场景',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '任务状态',
+  `error_message` varchar(512) DEFAULT NULL COMMENT '失败原因',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -208,9 +212,11 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '调度方案编号',
   `task_id` bigint NOT NULL COMMENT '调度任务编号',
   `plan_version` int NOT NULL DEFAULT 1 COMMENT '方案版本',
+  `mode` tinyint NOT NULL DEFAULT 0 COMMENT '派单方式:0 手工 1 智能',
   `algorithm_version` varchar(64) DEFAULT NULL COMMENT '算法版本',
   `parameter_version` varchar(64) DEFAULT NULL COMMENT '参数版本',
   `score` decimal(12,4) DEFAULT NULL COMMENT '方案评分',
+  `total_distance` decimal(12,3) DEFAULT NULL COMMENT '总里程(算法产出)',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '审核下发状态',
   `approved_by` bigint DEFAULT NULL COMMENT '审核人',
   `approved_time` datetime DEFAULT NULL COMMENT '审核时间',
@@ -227,9 +233,10 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan_item` (
   `vehicle_id` bigint NOT NULL COMMENT '车辆编号',
   `driver_id` bigint DEFAULT NULL COMMENT '司机编号',
   `shift_id` bigint DEFAULT NULL COMMENT '班次编号',
-  `order_id` bigint NOT NULL COMMENT '订单编号',
+  `order_id` bigint DEFAULT NULL COMMENT '订单编号（场站起止点无订单）',
+  `station_id` bigint DEFAULT NULL COMMENT '经停站点编号',
   `visit_sequence` int NOT NULL COMMENT '访问顺序',
-  `action_type` tinyint NOT NULL COMMENT '取货/送达/上下客动作',
+  `action_type` tinyint NOT NULL COMMENT '0 出发 1 接客 2 送客 3 派送 4 揽收 5 返回',
   `estimated_arrival_time` datetime DEFAULT NULL COMMENT '预计到达时间',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -237,3 +244,51 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan_item` (
   `deleted` bit(1) NOT NULL DEFAULT b'0',
   PRIMARY KEY (`id`), KEY `idx_plan_item_plan_sequence` (`plan_id`, `vehicle_id`, `visit_sequence`), KEY `idx_plan_item_order` (`tenant_id`, `order_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='调度方案明细表';
+
+CREATE TABLE IF NOT EXISTS `transport_dispatch_plan_log` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '方案日志编号',
+  `plan_id` bigint NOT NULL COMMENT '调度方案编号',
+  `from_status` tinyint DEFAULT NULL COMMENT '变更前状态',
+  `to_status` tinyint NOT NULL COMMENT '变更后状态',
+  `operator` varchar(64) DEFAULT NULL COMMENT '操作人',
+  `reason` varchar(512) DEFAULT NULL COMMENT '操作原因',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted` bit(1) NOT NULL DEFAULT b'0',
+  PRIMARY KEY (`id`), KEY `idx_plan_log_plan` (`tenant_id`, `plan_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='调度方案状态日志表';
+
+CREATE TABLE IF NOT EXISTS `transport_departure_check` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '发车核验编号',
+  `plan_id` bigint NOT NULL COMMENT '调度方案编号',
+  `vehicle_id` bigint NOT NULL COMMENT '车辆编号',
+  `result` tinyint NOT NULL COMMENT '0 不通过 1 通过',
+  `remark` varchar(512) DEFAULT NULL COMMENT '核验备注',
+  `checker` varchar(64) DEFAULT NULL COMMENT '核验人',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted` bit(1) NOT NULL DEFAULT b'0',
+  PRIMARY KEY (`id`), KEY `idx_departure_check_plan` (`tenant_id`, `plan_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='发车核验表';
+
+CREATE TABLE IF NOT EXISTS `transport_algorithm_request` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '算法请求编号',
+  `request_id` varchar(64) NOT NULL COMMENT '全局唯一请求标识（算法侧幂等键）',
+  `snapshot_hash` varchar(64) NOT NULL COMMENT '请求快照（不含 requestId）的 SHA-256',
+  `request_json` text NOT NULL COMMENT '原始请求 JSON',
+  `response_json` text DEFAULT NULL COMMENT '校验通过的响应 JSON；调用失败为空',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态：0 处理中 1 可行 2 无解 3 失败',
+  `error_code` varchar(32) DEFAULT NULL COMMENT '失败时的业务错误码',
+  `error_message` varchar(512) DEFAULT NULL COMMENT '失败时的错误信息',
+  `algorithm_version` varchar(64) DEFAULT NULL COMMENT '算法版本，随镜像管理',
+  `parameter_version` varchar(64) DEFAULT NULL COMMENT '默认参数版本',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted` bit(1) NOT NULL DEFAULT b'0',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_algorithm_request_id_tenant` (`request_id`, `tenant_id`),
+  KEY `idx_algorithm_request_snapshot` (`tenant_id`, `snapshot_hash`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='算法请求留痕表';
