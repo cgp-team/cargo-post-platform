@@ -44,6 +44,8 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart cargo-post
 
 服务器专属配置（数据库、Redis 密码等）放 `/opt/cargo-post/config/application-dev.yaml`（Spring Boot 自动读取）或 `/opt/cargo-post/app.env`（systemd EnvironmentFile，权限 600），均不得提交仓库。
 
+Compose 技术栈（MySQL/Redis/MinIO/Mock 算法）与 CI 的数据库迁移步骤统一从持久检出根目录的 `.env` 读取配置：按 `.env.example` 创建 `/opt/cargo-post-platform/.env`（权限 600），并用 `deploy/scripts/deploy.sh` 启动技术栈。注意 `.env` 放在 runner 工作区无效——`actions/checkout` 每次构建都会清理未跟踪文件。
+
 ### Self-hosted runner
 
 runner 以 deploy 用户运行在 `/opt/actions-runner`，注册为系统服务：
