@@ -1,95 +1,123 @@
 openapi: 3.1.0
 info:
   title: 客货邮路线规划算法 API
-  version: 0.1.0
-  description: 业务后端与路线规划算法服务之间的异步接口草案。浏览器不得直接调用。
+  version: 0.2.0
+  description: |
+    业务后端与路线规划算法服务之间的接口契约，已与算法组 2026-08-09 书面回复对齐。
+    浏览器不得直接调用；仅 transport 模块算法适配层可访问。
+
+    要点：
+    - 提交任务后同步计算最长 10 秒；超时返回 408，凭 requestId 轮询结果。
+    - requestId 幂等保留 24 小时，重复提交返回缓存结果（cached: true）。
+    - 坐标统一 GCJ-02；当前距离按欧氏直线计算，后续切换高德路网距离。
+    - 静态闭环：车辆空载从场站出发并返回；算法自动判定启用车辆数。
+    - 规模上限：30 站点 / 25 订单（乘客+包裹合计）/ 3 车 / 10 秒计算超时。
+    - 无解语义存在待澄清矛盾：Q10 回复为 200 + status=infeasible，
+      Q12 回复将 422 标注为业务不可行。适配层需同时兼容两种返回。
 servers:
   - url: http://mock-algorithm:8000
     description: Docker 内部开发地址
 paths:
-  /api/algorithm/v1/planning-jobs:
+  /api/v1/plan:
     post:
-      operationId: createPlanningJob
-      summary: 创建规划任务
+      operationId: createPlan
+      summary: 提交规划任务
+      description: 同步计算最长 10 秒。成功返回 200 + 规划结果；超时返回 408 + requestId，凭 requestId 轮询 `/api/v1/result/{requestId}`。相同 requestId 重复提交返回首次缓存结果。
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanningJobRequest'
+              $ref: '#/components/schemas/PlanRequest'
             example:
-              requestId: req-20260716-001
-              snapshotId: snapshot-001
-              planningTime: '2026-07-16T19:30:00+08:00'
-              rollingWindowMinutes: 30
-              scenario: SUCCESS
-              algorithmConfig:
-                algorithmVersion: mock-1.0.0
-                parameterVersion: default-v1
+              requestId: req-20260809-0800
+              batchStart: '2026-08-09T08:00:00+08:00'
+              batchEnd: '2026-08-09T08:30:00+08:00'
+              depot:
+                stationId: S0
+                longitude: 104.0668
+                latitude: 30.5728
+              stations:
+                - stationId: S1
+                  longitude: 104.0601
+                  latitude: 30.5801
+                - stationId: S2
+                  longitude: 104.0523
+                  latitude: 30.6102
               vehicles:
                 - vehicleId: 1001
-                  shiftId: 2001
-                  longitude: 104.0668
-                  latitude: 30.5728
-                  passengerLoad: 2
-                  remainingCargoCapacityKg: 500
-                  status: AVAILABLE
+                  passengerCapacity: 5
+                  cargoCapacity: 4
+                - vehicleId: 1002
+                  passengerCapacity: 5
+                  cargoCapacity: 4
               orders:
-                - orderId: O-001
-                  orderType: CARGO
-                  pickupNodeId: N-001
-                  deliveryNodeId: N-002
+                - orderId: O-P001
+                  orderType: PASSENGER
+                  boardingStationId: S1
+                  alightingStationId: S2
+                - orderId: O-D001
+                  orderType: DELIVERY
+                  stationId: S2
                   itemCount: 1
-                  weightKg: 20
-                  volumeM3: 0.1
-                  earliestPickupTime: '2026-07-16T19:30:00+08:00'
-                  latestDeliveryTime: '2026-07-16T21:30:00+08:00'
-                  priority: 5
-      responses:
-        '202':
-          description: 已接受
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlanningJobAcceptedResponse'
-        '400':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
-  /api/algorithm/v1/planning-jobs/{jobId}:
-    get:
-      operationId: getPlanningJobStatus
-      summary: 查询规划任务状态
-      parameters:
-        - $ref: '#/components/parameters/JobId'
+                - orderId: O-U001
+                  orderType: PICKUP
+                  stationId: S1
+                  itemCount: 1
+              algorithmConfig:
+                ant_count: 30
+                max_iterations: 100
       responses:
         '200':
-          description: 任务状态
+          description: 规划完成（含幂等缓存命中）
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningJobStatusResponse'
-        '404':
+                $ref: '#/components/schemas/PlanResult'
+        '400':
           $ref: '#/components/responses/Error'
-  /api/algorithm/v1/planning-jobs/{jobId}/result:
+        '408':
+          description: 计算超时（10 秒），凭 requestId 轮询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: 规模超限（30 站点 / 25 订单 / 3 车），不可重试
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 业务不可行/无解（算法组 Q12 回复标注；与 200 + status=infeasible 并存，待澄清），不可重试
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/v1/result/{requestId}:
     get:
-      operationId: getPlanningJobResult
-      summary: 获取规划结果
+      operationId: getPlanResult
+      summary: 轮询规划结果
+      description: 轮询间隔建议 ≥ 2 秒。requestId 保留 24 小时，过期后查询返回 404。
       parameters:
-        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: 规划结果
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PlanningJobResultResponse'
+                $ref: '#/components/schemas/PlanResult'
+        '202':
+          description: 仍在计算中
         '404':
-          $ref: '#/components/responses/Error'
-        '409':
-          $ref: '#/components/responses/Error'
-        '500':
-          $ref: '#/components/responses/Error'
+          description: requestId 不存在或已超过 24 小时幂等保留期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /health:
     get:
       operationId: health
@@ -97,22 +125,20 @@ paths:
       responses:
         '200':
           description: 服务正常
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [status, algorithmVersion]
-                properties:
-                  status:
-                    type: string
-                    const: UP
-                  algorithmVersion:
-                    type: string
-                    example: mock-1.0.0
+  /ready:
+    get:
+      operationId: ready
+      summary: 就绪检查
+      description: 模型加载完毕后返回 200，未就绪返回 503。
+      responses:
+        '200':
+          description: 已就绪
+        '503':
+          description: 未就绪
 components:
   parameters:
-    JobId:
-      name: jobId
+    RequestId:
+      name: requestId
       in: path
       required: true
       schema:
@@ -125,254 +151,226 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
   schemas:
-    PlanningJobRequest:
+    PlanRequest:
       type: object
-      required: [requestId, snapshotId, planningTime, rollingWindowMinutes, algorithmConfig, vehicles, orders]
+      required: [requestId, batchStart, batchEnd, depot, stations, vehicles, orders]
       properties:
         requestId:
           type: string
-        snapshotId:
-          type: string
-        planningTime:
+          description: 全局唯一请求标识，幂等键，保留 24 小时
+        batchStart:
           type: string
           format: date-time
-          example: '2026-07-16T19:30:00+08:00'
-        rollingWindowMinutes:
-          type: integer
-          minimum: 1
+          description: 半小时批次区间开始，带时区 ISO 8601
+          example: '2026-08-09T08:00:00+08:00'
+        batchEnd:
+          type: string
+          format: date-time
+          description: 半小时批次区间结束
+          example: '2026-08-09T08:30:00+08:00'
+        depot:
+          $ref: '#/components/schemas/Station'
+        stations:
+          type: array
+          maxItems: 30
+          description: 全部服务站点（含场站），GCJ-02 坐标
+          items:
+            $ref: '#/components/schemas/Station'
+        vehicles:
+          type: array
+          maxItems: 3
+          description: 本批次可用车辆，空载从场站出发；算法自动判定启用数量
+          items:
+            $ref: '#/components/schemas/Vehicle'
+        orders:
+          type: array
+          maxItems: 25
+          description: 乘客+包裹订单合计不超过 25
+          items:
+            $ref: '#/components/schemas/PlanOrder'
+        algorithmConfig:
+          $ref: '#/components/schemas/AlgorithmConfig'
         scenario:
           type: string
           enum: [SUCCESS, PARTIAL_REJECTION, NO_FEASIBLE_SOLUTION, TIMEOUT, INTERNAL_ERROR]
           default: SUCCESS
           description: 仅供 Mock 测试，真实算法可忽略。
-        algorithmConfig:
-          $ref: '#/components/schemas/AlgorithmConfig'
-        vehicles:
-          type: array
-          items:
-            $ref: '#/components/schemas/VehicleState'
-        orders:
-          type: array
-          items:
-            $ref: '#/components/schemas/PlanningOrder'
-    PlanningJobAcceptedResponse:
+    Station:
       type: object
-      required: [jobId, requestId, snapshotId, status, acceptedAt]
+      required: [stationId, longitude, latitude]
       properties:
-        jobId:
+        stationId:
           type: string
-        requestId:
-          type: string
-        snapshotId:
-          type: string
-        status:
-          $ref: '#/components/schemas/PlanningStatus'
-        acceptedAt:
-          type: string
-          format: date-time
-    PlanningJobStatusResponse:
-      type: object
-      required: [jobId, requestId, snapshotId, status, algorithmVersion, parameterVersion, updatedAt]
-      properties:
-        jobId:
-          type: string
-        requestId:
-          type: string
-        snapshotId:
-          type: string
-        status:
-          $ref: '#/components/schemas/PlanningStatus'
-        algorithmVersion:
-          type: string
-        parameterVersion:
-          type: string
-        updatedAt:
-          type: string
-          format: date-time
-        error:
-          $ref: '#/components/schemas/ErrorResponse'
-    PlanningJobResultResponse:
-      type: object
-      required: [jobId, requestId, snapshotId, algorithmVersion, parameterVersion, status, score, vehiclePlans, rejectedOrders, metrics]
-      properties:
-        jobId:
-          type: string
-        requestId:
-          type: string
-        snapshotId:
-          type: string
-        algorithmVersion:
-          type: string
-        parameterVersion:
-          type: string
-        status:
-          $ref: '#/components/schemas/PlanningStatus'
-        score:
+        longitude:
           type: number
           format: double
-        vehiclePlans:
-          type: array
-          items:
-            $ref: '#/components/schemas/VehiclePlan'
-        rejectedOrders:
-          type: array
-          items:
-            $ref: '#/components/schemas/RejectedOrder'
-        metrics:
-          $ref: '#/components/schemas/Metrics'
-    PlanningStatus:
-      type: string
-      enum: [ACCEPTED, RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILED, TIMEOUT, NO_FEASIBLE_SOLUTION]
-    AlgorithmConfig:
+          description: GCJ-02 经度
+        latitude:
+          type: number
+          format: double
+          description: GCJ-02 纬度
+    Vehicle:
       type: object
-      required: [algorithmVersion, parameterVersion]
-      additionalProperties: true
-      properties:
-        algorithmVersion:
-          type: string
-        parameterVersion:
-          type: string
-        maxCalculationSeconds:
-          type: integer
-          minimum: 1
-    VehicleState:
-      type: object
-      required: [vehicleId, longitude, latitude, passengerLoad, remainingCargoCapacityKg, status]
+      required: [vehicleId]
       properties:
         vehicleId:
           type: integer
           format: int64
-        shiftId:
+        passengerCapacity:
           type: integer
-          format: int64
-        longitude:
-          type: number
-          format: double
-        latitude:
-          type: number
-          format: double
-        roadNodeId:
-          type: string
-        roadEdgeId:
-          type: string
-        passengerLoad:
+          minimum: 1
+          default: 5
+          description: 实时最大载客人数
+        cargoCapacity:
           type: integer
-          minimum: 0
-        remainingCargoCapacityKg:
-          type: number
-          minimum: 0
-        status:
-          type: string
-        estimatedArrivals:
-          type: array
-          items:
-            $ref: '#/components/schemas/EstimatedArrival'
-    EstimatedArrival:
+          minimum: 1
+          default: 4
+          description: 货仓实时最大包裹件数
+    PlanOrder:
       type: object
-      required: [stationId, estimatedArrivalTime]
-      properties:
-        stationId:
-          type: integer
-          format: int64
-        estimatedArrivalTime:
-          type: string
-          format: date-time
-    PlanningOrder:
-      type: object
-      required: [orderId, orderType, pickupNodeId, deliveryNodeId, itemCount, weightKg, volumeM3, earliestPickupTime, latestDeliveryTime, priority]
+      required: [orderId, orderType]
       properties:
         orderId:
           type: string
         orderType:
           type: string
-          enum: [PASSENGER, CARGO, FRESH, POSTAL]
-        pickupNodeId:
+          enum: [PASSENGER, DELIVERY, PICKUP]
+          description: PASSENGER 客运 / DELIVERY 派送（站点卸货）/ PICKUP 揽收（站点收货）
+        boardingStationId:
           type: string
-        deliveryNodeId:
+          description: 客运订单上车站；强制先上车后下车
+        alightingStationId:
           type: string
+          description: 客运订单下车站
+        stationId:
+          type: string
+          description: 派送/揽收订单的作业站点
         itemCount:
           type: integer
           minimum: 1
+          default: 1
+          description: 件数（容量只按件数约束）
         weightKg:
           type: number
           minimum: 0
+          description: 保留字段，算法不校验
         volumeM3:
           type: number
           minimum: 0
-        earliestPickupTime:
-          type: string
-          format: date-time
-        latestDeliveryTime:
-          type: string
-          format: date-time
-        priority:
+          description: 保留字段，算法不校验
+    AlgorithmConfig:
+      type: object
+      additionalProperties: true
+      description: ACO 超参数，全部可选，不传用默认值；超出建议范围时响应带 warnings 不拒绝
+      properties:
+        ant_count:
           type: integer
-          minimum: 0
+          default: 30
+          description: 蚂蚁种群数量
+        max_iterations:
+          type: integer
+          default: 100
+          description: 最大迭代次数
+        alpha:
+          type: number
+          default: 1.0
+          description: 信息素重要因子
+        beta:
+          type: number
+          default: 3.0
+          description: 启发因子
+        rho:
+          type: number
+          default: 0.1
+          description: 信息素挥发系数
+        Q:
+          type: number
+          default: 100
+          description: 信息素增量系数
+        convergence_threshold:
+          type: integer
+          default: 20
+          description: 收敛判定阈值（连续无变化代数）
+    PlanResult:
+      type: object
+      required: [requestId, status, cached, algorithmVersion, vehiclePlans]
+      properties:
+        requestId:
+          type: string
+        status:
+          type: string
+          enum: [feasible, infeasible]
+          description: feasible 完整解；infeasible 无解并附 reasonCode
+        reasonCode:
+          type: string
+          enum: [OVER_CAPACITY, TIMING_CONFLICT, PARTIAL_ONLY]
+          description: 无解原因码；PARTIAL_ONLY 语义待澄清（当前按不返回部分方案处理）
+        cached:
+          type: boolean
+          description: 是否为幂等缓存命中（重复提交不重新计算）
+        warnings:
+          type: array
+          description: algorithmConfig 超出建议范围等非致命告警
+          items:
+            type: string
+        algorithmVersion:
+          type: string
+          description: 随 Docker 镜像版本管理
+          example: aco-1.0.0
+        parameterVersion:
+          type: string
+          description: 默认参数版本，镜像 CHANGELOG 记录变更
+        totalDistance:
+          type: number
+          format: double
+          description: 全部车辆行驶里程累加值（算法唯一直接产出的指标）
+        vehiclePlans:
+          type: array
+          items:
+            $ref: '#/components/schemas/VehiclePlan'
+        computedAt:
+          type: string
+          format: date-time
     VehiclePlan:
       type: object
-      required: [vehicleId, assignedOrderIds, routeNodes]
+      required: [vehicleId, stops, totalDistance]
       properties:
         vehicleId:
           type: integer
           format: int64
-        shiftId:
-          type: integer
-          format: int64
-        assignedOrderIds:
+        stops:
           type: array
+          description: 闭环站点访问序列，首末均为场站
           items:
-            type: string
-        routeNodes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteNode'
-    RouteNode:
+            $ref: '#/components/schemas/RouteStop'
+        totalDistance:
+          type: number
+          format: double
+          description: 本车单次往返总里程
+    RouteStop:
       type: object
-      required: [nodeId, action, longitude, latitude, estimatedArrivalTime]
+      required: [stationId, action]
       properties:
-        nodeId:
+        stationId:
           type: string
         orderId:
           type: string
+          description: 该站点作业的订单（场站起止点无此字段）
         action:
           type: string
-          enum: [START, PICKUP, DROPOFF, STATION, END]
-        longitude:
+          enum: [DEPART, BOARD, ALIGHT, DELIVER, PICKUP, RETURN]
+          description: 出发 / 接客 / 送客 / 派送卸货 / 揽收装货 / 返回场站
+        segmentDistance:
           type: number
-        latitude:
-          type: number
-        estimatedArrivalTime:
-          type: string
-          format: date-time
-    RejectedOrder:
-      type: object
-      required: [orderId, reasonCode, reasonMessage]
-      properties:
-        orderId:
-          type: string
-        reasonCode:
-          type: string
-        reasonMessage:
-          type: string
-    Metrics:
-      type: object
-      required: [extraDistanceKm, estimatedPassengerDelayMinutes, estimatedRevenue, estimatedCost]
-      properties:
-        extraDistanceKm:
-          type: number
-        estimatedPassengerDelayMinutes:
-          type: number
-        estimatedRevenue:
-          type: number
-        estimatedCost:
-          type: number
+          format: double
+          description: 与上一站点间的分段里程
     ErrorResponse:
       type: object
       required: [code, message]
       properties:
         code:
           type: string
-          enum: [INVALID_INPUT, NO_FEASIBLE_SOLUTION, TIMEOUT, ROAD_NETWORK_UNAVAILABLE, ALGORITHM_INTERNAL_ERROR, VERSION_NOT_SUPPORTED, JOB_NOT_FOUND, JOB_NOT_READY]
+          enum: [INVALID_INPUT, OVER_LIMIT, INFEASIBLE, TIMEOUT, REQUEST_NOT_FOUND, NOT_READY, SERVICE_BUSY, ALGORITHM_INTERNAL_ERROR]
         message:
           type: string
         requestId:
