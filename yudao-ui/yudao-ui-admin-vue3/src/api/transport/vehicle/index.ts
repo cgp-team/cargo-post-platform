@@ -6,6 +6,7 @@ export interface VehicleVO {
   vehicleType?: number
   passengerCapacity?: number
   cargoCapacityKg?: number
+  cargoCapacity?: number
   createTime?: string
 }
 

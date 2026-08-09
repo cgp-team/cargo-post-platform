@@ -24,4 +24,7 @@ public class VehicleDO extends TenantBaseDO {
     private Integer passengerCapacity;
 
     private BigDecimal cargoCapacityKg;
+
+    /** 货仓件数上限（算法容量约束按件数） */
+    private Integer cargoCapacity;
 }
