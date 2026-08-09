@@ -85,5 +85,15 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6863, '班次编辑', 'transport:shift:update', 3, 3, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6864, '班次删除', 'transport:shift:delete', 3, 4, 6861, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Dispatch
+(6870, '调度管理', '', 1, 8, 6800, 'dispatch', 'ep:guide', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6871, '调度工作台', 'transport:dispatch:query', 2, 1, 6870, 'list', '', 'transport/dispatch/index', 'TransportDispatch', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6872, '订单归集', 'transport:dispatch:collect', 3, 2, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6873, '手工派单', 'transport:dispatch:manual-plan', 3, 3, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6874, '智能派单', 'transport:dispatch:smart-plan', 3, 4, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6875, '方案审核', 'transport:dispatch:review', 3, 5, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6876, '发车核验', 'transport:dispatch:check', 3, 6, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;

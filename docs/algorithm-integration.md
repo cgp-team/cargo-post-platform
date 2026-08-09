@@ -66,6 +66,8 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
 
 ## 适配层责任
 
+代码位于 `yudao-module-transport/.../integration/algorithm/`（`AlgorithmAdapter` 幂等与留痕、`AlgorithmClient` 超时/重试/轮询、`AlgorithmResultValidator` 结果校验），单测见 `src/test/.../integration/algorithm/`。职责清单：
+
 1. 生成全局唯一 `requestId`，保存请求快照哈希，24 小时内重复请求复用同一业务任务。
 2. 调用前完成坐标系转换（WGS-84 → GCJ-02），并按半小时批次归集订单、生成快照。
 3. 设置连接、读取和任务总时限；只对 408/503/502/504 与网络错误执行有上限的退避重试。
@@ -77,7 +79,7 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
 
 ## 待算法组澄清
 
-- 无解时的 HTTP 状态码：回复正文为 HTTP 200 + `status` 字段，但可重试分类中 422 亦标注为"业务不可行/无解"，两者矛盾，适配层暂兼容两种返回。
+- ~~无解时的 HTTP 状态码矛盾~~（已收敛，不再阻塞）：适配层对两种返回做了双向兼容并归一——`200 + status=infeasible` 原样通过；`422` 归一为无解结果，`reasonCode` 优先取 `details.reasonCode`，缺省回退为标准错误码，保证归一结果必带 `reasonCode`。算法组最终确认唯一形式后，可删除 `AlgorithmClient.toInfeasible` 兜底分支。
 - `PARTIAL_ONLY` 语义：部分可完成时是否返回部分方案（当前按"只给状态不给方案"处理）。
 - 高德路网数据的申请责任方、到位时间与接入后的算法改造排期。
 - Docker 镜像签名、版本号与兼容规则、正式交付时间。

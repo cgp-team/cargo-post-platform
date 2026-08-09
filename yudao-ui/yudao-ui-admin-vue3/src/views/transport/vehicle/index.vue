@@ -20,6 +20,7 @@
         <el-table-column label="车辆类型" prop="vehicleType" align="center" />
         <el-table-column label="载客人数" prop="passengerCapacity" align="center" />
         <el-table-column label="载货重量(kg)" prop="cargoCapacityKg" align="center" />
+        <el-table-column label="货仓件数" prop="cargoCapacity" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
           <template #default="scope">
