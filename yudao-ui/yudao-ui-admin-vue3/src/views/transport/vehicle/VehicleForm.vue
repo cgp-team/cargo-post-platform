@@ -13,6 +13,9 @@
       <el-form-item label="载货重量(kg)" prop="cargoCapacityKg">
         <el-input v-model.number="formData.cargoCapacityKg" placeholder="请输入载货重量(kg)" />
       </el-form-item>
+      <el-form-item label="货仓件数" prop="cargoCapacity">
+        <el-input-number v-model="formData.cargoCapacity" :min="1" style="width:100%" placeholder="货仓件数上限" />
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取 消</el-button>
@@ -38,6 +41,7 @@ const formData = ref<VehicleApi.VehicleVO>({
   vehicleType: undefined,
   passengerCapacity: undefined,
   cargoCapacityKg: undefined,
+  cargoCapacity: 4,
 })
 
 const formRules = reactive({
@@ -45,7 +49,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined }
+  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined, cargoCapacity: 4 }
   formRef.value?.resetFields()
 }
 

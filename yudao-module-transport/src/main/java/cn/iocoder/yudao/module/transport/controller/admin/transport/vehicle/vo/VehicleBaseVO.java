@@ -18,4 +18,7 @@ public class VehicleBaseVO {
 
     @Schema(description="cargo capacity kg")
     private BigDecimal cargoCapacityKg;
+
+    @Schema(description="cargo capacity in items (algorithm capacity constraint)")
+    private Integer cargoCapacity;
 }
