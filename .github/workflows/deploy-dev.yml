@@ -70,8 +70,10 @@ jobs:
           for f in transport-schema transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
+              # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
+              # 不显式指定会把 UTF-8 SQL 按 latin1 误读，中文双重编码入库
               docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
-                mysql -u root -p"${DB_PASSWORD}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+                mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}" "${DB_NAME}" < "sql/mysql/${f}.sql"
               echo "${f}.sql done."
             fi
           done
