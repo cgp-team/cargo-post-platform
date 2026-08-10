@@ -134,7 +134,8 @@ const initMap = async () => {
   try {
     await loadBaiduMapSdk(15000)
   } catch {
-    mapError.value = '百度地图 SDK 加载失败，请检查网络后刷新'
+    mapError.value =
+      '地图加载失败：请检查百度地图 AK 的 Referer 白名单是否包含当前访问地址（lbsyun.baidu.com 控制台），或检查网络后刷新'
     return
   }
   try {
