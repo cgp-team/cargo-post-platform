@@ -67,7 +67,7 @@ jobs:
           docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
             mysqladmin ping -u root -p"${DB_PASSWORD}" --silent
 
-          for f in transport-schema transport-menu transport-demo-data; do
+          for f in cleanup-upstream-menus transport-schema transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
               # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
