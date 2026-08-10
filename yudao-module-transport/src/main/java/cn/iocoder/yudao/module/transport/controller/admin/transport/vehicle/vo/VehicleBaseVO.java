@@ -21,4 +21,7 @@ public class VehicleBaseVO {
 
     @Schema(description="cargo capacity in items (algorithm capacity constraint)")
     private Integer cargoCapacity;
+
+    @Schema(description="vehicle status: 0 available, 1 disabled")
+    private Integer status;
 }

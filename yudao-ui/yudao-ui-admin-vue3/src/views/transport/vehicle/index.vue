@@ -5,6 +5,12 @@
         <el-form-item label="车牌号">
           <el-input v-model="queryParams.plateNo" placeholder="请输入车牌号" clearable @keyup.enter="getList" />
         </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="queryParams.status" placeholder="请选择" clearable style="width:120px">
+            <el-option label="可用" :value="0" />
+            <el-option label="停用" :value="1" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
@@ -21,6 +27,13 @@
         <el-table-column label="载客人数" prop="passengerCapacity" align="center" />
         <el-table-column label="载货重量(kg)" prop="cargoCapacityKg" align="center" />
         <el-table-column label="货仓件数" prop="cargoCapacity" align="center" />
+        <el-table-column label="状态" prop="status" align="center" width="80">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === 1 ? 'danger' : 'success'" size="small">
+              {{ scope.row.status === 1 ? '停用' : '可用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
           <template #default="scope">
@@ -47,12 +60,14 @@ type VehicleQueryParams = {
   pageNo: number
   pageSize: number
   plateNo?: string
+  status?: number
 }
 
 const queryParams = reactive<VehicleQueryParams>({
   pageNo: 1,
   pageSize: 10,
   plateNo: '',
+  status: undefined,
 })
 const formRef = ref()
 const getList = async () => {
