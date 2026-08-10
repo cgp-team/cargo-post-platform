@@ -43,7 +43,7 @@ DELETE FROM system_menu WHERE id BETWEEN 6800 AND 6899;
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 -- Root directory
-(6800, '客货邮管理', '', 1, 50, 0, '/transport', 'ep:ship', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6800, '客货邮管理', '', 1, 5, 0, '/transport', 'ep:ship', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 -- Dashboard
 (6801, '运营概览', 'transport:dashboard:query', 2, 1, 6800, 'dashboard', 'ep:data-analysis', 'transport/dashboard/index', 'TransportDashboard', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 -- Station
