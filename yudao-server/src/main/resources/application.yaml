@@ -354,9 +354,5 @@ yudao:
   iot:
     message-bus:
       type: redis # 消息总线的类型
-  # 客货邮 transport 模块
-  transport:
-    algorithm: # 路线规划算法服务（仅业务后端可访问，契约见 docs/api/algorithm-api.yaml）
-      base-url: ${TRANSPORT_ALGORITHM_BASE_URL:http://127.0.0.1:18080} # 默认 mock-algorithm 容器映射端口
 
 debug: false
