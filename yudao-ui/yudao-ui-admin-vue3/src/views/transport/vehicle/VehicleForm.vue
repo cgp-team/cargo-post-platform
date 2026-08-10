@@ -16,6 +16,12 @@
       <el-form-item label="货仓件数" prop="cargoCapacity">
         <el-input-number v-model="formData.cargoCapacity" :min="1" style="width:100%" placeholder="货仓件数上限" />
       </el-form-item>
+      <el-form-item label="车辆状态" prop="status">
+        <el-radio-group v-model="formData.status">
+          <el-radio :value="0">可用</el-radio>
+          <el-radio :value="1">停用</el-radio>
+        </el-radio-group>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取 消</el-button>
@@ -42,6 +48,7 @@ const formData = ref<VehicleApi.VehicleVO>({
   passengerCapacity: undefined,
   cargoCapacityKg: undefined,
   cargoCapacity: 4,
+  status: 0,
 })
 
 const formRules = reactive({
@@ -49,7 +56,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined, cargoCapacity: 4 }
+  formData.value = { plateNo: '', vehicleType: undefined, passengerCapacity: undefined, cargoCapacityKg: undefined, cargoCapacity: 4, status: 0 }
   formRef.value?.resetFields()
 }
 
