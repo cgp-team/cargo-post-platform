@@ -21,6 +21,10 @@ public class VehicleRespVO extends VehicleBaseVO {
 
     @Schema(description="cargo capacity kg")
     private BigDecimal cargoCapacityKg;
+
+    @Schema(description="vehicle status: 0 available, 1 disabled")
+    private Integer status;
+
     @Schema(description="Create time")
     private LocalDateTime createTime;
 }

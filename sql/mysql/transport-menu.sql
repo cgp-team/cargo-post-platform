@@ -93,7 +93,10 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6873, '手工派单', 'transport:dispatch:manual-plan', 3, 3, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6874, '智能派单', 'transport:dispatch:smart-plan', 3, 4, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6875, '方案审核', 'transport:dispatch:review', 3, 5, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
-(6876, '发车核验', 'transport:dispatch:check', 3, 6, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+(6876, '发车核验', 'transport:dispatch:check', 3, 6, 6871, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+-- Monitoring
+(6877, '车辆监控', '', 1, 9, 6800, 'monitoring', 'ep:map-location', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6878, '实时监控', 'transport:monitoring:query', 2, 1, 6877, 'map', '', 'transport/monitoring/index', 'TransportMonitoring', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
