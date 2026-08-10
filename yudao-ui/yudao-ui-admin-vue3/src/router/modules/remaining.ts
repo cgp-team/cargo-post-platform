@@ -53,9 +53,12 @@ const remainingRouter: AppRouteRecordRaw[] = [
   {
     path: '/',
     component: Layout,
-    redirect: '/index',
+    // 客货邮平台：运营概览即首页
+    redirect: '/transport/dashboard',
     name: 'Home',
-    meta: {},
+    meta: {
+      hidden: true // 不显示上游"首页"菜单项
+    },
     children: [
       {
         path: 'index',
@@ -65,7 +68,7 @@ const remainingRouter: AppRouteRecordRaw[] = [
           title: t('router.home'),
           icon: 'ep:home-filled',
           noCache: false,
-          affix: true
+          hidden: true // 不在侧边栏/标签栏出现（去掉 affix）
         }
       }
     ]
