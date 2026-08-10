@@ -18,12 +18,12 @@
 
 每次合并至少执行后端模块测试与打包、前端类型检查/构建（完整工程接入后）、Mock pytest、OpenAPI 解析、Compose config 和镜像构建。
 
-## 自动化覆盖现状（2026-08-09 调度闭环合入后）
+## 自动化覆盖现状（2026-08-10 更新）
 
 | 场景 | 自动化位置 |
 |---|---|
-| 算法 Mock 五场景与幂等 | `mock-algorithm/tests`（pytest，19 例）；适配层侧由 `AlgorithmClientTest`（11 例，含 408 轮询、503 重试、422 兼容、413/400 不重试）覆盖 |
+| 算法 Mock 五场景与幂等 | `mock-algorithm/tests`（pytest，19 例）；适配层侧由 `AlgorithmClientTest`（13 例，含 408 轮询、503 重试、422 兼容、413/400 不重试）覆盖 |
 | 结果合法性校验（归属/容量/时序/订单唯一） | `AlgorithmResultValidatorTest`（14 例） |
-| 适配层幂等（重复快照不重复建任务） | `AlgorithmAdapterTest`（5 例） |
-| 调度状态机（归集/派单/审核/驳回回池/核验发车） | `DispatchServiceImplTest`（6 例） |
+| 适配层幂等（重复快照不重复建任务） | `AlgorithmAdapterTest`（6 例） |
+| 调度状态机（归集/派单/审核/驳回回池/核验发车） | `DispatchServiceImplTest`（10 例） |
 | 部署与浏览器直连边界 | 仍为手工/流水线用例，未自动化 |
