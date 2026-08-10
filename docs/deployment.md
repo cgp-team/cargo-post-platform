@@ -69,6 +69,8 @@ workflow 引用 `environment: dev`，首次运行自动创建；可在 Settings 
 
 `deploy/nginx/nginx.conf` 是无域名、无证书路径的示例：`/` 服务前端静态文件，`/api/` 代理后端，`/ws/` 代理 WebSocket。算法服务未配置浏览器入口，只允许后端通过内部地址访问。
 
+前端百度地图 AK（`yudao-ui-admin-vue3/.env.prod` 的 `VITE_BAIDU_MAP_KEY`）的 Referer 白名单必须包含部署访问地址（IP 或域名，如 `1.15.29.107`），否则车辆监控等地图页会弹「APP Referer校验失败」且地图无法加载；在白名单管理平台（lbsyun.baidu.com 控制台）修改后即时生效，无需重新构建。
+
 ## 备份与恢复
 
 `deploy/scripts/backup.sh` 生成 gzip 压缩的 MySQL 逻辑备份，默认保留 14 天。该脚本是开发基础版本，不代表完整灾备；上线前必须完成恢复演练、对象存储备份、异地副本、RPO/RTO 和加密要求。
