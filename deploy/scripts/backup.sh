@@ -45,7 +45,7 @@ compose=(docker compose --env-file "${ENV_FILE}" -f "${ROOT_DIR}/deploy/docker-c
 
 echo "Creating ${backup_file}..."
 "${compose[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql \
-  mysqldump --single-transaction --routines --triggers -u"${DB_USER}" "${DB_NAME}" | gzip -9 >"${backup_file}"
+  mysqldump --default-character-set=utf8mb4 --single-transaction --routines --triggers -u"${DB_USER}" "${DB_NAME}" | gzip -9 >"${backup_file}"
 
 find "${OUTPUT_DIR}" -type f -name "${DB_NAME}-*.sql.gz" -mtime "+${RETENTION_DAYS}" -delete
 echo "Backup complete. Restore must be tested before production use."
