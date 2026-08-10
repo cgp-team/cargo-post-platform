@@ -39,3 +39,6 @@ WITH RECURSIVE menu_tree AS (
   SELECT m.id FROM system_menu m JOIN menu_tree t ON m.parent_id = t.id
 )
 DELETE FROM system_menu WHERE id IN (SELECT id FROM menu_tree);
+
+-- 第三步：隐藏系统管理与基础设施顶级目录（功能保留，可直接通过 URL 访问，如 /system/user、/infra/file-config）
+UPDATE system_menu SET visible = b'0' WHERE id IN (1, 2);
