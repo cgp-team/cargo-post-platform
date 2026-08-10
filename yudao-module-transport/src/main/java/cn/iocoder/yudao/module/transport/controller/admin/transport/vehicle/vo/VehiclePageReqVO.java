@@ -13,6 +13,9 @@ public class VehiclePageReqVO extends PageParam {
     @Schema(description="plate number")
     private String plateNo;
 
+    @Schema(description="vehicle status: 0 available, 1 disabled")
+    private Integer status;
+
     @DateTimeFormat(pattern=FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @Schema(description="createTime")
     private LocalDateTime[] createTime;

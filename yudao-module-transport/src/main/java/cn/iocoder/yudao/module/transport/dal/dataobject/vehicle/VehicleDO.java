@@ -27,4 +27,7 @@ public class VehicleDO extends TenantBaseDO {
 
     /** 货仓件数上限（算法容量约束按件数） */
     private Integer cargoCapacity;
+
+    /** 车辆状态：0 空闲可用，1 停用维修 */
+    private Integer status;
 }
