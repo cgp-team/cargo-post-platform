@@ -29,6 +29,18 @@ public class TransportOrderCreateReqVO extends TransportOrderBaseVO {
     private BigDecimal cargoWeightKg;
     @Schema(description = "货运体积(m³)")
     private BigDecimal cargoVolumeM3;
+    @Schema(description = "货物名称")
+    private String goodsName;
+    @Schema(description = "货物备注")
+    private String goodsNote;
+    @Schema(description = "货物照片")
+    private String photoUrl;
+    @Schema(description = "收货人")
+    private String receiverName;
+    @Schema(description = "收货电话")
+    private String receiverMobile;
+    @Schema(description = "收货地址")
+    private String receiverAddress;
 
     // --- 邮快件子表字段 ---
     @Schema(description = "邮件/快递单号")

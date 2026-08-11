@@ -33,6 +33,15 @@
         </el-table-column>
         <el-table-column label="取货站点" prop="pickupStationId" align="center" />
         <el-table-column label="送达站点" prop="deliveryStationId" align="center" />
+        <el-table-column label="货物名称" align="center" min-width="100">
+          <template #default="scope">{{ scope.row.goodsName || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="收货人" align="center" width="100">
+          <template #default="scope">{{ scope.row.receiverName || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="收货电话" align="center" width="120">
+          <template #default="scope">{{ scope.row.receiverMobile || '-' }}</template>
+        </el-table-column>
         <el-table-column label="订单金额" prop="totalAmount" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">

@@ -27,4 +27,6 @@ public class TransportOrderDO extends TenantBaseDO {
     private LocalDateTime latestDeliveryTime;
     private Integer status;
     private BigDecimal totalAmount;
+    /** 下单会员编号（小程序寄货） */
+    private Long memberUserId;
 }

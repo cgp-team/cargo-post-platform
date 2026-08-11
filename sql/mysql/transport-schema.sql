@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS `transport_order` (
   `latest_delivery_time` datetime DEFAULT NULL COMMENT '最迟送达时间',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '订单状态',
   `total_amount` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '订单金额',
+  `member_user_id` bigint NOT NULL DEFAULT 0 COMMENT '下单会员编号(小程序寄货)',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -145,7 +146,8 @@ CREATE TABLE IF NOT EXISTS `transport_order` (
   `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_transport_order_no_tenant` (`order_no`, `tenant_id`),
-  KEY `idx_transport_order_pool` (`tenant_id`, `status`, `earliest_pickup_time`)
+  KEY `idx_transport_order_pool` (`tenant_id`, `status`, `earliest_pickup_time`),
+  KEY `idx_transport_order_member` (`tenant_id`, `member_user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='运输订单主表';
 
 CREATE TABLE IF NOT EXISTS `transport_passenger_order` (
@@ -169,6 +171,12 @@ CREATE TABLE IF NOT EXISTS `transport_cargo_order` (
   `item_count` int NOT NULL DEFAULT 1 COMMENT '件数',
   `weight_kg` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '重量(kg)',
   `volume_m3` decimal(12,4) NOT NULL DEFAULT 0 COMMENT '体积(m3)',
+  `goods_name` varchar(128) NOT NULL DEFAULT '' COMMENT '货物名称',
+  `goods_note` varchar(255) NOT NULL DEFAULT '' COMMENT '货物备注',
+  `photo_url` varchar(255) NOT NULL DEFAULT '' COMMENT '货物照片',
+  `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人',
+  `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话',
+  `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -316,3 +324,57 @@ CREATE TABLE IF NOT EXISTS `transport_product` (
   UNIQUE KEY `uk_product_name_tenant` (`name`, `tenant_id`),
   KEY `idx_product_status_sort` (`tenant_id`, `status`, `sort`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='农产品商品表';
+
+-- ---------- 农产品商城订单表 ----------
+CREATE TABLE IF NOT EXISTS `transport_product_order` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '订单编号',
+  `order_no` varchar(64) NOT NULL COMMENT '业务订单号',
+  `user_id` bigint NOT NULL COMMENT '购买会员编号',
+  `user_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '购买会员手机号',
+  `total_amount` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '订单总额',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '订单状态(0待发货 1已发货 2已完成 3已取消)',
+  `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人',
+  `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话',
+  `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址',
+  `remark` varchar(255) NOT NULL DEFAULT '' COMMENT '订单备注',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_product_order_no_tenant` (`order_no`, `tenant_id`),
+  KEY `idx_product_order_user` (`tenant_id`, `user_id`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='农产品商城订单表';
+
+CREATE TABLE IF NOT EXISTS `transport_product_order_item` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '明细编号',
+  `order_id` bigint NOT NULL COMMENT '订单编号',
+  `product_id` bigint NOT NULL COMMENT '商品编号',
+  `product_name` varchar(128) NOT NULL COMMENT '商品名称',
+  `product_image` varchar(32) NOT NULL DEFAULT '' COMMENT '商品图(emoji)',
+  `product_price` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '下单单价',
+  `quantity` int NOT NULL DEFAULT 1 COMMENT '购买数量',
+  `amount` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '小计金额',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_product_order_item_order` (`tenant_id`, `order_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='农产品商城订单明细表';
+
+-- 已有库人工执行（CREATE IF NOT EXISTS 不会给已有表加列，升级请执行以下 ALTER）：
+-- ALTER TABLE `transport_order`
+--   ADD COLUMN `member_user_id` bigint NOT NULL DEFAULT 0 COMMENT '下单会员编号(小程序寄货)' AFTER `total_amount`,
+--   ADD KEY `idx_transport_order_member` (`tenant_id`, `member_user_id`, `status`);
+-- ALTER TABLE `transport_cargo_order`
+--   ADD COLUMN `goods_name` varchar(128) NOT NULL DEFAULT '' COMMENT '货物名称' AFTER `volume_m3`,
+--   ADD COLUMN `goods_note` varchar(255) NOT NULL DEFAULT '' COMMENT '货物备注' AFTER `goods_name`,
+--   ADD COLUMN `photo_url` varchar(255) NOT NULL DEFAULT '' COMMENT '货物照片' AFTER `goods_note`,
+--   ADD COLUMN `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人' AFTER `photo_url`,
+--   ADD COLUMN `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话' AFTER `receiver_name`,
+--   ADD COLUMN `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址' AFTER `receiver_mobile`;
