@@ -1,11 +1,14 @@
 package cn.iocoder.yudao.module.transport.service.transport.order;
 
+import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.convert.transport.order.TransportOrderConvert;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.*;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ORDER_NOT_EXISTS;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_USER_NOT_LOGIN;
 
 @Service
 @Validated
@@ -87,6 +91,63 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         return orderMapper.selectPage(reqVO);
     }
 
+    @Override
+    @Transactional
+    public Long createSendOrder(Long userId, AppSendOrderCreateReqVO reqVO) {
+        if (userId == null) {
+            throw exception(SEND_ORDER_USER_NOT_LOGIN);
+        }
+        // 主表：货运订单，status=0 待调度，天然可被调度员归集入池
+        TransportOrderDO order = TransportOrderDO.builder()
+                .orderNo(generateOrderNo())
+                .orderType(2) // 货运/生鲜
+                .pickupStationId(reqVO.getPickupStationId())
+                .deliveryStationId(reqVO.getDeliveryStationId())
+                .earliestPickupTime(reqVO.getEarliestPickupTime())
+                .status(TransportOrderStatusEnum.CREATED.getStatus())
+                .memberUserId(userId)
+                .build();
+        orderMapper.insert(order);
+        // 货运子表：寄货货物信息
+        CargoOrderDO sub = CargoOrderDO.builder()
+                .orderId(order.getId())
+                .cargoCategory("农产品")
+                .freshFlag(true)
+                .itemCount(1)
+                .weightKg(reqVO.getGoodsWeight())
+                .goodsName(reqVO.getGoodsName())
+                .goodsNote(reqVO.getGoodsNote())
+                .photoUrl(reqVO.getPhotoUrl())
+                .receiverName(reqVO.getReceiverName())
+                .receiverMobile(reqVO.getReceiverMobile())
+                .receiverAddress(reqVO.getReceiverAddress())
+                .build();
+        cargoOrderMapper.insert(sub);
+        return order.getId();
+    }
+
+    @Override
+    public PageResult<TransportOrderDO> getMySendPage(Long userId, PageParam pageParam) {
+        if (userId == null) {
+            throw exception(SEND_ORDER_USER_NOT_LOGIN);
+        }
+        return orderMapper.selectPageByMemberUser(pageParam, userId);
+    }
+
+    @Override
+    public TransportOrderDO getByOrderNo(String orderNo) {
+        TransportOrderDO order = orderMapper.selectByOrderNo(orderNo);
+        if (order == null) {
+            throw exception(ORDER_NOT_EXISTS);
+        }
+        return order;
+    }
+
+    @Override
+    public CargoOrderDO getCargoOrder(Long orderId) {
+        return cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, orderId);
+    }
+
     private TransportOrderDO validateExists(Long id) {
         TransportOrderDO o = orderMapper.selectById(id);
         if (o == null) throw exception(ORDER_NOT_EXISTS);
@@ -117,6 +178,12 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .itemCount(reqVO.getCargoItemCount() != null ? reqVO.getCargoItemCount() : 1)
                 .weightKg(reqVO.getCargoWeightKg())
                 .volumeM3(reqVO.getCargoVolumeM3())
+                .goodsName(reqVO.getGoodsName())
+                .goodsNote(reqVO.getGoodsNote())
+                .photoUrl(reqVO.getPhotoUrl())
+                .receiverName(reqVO.getReceiverName())
+                .receiverMobile(reqVO.getReceiverMobile())
+                .receiverAddress(reqVO.getReceiverAddress())
                 .build();
         cargoOrderMapper.insert(sub);
     }
