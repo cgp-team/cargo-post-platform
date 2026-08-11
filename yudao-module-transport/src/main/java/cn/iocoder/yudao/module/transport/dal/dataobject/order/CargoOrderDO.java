@@ -24,4 +24,16 @@ public class CargoOrderDO extends TenantBaseDO {
     private Integer itemCount;
     private BigDecimal weightKg;
     private BigDecimal volumeM3;
+    /** 货物名称（小程序寄货） */
+    private String goodsName;
+    /** 货物备注 */
+    private String goodsNote;
+    /** 货物照片 */
+    private String photoUrl;
+    /** 收货人 */
+    private String receiverName;
+    /** 收货电话 */
+    private String receiverMobile;
+    /** 收货地址 */
+    private String receiverAddress;
 }

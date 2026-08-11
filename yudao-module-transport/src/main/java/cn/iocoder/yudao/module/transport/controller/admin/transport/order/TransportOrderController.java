@@ -4,6 +4,8 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -13,6 +15,8 @@ import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 
@@ -50,13 +54,32 @@ public class TransportOrderController {
     @Parameter(name = "id", description = "编号", required = true)
     @PreAuthorize("@ss.hasPermission('transport:order:query')")
     public CommonResult<TransportOrderRespVO> get(@RequestParam("id") Long id) {
-        return success(BeanUtils.toBean(orderService.get(id), TransportOrderRespVO.class));
+        return success(toVO(orderService.get(id)));
     }
 
     @GetMapping("/page")
     @Operation(summary = "获得订单分页")
     @PreAuthorize("@ss.hasPermission('transport:order:query')")
     public CommonResult<PageResult<TransportOrderRespVO>> page(@Valid TransportOrderPageReqVO reqVO) {
-        return success(BeanUtils.toBean(orderService.getPage(reqVO), TransportOrderRespVO.class));
+        PageResult<TransportOrderDO> pageResult = orderService.getPage(reqVO);
+        List<TransportOrderRespVO> list = pageResult.getList().stream()
+                .map(this::toVO)
+                .toList();
+        return success(new PageResult<>(list, pageResult.getTotal()));
+    }
+
+    /** 组装订单与货运子表寄货信息 */
+    private TransportOrderRespVO toVO(TransportOrderDO order) {
+        TransportOrderRespVO vo = BeanUtils.toBean(order, TransportOrderRespVO.class);
+        CargoOrderDO cargo = orderService.getCargoOrder(order.getId());
+        if (cargo != null) {
+            vo.setGoodsName(cargo.getGoodsName());
+            vo.setGoodsNote(cargo.getGoodsNote());
+            vo.setPhotoUrl(cargo.getPhotoUrl());
+            vo.setReceiverName(cargo.getReceiverName());
+            vo.setReceiverMobile(cargo.getReceiverMobile());
+            vo.setReceiverAddress(cargo.getReceiverAddress());
+        }
+        return vo;
     }
 }

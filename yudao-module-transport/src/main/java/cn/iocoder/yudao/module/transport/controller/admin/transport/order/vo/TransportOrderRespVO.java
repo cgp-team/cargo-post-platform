@@ -20,4 +20,17 @@ public class TransportOrderRespVO extends TransportOrderBaseVO {
     private String deliveryStationName;
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
+    // --- 货运寄货信息（来自货运子表） ---
+    @Schema(description = "货物名称")
+    private String goodsName;
+    @Schema(description = "货物备注")
+    private String goodsNote;
+    @Schema(description = "货物照片")
+    private String photoUrl;
+    @Schema(description = "收货人")
+    private String receiverName;
+    @Schema(description = "收货电话")
+    private String receiverMobile;
+    @Schema(description = "收货地址")
+    private String receiverAddress;
 }

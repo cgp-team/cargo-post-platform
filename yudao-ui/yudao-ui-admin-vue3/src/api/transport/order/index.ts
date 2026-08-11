@@ -28,6 +28,13 @@ export interface OrderVO {
   // Display names
   pickupStationName?: string
   deliveryStationName?: string
+  // Cargo send info
+  goodsName?: string
+  goodsNote?: string
+  photoUrl?: string
+  receiverName?: string
+  receiverMobile?: string
+  receiverAddress?: string
   createTime?: string
 }
 

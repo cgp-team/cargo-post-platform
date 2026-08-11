@@ -16,4 +16,9 @@ public interface DriverMapper extends BaseMapperX<DriverDO> {
                 .betweenIfPresent(DriverDO::getCreateTime, reqVO.getCreateTime())
                 .orderByDesc(DriverDO::getId));
     }
+
+    /** 按手机号查询司机档案（小程序司机端身份识别） */
+    default DriverDO selectByMobile(String mobile) {
+        return selectOne(DriverDO::getMobile, mobile);
+    }
 }
