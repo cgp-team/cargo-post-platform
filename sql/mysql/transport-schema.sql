@@ -292,3 +292,27 @@ CREATE TABLE IF NOT EXISTS `transport_algorithm_request` (
   UNIQUE KEY `uk_algorithm_request_id_tenant` (`request_id`, `tenant_id`),
   KEY `idx_algorithm_request_snapshot` (`tenant_id`, `snapshot_hash`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='算法请求留痕表';
+
+-- ---------- 农产品商品表 ----------
+CREATE TABLE IF NOT EXISTS `transport_product` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '商品编号',
+  `name` varchar(128) NOT NULL COMMENT '商品名称',
+  `from_village` varchar(64) NOT NULL DEFAULT '' COMMENT '产地村庄',
+  `price` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '售价',
+  `unit` varchar(16) NOT NULL DEFAULT '斤' COMMENT '计价单位',
+  `image` varchar(32) NOT NULL DEFAULT '' COMMENT '商品图(emoji)',
+  `badge` varchar(64) NOT NULL DEFAULT '' COMMENT '角标文案',
+  `description` varchar(512) NOT NULL DEFAULT '' COMMENT '商品描述',
+  `stock` int NOT NULL DEFAULT 0 COMMENT '库存',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态(0上架 1下架)',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序值(越小越靠前)',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_product_name_tenant` (`name`, `tenant_id`),
+  KEY `idx_product_status_sort` (`tenant_id`, `status`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='农产品商品表';

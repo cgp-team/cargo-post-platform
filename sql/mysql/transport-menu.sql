@@ -98,5 +98,13 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6877, '车辆监控', '', 1, 9, 6800, 'monitoring', 'ep:map-location', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6878, '实时监控', 'transport:monitoring:query', 2, 1, 6877, 'map', '', 'transport/monitoring/index', 'TransportMonitoring', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Product
+(6880, '商品管理', '', 1, 10, 6800, 'product', 'ep:goods', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6881, '商品列表', 'transport:product:query', 2, 1, 6880, 'list', '', 'transport/product/index', 'TransportProduct', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6882, '商品新增', 'transport:product:create', 3, 2, 6881, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6883, '商品编辑', 'transport:product:update', 3, 3, 6881, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6884, '商品删除', 'transport:product:delete', 3, 4, 6881, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
