@@ -8,7 +8,7 @@
 | `algorithm-integration.md` | 路线规划算法对接契约（调用边界、输入输出、幂等重试） | 系统集成负责人 + 算法组 |
 | `algorithm-doc-review.md` | 算法组文档评审记录、差异对照与遗留问题 | 系统集成负责人 |
 | `api/algorithm-api.yaml` | 算法服务 OpenAPI 契约 | 系统集成负责人 + 算法组 |
-| `miniprogram.md` | 司机端微信小程序：页面、登录链路、联调步骤 | 前端负责人 |
+| `miniprogram.md` | 微信小程序（商城/寄件/包裹 + 司机工作台）：页面、登录链路、联调步骤 | 前端负责人 |
 | `deployment.md` | 开发/生产部署、CI/CD、Nginx、备份恢复 | 系统集成负责人 |
 | `test-cases.md` | 测试用例基线与自动化覆盖现状 | 系统集成负责人 |
 | `team-work.md` | 团队分工与分支评审规则 | 全员 |
