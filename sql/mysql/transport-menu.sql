@@ -106,5 +106,12 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6883, '商品编辑', 'transport:product:update', 3, 3, 6881, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6884, '商品删除', 'transport:product:delete', 3, 4, 6881, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Product Order（农产品商城订单）
+(6890, '商品订单', '', 1, 11, 6800, 'product-order', 'ep:tickets', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6891, '订单列表', 'transport:product-order:query', 2, 1, 6890, 'list', '', 'transport/productOrder/index', 'TransportProductOrder', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6892, '订单发货', 'transport:product-order:ship', 3, 2, 6891, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6893, '订单完成', 'transport:product-order:complete', 3, 3, 6891, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
