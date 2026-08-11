@@ -46,7 +46,7 @@ const statusMap = {
   2: { tag: 'success' },
   3: { tag: 'danger' }
 }
-const statusTag = (s: number) => (statusMap as any)[s]?.tag || 'info'
+const statusTag = (s?: number) => (statusMap as any)[s ?? 0]?.tag || 'info'
 
 const open = async (id: number) => {
   dialogVisible.value = true
