@@ -44,20 +44,6 @@ const screenfullChange = (show: boolean) => {
   appStore.setScreenfull(show)
 }
 
-// 尺寸图标
-const size = ref(appStore.getSize)
-
-const sizeChange = (show: boolean) => {
-  appStore.setSize(show)
-}
-
-// 多语言图标
-const locale = ref(appStore.getLocale)
-
-const localeChange = (show: boolean) => {
-  appStore.setLocale(show)
-}
-
 // 消息图标
 const message = ref(appStore.getMessage)
 
@@ -174,16 +160,6 @@ watch(
     <div class="flex items-center justify-between">
       <span class="text-14px">{{ t('setting.screenfullIcon') }}</span>
       <ElSwitch v-model="screenfull" @change="screenfullChange" />
-    </div>
-
-    <div class="flex items-center justify-between">
-      <span class="text-14px">{{ t('setting.sizeIcon') }}</span>
-      <ElSwitch v-model="size" @change="sizeChange" />
-    </div>
-
-    <div class="flex items-center justify-between">
-      <span class="text-14px">{{ t('setting.localeIcon') }}</span>
-      <ElSwitch v-model="locale" @change="localeChange" />
     </div>
 
     <div class="flex items-center justify-between">
