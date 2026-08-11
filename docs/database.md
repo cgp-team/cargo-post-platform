@@ -4,7 +4,7 @@
 
 - `sql/mysql/transport-schema.sql`：transport 领域表 DDL 的唯一维护处（非破坏性 DDL，已涵盖算法请求留痕、调度闭环、车辆货仓件数等历次变更）。
 - `sql/mysql/transport-menu.sql`：客货邮动态菜单与权限标识（已按前后端路由评审填写），另含 `member_user` 建表——司机端小程序登录依赖 member 模块。
-- `sql/mysql/transport-demo-data.sql`：演示数据（车辆、司机、人车绑定、站点、线路、班次及三类订单），使用 `INSERT IGNORE` 可重复执行，禁止用于生产。
+- `sql/mysql/transport-demo-data.sql`：演示数据（车辆、司机、人车绑定、站点、线路、班次、三类订单及农产品商品），使用 `INSERT IGNORE` 可重复执行，禁止用于生产。
 
 ## 增量迁移
 

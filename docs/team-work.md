@@ -6,7 +6,7 @@
 
 ## 前端负责人
 
-负责 Vue 管理端、GIS 地图、数据大盘、调度工作台、动态权限菜单和接口联调。Vue3 管理端已完整接入（`yudao-ui-admin-vue3/src/views/transport/` 下含 dashboard、monitoring、dispatch、order、vehicle、driver、station、route、shift、settlement、operation 等页面），后续改动沿用现有骨架与产品标题。同时负责司机端微信小程序（`miniprogram/`），小程序只调用 `/app-api`，与管理端一样不得直连算法服务。
+负责 Vue 管理端、GIS 地图、数据大盘、调度工作台、动态权限菜单和接口联调。Vue3 管理端已完整接入（`yudao-ui-admin-vue3/src/views/transport/` 下含 dashboard、monitoring、dispatch、order、vehicle、driver、station、route、shift、settlement、operation 等页面），后续改动沿用现有骨架与产品标题。同时负责微信小程序（`miniprogram/`，含商城、寄件、包裹等用户端页面与司机工作台），小程序只调用 `/app-api`，与管理端一样不得直连算法服务。
 
 ## 后端负责人
 
