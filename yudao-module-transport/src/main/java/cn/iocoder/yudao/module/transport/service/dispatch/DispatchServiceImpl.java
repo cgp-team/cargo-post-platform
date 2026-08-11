@@ -456,10 +456,15 @@ public class DispatchServiceImpl implements DispatchService {
 
     /** 按车辆当前有效人车绑定解析司机编号（算法派单结果按司机可查的前提） */
     private Long resolveDriverId(Long vehicleId) {
-        if (vehicleId == null) {
+        // 防御：单测等非 Spring 上下文可能未注入 mapper，此时不派司机即可
+        if (vehicleId == null || driverVehicleMapper == null) {
             return null;
         }
-        return driverVehicleMapper.selectActiveBindings().stream()
+        List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
+        if (bindings == null) {
+            return null;
+        }
+        return bindings.stream()
                 .filter(bind -> Objects.equals(bind.getVehicleId(), vehicleId))
                 .map(DriverVehicleDO::getDriverId)
                 .findFirst()

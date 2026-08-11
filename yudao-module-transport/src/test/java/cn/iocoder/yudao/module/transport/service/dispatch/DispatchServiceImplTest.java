@@ -8,6 +8,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.*;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
@@ -51,6 +52,7 @@ class DispatchServiceImplTest {
     @Mock private PassengerOrderMapper passengerOrderMapper;
     @Mock private StationMapper stationMapper;
     @Mock private VehicleMapper vehicleMapper;
+    @Mock private DriverVehicleMapper driverVehicleMapper;
     @Mock private TransportDispatchTaskMapper dispatchTaskMapper;
     @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
@@ -69,12 +71,15 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "passengerOrderMapper", passengerOrderMapper);
         ReflectionTestUtils.setField(dispatchService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(dispatchService, "vehicleMapper", vehicleMapper);
+        ReflectionTestUtils.setField(dispatchService, "driverVehicleMapper", driverVehicleMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchTaskMapper", dispatchTaskMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
+        // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
+        // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }
 
     @Test
