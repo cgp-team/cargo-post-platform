@@ -9,6 +9,7 @@ import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.*;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -16,6 +17,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.*;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
@@ -57,6 +59,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private PassengerOrderMapper passengerOrderMapper;
     @Resource private StationMapper stationMapper;
     @Resource private VehicleMapper vehicleMapper;
+    @Resource private DriverVehicleMapper driverVehicleMapper;
     @Resource private TransportDispatchTaskMapper dispatchTaskMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
@@ -433,20 +436,39 @@ public class DispatchServiceImpl implements DispatchService {
         return plan;
     }
 
-    /** 经停明细落库：visit_sequence 从 1 递增，预计到达时间留空 */
+    /** 经停明细落库：visit_sequence 从 1 递增；补填司机归属（按车辆当前有效人车绑定），预计到达时间待算法输出带出 */
     private void insertPlanItems(Long planId, Long vehicleId, List<AlgorithmRouteStopDTO> stops) {
+        Long driverId = resolveDriverId(vehicleId);
         for (int i = 0; i < stops.size(); i++) {
             AlgorithmRouteStopDTO stop = stops.get(i);
             PlanItemActionEnum action = PlanItemActionEnum.fromCode(stop.getAction());
             dispatchPlanItemMapper.insert(DispatchPlanItemDO.builder()
                     .planId(planId)
                     .vehicleId(vehicleId)
+                    .driverId(driverId)
                     .stationId(stop.getStationId() != null ? Long.valueOf(stop.getStationId()) : null)
                     .orderId(stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null)
                     .visitSequence(i + 1)
                     .actionType(action != null ? action.getAction() : null)
                     .build());
         }
+    }
+
+    /** 按车辆当前有效人车绑定解析司机编号（算法派单结果按司机可查的前提） */
+    private Long resolveDriverId(Long vehicleId) {
+        // 防御：单测等非 Spring 上下文可能未注入 mapper，此时不派司机即可
+        if (vehicleId == null || driverVehicleMapper == null) {
+            return null;
+        }
+        List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
+        if (bindings == null) {
+            return null;
+        }
+        return bindings.stream()
+                .filter(bind -> Objects.equals(bind.getVehicleId(), vehicleId))
+                .map(DriverVehicleDO::getDriverId)
+                .findFirst()
+                .orElse(null);
     }
 
     private void insertPlanLog(Long planId, Integer fromStatus, Integer toStatus, String reason) {

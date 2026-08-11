@@ -26,4 +26,16 @@ public enum TransportOrderStatusEnum {
     private final Integer status;
     private final String name;
 
+    public static String nameOf(Integer status) {
+        if (status == null) {
+            return "";
+        }
+        for (TransportOrderStatusEnum item : values()) {
+            if (item.getStatus().equals(status)) {
+                return item.getName();
+            }
+        }
+        return "";
+    }
+
 }

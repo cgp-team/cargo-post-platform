@@ -8,32 +8,32 @@ import lombok.*;
 
 import java.math.BigDecimal;
 
-@TableName("transport_cargo_order")
-@KeySequence("transport_cargo_order_seq")
+@TableName("transport_product_order")
+@KeySequence("transport_product_order_seq")
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class CargoOrderDO extends TenantBaseDO {
+public class ProductOrderDO extends TenantBaseDO {
     @TableId
     private Long id;
-    private Long orderId;
-    private String cargoCategory;
-    private Boolean freshFlag;
-    private Integer itemCount;
-    private BigDecimal weightKg;
-    private BigDecimal volumeM3;
-    /** 货物名称（小程序寄货） */
-    private String goodsName;
-    /** 货物备注 */
-    private String goodsNote;
-    /** 货物照片 */
-    private String photoUrl;
+    /** 业务订单号 */
+    private String orderNo;
+    /** 购买会员编号（member_user.id） */
+    private Long userId;
+    /** 购买会员手机号 */
+    private String userMobile;
+    /** 订单总额 */
+    private BigDecimal totalAmount;
+    /** 订单状态(0待发货 1已发货 2已完成 3已取消) */
+    private Integer status;
     /** 收货人 */
     private String receiverName;
     /** 收货电话 */
     private String receiverMobile;
     /** 收货地址 */
     private String receiverAddress;
+    /** 订单备注 */
+    private String remark;
 }

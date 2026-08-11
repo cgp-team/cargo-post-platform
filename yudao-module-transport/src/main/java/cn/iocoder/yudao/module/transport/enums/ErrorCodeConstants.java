@@ -40,4 +40,15 @@ public interface ErrorCodeConstants {
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");
+    // Product Order（农产品商城订单）
+    ErrorCode PRODUCT_ORDER_NOT_EXISTS = new ErrorCode(1_005_010_000, "订单不存在");
+    ErrorCode PRODUCT_ORDER_STATUS_ILLEGAL = new ErrorCode(1_005_010_001, "订单状态不允许该操作");
+    ErrorCode PRODUCT_OFF_SHELF = new ErrorCode(1_005_010_002, "商品已下架");
+    ErrorCode PRODUCT_STOCK_NOT_ENOUGH = new ErrorCode(1_005_010_003, "商品库存不足");
+    ErrorCode PRODUCT_ORDER_NOT_YOURS = new ErrorCode(1_005_010_004, "无权操作该订单");
+    ErrorCode PRODUCT_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_005, "请先登录");
+    // Send（小程序寄货）
+    ErrorCode SEND_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_006, "请先登录");
+    // Driver App（司机端）
+    ErrorCode DRIVER_NOT_FOUND = new ErrorCode(1_005_011_000, "未找到司机档案");
 }
