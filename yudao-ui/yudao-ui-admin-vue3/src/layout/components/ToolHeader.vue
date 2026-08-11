@@ -6,8 +6,6 @@ import { Collapse } from '@/layout/components/Collapse'
 import { UserInfo } from '@/layout/components/UserInfo'
 import { Screenfull } from '@/layout/components/Screenfull'
 import { Breadcrumb } from '@/layout/components/Breadcrumb'
-import { SizeDropdown } from '@/layout/components/SizeDropdown'
-import { LocaleDropdown } from '@/layout/components/LocaleDropdown'
 import RouterSearch from '@/components/RouterSearch/index.vue'
 import TenantVisit from '@/layout/components/TenantVisit/index.vue'
 import { useSetting } from '@/layout/components/Setting'
@@ -35,14 +33,8 @@ const screenfull = computed(() => appStore.getScreenfull)
 // 搜索图片
 const search = computed(() => appStore.search)
 
-// 尺寸图标
-const size = computed(() => appStore.getSize)
-
 // 布局
 const layout = computed(() => appStore.getLayout)
-
-// 多语言图标
-const locale = computed(() => appStore.getLocale)
 
 // 消息图标
 const message = computed(() => appStore.getMessage)
@@ -106,15 +98,6 @@ export default defineComponent({
           ) : undefined}
           {search.value ? (
             <RouterSearch isModal={false} color="var(--top-header-text-color)" />
-          ) : undefined}
-          {size.value ? (
-            <SizeDropdown class="custom-hover" color="var(--top-header-text-color)"></SizeDropdown>
-          ) : undefined}
-          {locale.value ? (
-            <LocaleDropdown
-              class="custom-hover"
-              color="var(--top-header-text-color)"
-            ></LocaleDropdown>
           ) : undefined}
           {message.value ? (
             <Message class="custom-hover" color="var(--top-header-text-color)"></Message>
