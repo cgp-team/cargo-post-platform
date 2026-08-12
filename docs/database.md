@@ -14,5 +14,7 @@
 - `V002__transport_algorithm_request.sql`：算法请求留痕表 `transport_algorithm_request`。
 - `V003__transport_dispatch.sql`：调度闭环（订单池、派单、审核下发、发车核验）相关表结构。
 - `V004__vehicle_cargo_capacity.sql`：车辆表新增货仓件数字段 `cargo_capacity`（算法容量约束按件数）；库中已有 `transport_vehicle` 表时需人工执行文件内注释的 `ALTER`。
+- `V005__driver_execution.sql`：司机端写操作闭环（班次执行记录 `transport_shift_execution`、车辆最新位置 `transport_vehicle_location`）。
+- `V006__driver_execution_loaded_count.sql`：班次执行表新增已装车件数 `loaded_count`（司机端装车/妥投运力落库）；老库已有 `transport_shift_execution` 表时需人工执行文件内注释的 `ALTER`。
 
 正式实施前需确认编码规则、状态字典、金额单位、订单拆合单和历史表策略。迁移必须先备份并在预发布验证，禁止直接修改官方大 SQL 破坏升级路径。

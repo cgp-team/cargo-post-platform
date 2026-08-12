@@ -9,8 +9,8 @@ import java.util.List;
  */
 public interface DriverAppService {
 
-    /** 司机档案（按手机号识别身份，含绑定车辆与运力） */
-    AppDriverProfileRespVO profile(String mobile);
+    /** 司机档案（按登录会员识别身份，含绑定车辆与运力） */
+    AppDriverProfileRespVO profile();
 
     /** 今日班次与经停站点序列 */
     List<AppDriverShiftRespVO> shifts();
