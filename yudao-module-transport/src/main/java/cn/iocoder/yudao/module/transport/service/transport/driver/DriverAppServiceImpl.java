@@ -271,6 +271,11 @@ public class DriverAppServiceImpl implements DriverAppService {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         ShiftDO shift = validateShiftExists(reqVO.getShiftId());
         Long vehicleId = resolveVehicleId(driver.getId());
+        // 发车起点 = 线路经停序列首站，作为到站顺序校验的基准（防跳站）
+        Long firstStationId = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId())).stream()
+                .min(Comparator.comparing(RouteStationDO::getSequenceNo, Comparator.nullsLast(Integer::compareTo)))
+                .map(RouteStationDO::getStationId)
+                .orElse(null);
         // 创建/复用当天执行记录并置在途
         LocalDate today = LocalDate.now();
         ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
@@ -282,12 +287,14 @@ public class DriverAppServiceImpl implements DriverAppService {
                     .vehicleId(vehicleId)
                     .execDate(today)
                     .departTime(LocalDateTime.now())
+                    .currentStationId(firstStationId)
                     .status(EXEC_STATUS_IN_TRANSIT)
                     .build());
         } else if (!Objects.equals(execution.getStatus(), EXEC_STATUS_IN_TRANSIT)) {
             execution.setStatus(EXEC_STATUS_IN_TRANSIT);
             execution.setDepartTime(LocalDateTime.now());
             execution.setArriveTime(null);
+            execution.setCurrentStationId(firstStationId);
             shiftExecutionMapper.updateById(execution);
         }
         // 该司机名下已下发/执行中派单的已分配货运订单推进为已发车（与装车/妥投归属校验一致）
