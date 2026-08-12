@@ -61,6 +61,15 @@ export interface MonitoringShiftVO {
   plannedDurationMinutes?: number
   /** 0 未发车，1 在途，2 已完成 */
   status: number
+  driverId?: number
+  driverName?: string
+  vehicleId?: number
+  plateNo?: string
+  currentStationId?: number
+  currentStationName?: string
+  loadedCount?: number
+  departTime?: string
+  arriveTime?: string
 }
 
 /** 获取地图图层数据（站点与线路） */

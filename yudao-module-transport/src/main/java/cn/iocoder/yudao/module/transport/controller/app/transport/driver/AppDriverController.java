@@ -29,10 +29,9 @@ public class AppDriverController {
     @Resource private DriverAppService driverAppService;
 
     @GetMapping("/profile")
-    @Operation(summary = "司机档案（按手机号识别身份）")
-    @Parameter(name = "mobile", description = "登录会员手机号", required = true)
-    public CommonResult<AppDriverProfileRespVO> profile(@RequestParam("mobile") String mobile) {
-        return success(driverAppService.profile(mobile));
+    @Operation(summary = "司机档案（按登录会员识别身份）")
+    public CommonResult<AppDriverProfileRespVO> profile() {
+        return success(driverAppService.profile());
     }
 
     @GetMapping("/shifts")

@@ -90,6 +90,18 @@ INSERT IGNORE INTO transport_order (id, order_no, order_type, pickup_station_id,
 (9, 'TP20260703002', 3, 7, 8, '2026-07-03 10:00:00', '2026-07-03 16:00:00', 1, 6.00, 0, '1', DATE_SUB(NOW(), INTERVAL 2 DAY), '1', NOW(), b'0'),
 (10, 'TP20260706001', 3, 4, 6, '2026-07-06 08:00:00', '2026-07-06 15:00:00', 0, 10.00, 0, '1', NOW(), '1', NOW(), b'0');
 
+-- ---------- 调度演示数据（司机端写闭环依赖派单归属：发车/装车/妥投按司机派单校验） ----------
+-- 司机1（张建国）/ 车辆1 / 班次1（SH001）名下派单：货运订单 4、5（status=2 已分配）
+INSERT IGNORE INTO transport_dispatch_task (id, task_no, snapshot_id, planning_time, batch_start, batch_end, status, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+(1, 'DT20260812001', 'SNAP-001', NOW(), DATE_SUB(NOW(), INTERVAL 2 HOUR), DATE_SUB(NOW(), INTERVAL 1 HOUR), 1, 0, '1', NOW(), '1', NOW(), b'0');
+
+INSERT IGNORE INTO transport_dispatch_plan (id, task_id, plan_version, mode, status, approved_by, approved_time, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+(1, 1, 1, 0, 2, 1, NOW(), 0, '1', NOW(), '1', NOW(), b'0');
+
+INSERT IGNORE INTO transport_dispatch_plan_item (id, plan_id, vehicle_id, driver_id, shift_id, order_id, station_id, visit_sequence, action_type, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+(1, 1, 1, 1, 1, 4, 2, 1, 4, 0, '1', NOW(), '1', NOW(), b'0'),
+(2, 1, 1, 1, 1, 5, 3, 2, 4, 0, '1', NOW(), '1', NOW(), b'0');
+
 -- ---------- 客运订单明细 ----------
 INSERT IGNORE INTO transport_passenger_order (id, order_id, passenger_count, contact_name, contact_mobile, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
 (1, 1, 2, '张三', '13900139001', 0, '1', NOW(), '1', NOW(), b'0'),

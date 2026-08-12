@@ -54,4 +54,9 @@ public interface ErrorCodeConstants {
     ErrorCode DRIVER_VEHICLE_NOT_BOUND = new ErrorCode(1_005_011_001, "司机未绑定车辆");
     ErrorCode DRIVER_ORDER_STATUS_ILLEGAL = new ErrorCode(1_005_011_002, "订单当前状态不允许该操作");
     ErrorCode DRIVER_SHIFT_EXECUTION_NOT_EXISTS = new ErrorCode(1_005_011_003, "班次执行记录不存在，请先发车");
+    ErrorCode DRIVER_IDENTITY_MISMATCH = new ErrorCode(1_005_011_004, "司机身份与登录账号不符");
+    ErrorCode DRIVER_ORDER_NOT_ASSIGNED = new ErrorCode(1_005_011_005, "订单不属于当前司机");
+    ErrorCode DRIVER_CARGO_FULL = new ErrorCode(1_005_011_006, "行李舱已满，无法装车");
+    ErrorCode DRIVER_STATION_NOT_IN_ROUTE = new ErrorCode(1_005_011_007, "站点不属于该班次线路");
+    ErrorCode DRIVER_STATION_ORDER_ILLEGAL = new ErrorCode(1_005_011_008, "到站顺序不合法");
 }
