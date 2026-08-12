@@ -8,8 +8,7 @@ import lombok.Data;
 @Data
 public class AppDriverDepartReqVO {
 
-    @Schema(description = "司机编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
-    @NotNull(message = "司机编号不能为空")
+    @Schema(description = "司机编号（可选，仅用于与登录态校验，身份以登录会员为准）", example = "1")
     private Long driverId;
 
     @Schema(description = "班次编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")

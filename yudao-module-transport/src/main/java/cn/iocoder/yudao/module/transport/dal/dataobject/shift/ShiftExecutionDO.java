@@ -33,6 +33,8 @@ public class ShiftExecutionDO extends TenantBaseDO {
     private LocalDateTime arriveTime;
     /** 当前所在站点编号 */
     private Long currentStationId;
+    /** 已装车件数（行李舱运力，受 vehicle.cargo_capacity 约束） */
+    private Integer loadedCount;
     /** 执行状态：0 在途，1 已完成 */
     private Integer status;
 }

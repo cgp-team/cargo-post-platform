@@ -45,6 +45,15 @@
               <div class="text-xs text-gray-400">
                 {{ formatTime(shift.plannedDepartureTime) }} 发车 · {{ shift.plannedDurationMinutes ?? '-' }}分钟
               </div>
+              <!-- 司机端真实执行记录（落库为准）：司机/车辆/当前站/已装件数 -->
+              <div
+                v-if="shift.driverName || shift.plateNo"
+                class="text-xs mt-2px text-gray-500"
+              >
+                {{ shift.driverName || '-' }}{{ shift.plateNo ? ' · ' + shift.plateNo : '' }}
+                <template v-if="shift.currentStationName"> · 当前 {{ shift.currentStationName }}</template>
+                <template v-if="shift.loadedCount != null"> · 已装 {{ shift.loadedCount }} 件</template>
+              </div>
             </div>
             <el-tag :type="shiftStatusTag(shift.status)" size="small" class="flex-shrink-0 ml-8px">
               {{ shiftStatusLabel(shift.status) }}

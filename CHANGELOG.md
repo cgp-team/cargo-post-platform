@@ -1,3 +1,39 @@
+# 2026-08-12 司机写闭环安全加固 + 监控执行视图 + 前端完善
+
+## 一、写接口安全（司机身份从登录态解析）
+
+- `transport_driver` 无需改表：写端点（depart/arrive/pickup-confirm/deliver/location）一律 `getLoginUserId()` → member 模块 `MemberUserApi.getUser(id)` 取手机号 → `transport_driver.mobile` 解析当前司机；客户端 `driverId` 仅做一致性校验（不一致 → `DRIVER_IDENTITY_MISMATCH`）。`profile` 同改登录态解析（去掉 mobile 参数）。
+- `transport` pom 新增 `yudao-module-member` 依赖（yudao-server 已启用两模块）。
+
+## 二、订单归属 + 到站校验 + 运力落库 + CAS
+
+- deliver/pickup-confirm 校验订单在该司机**已下发/执行中**的调度方案明细（`dispatch_plan_item`），否则 `DRIVER_ORDER_NOT_ASSIGNED`。
+- arrive 校验站点属于班次线路且按 sequence 顺序推进（防跳站），终点站才完成班次。
+- `transport_shift_execution` 新增 `loaded_count`（V006）：装车校验 `vehicle.cargo_capacity` 上限并累加，妥投递减。
+- deliver/pickup-confirm 改条件更新 CAS（`where status=?`），影响 0 行报 `DRIVER_ORDER_STATUS_ILLEGAL`，防重复提交。
+- `pickups()` 按司机派单过滤；`shifts()` 返回真实 `loadedCount/currentStationId`。
+
+## 三、后台监控中心执行视图
+
+- `/monitoring/shift-execution` 优先读 `transport_shift_execution` 真实执行记录（司机/车辆/当前站/已装件数/发到站时间），无记录回退时钟推导；与司机端三态一致。管理端监控页「今日班次」展示司机·车牌·当前站·已装件数。
+
+## 四、小程序司机端完善
+
+- workbench/routes 用后端真实 `loadedCount`（运力）与 `currentStationId`（恢复进度/当前站）。
+- 发车/到站/扫码加防双击 `submitting` 锁；位置上报 `onHide` 清定时器、`onShow` 恢复；getLocation 权限被拒弹窗引导去设置。
+
+## 五、演示数据与文档
+
+- `transport-demo-data.sql` 补司机1（张建国）/车辆1/班次1 派单明细（plan status=2 执行中，订单4/5），装车/妥投归属校验可演示。
+- `docs/database.md` 补 V005/V006；`.claude/architecture-current.md` 同步。
+
+## 验证
+
+- 管理端 `pnpm build:prod` 通过；小程序 `node --check` 各 js 通过。
+- 后端单测已补（DriverAppServiceImplTest 19 例：登录态解析/身份不符/归属/跳站/货仓满/CAS 幂等/loaded_count），**本机无 maven，需在有 maven 环境跑 `mvn -pl yudao-module-transport test -Dtest=DriverAppServiceImplTest`**。
+
+---
+
 # 2026-08-11（续三）司机端小程序同步更新 + 算法接入准备
 
 ## 概述

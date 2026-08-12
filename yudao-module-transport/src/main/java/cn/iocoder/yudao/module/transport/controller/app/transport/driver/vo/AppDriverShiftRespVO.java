@@ -26,6 +26,10 @@ public class AppDriverShiftRespVO {
     private Integer status;
     @Schema(description = "班次状态名")
     private String statusName;
+    @Schema(description = "已装车件数（真实运力，受车辆 cargo_capacity 约束）")
+    private Integer loadedCount;
+    @Schema(description = "当前所在站点编号（在途时后端真实状态）")
+    private Long currentStationId;
     @Schema(description = "经停站点序列")
     private List<AppDriverStationRespVO> stops;
 }
