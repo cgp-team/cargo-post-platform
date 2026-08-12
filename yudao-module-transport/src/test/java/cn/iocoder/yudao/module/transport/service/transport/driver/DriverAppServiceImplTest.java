@@ -119,7 +119,7 @@ class DriverAppServiceImplTest {
     private void loginMember() {
         LoginUser loginUser = new LoginUser();
         loginUser.setId(MEMBER_ID);
-        loginUser.setUserType(UserTypeEnum.MEMBER.getType());
+        loginUser.setUserType(UserTypeEnum.MEMBER.getValue());
         loginUser.setTenantId(0L);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(loginUser, null, java.util.Collections.emptyList()));
@@ -250,18 +250,25 @@ class DriverAppServiceImplTest {
                 RouteStationDO.builder().routeId(5L).stationId(11L).sequenceNo(1).build(),
                 RouteStationDO.builder().routeId(5L).stationId(22L).sequenceNo(2).build()));
 
-        AppDriverArriveReqVO reqVO = new AppDriverArriveReqVO();
-        reqVO.setDriverId(DRIVER_ID);
-        reqVO.setShiftId(10L);
-        reqVO.setStationId(22L); // 最大 sequence_no 的终点站
-        driverAppService.arrive(reqVO);
+        // 防跳站：需按 sequence 顺序到站，先到中途站 11(seq1)，再到终点 22(seq2)
+        AppDriverArriveReqVO mid = new AppDriverArriveReqVO();
+        mid.setDriverId(DRIVER_ID);
+        mid.setShiftId(10L);
+        mid.setStationId(11L);
+        driverAppService.arrive(mid);
+        AppDriverArriveReqVO terminal = new AppDriverArriveReqVO();
+        terminal.setDriverId(DRIVER_ID);
+        terminal.setShiftId(10L);
+        terminal.setStationId(22L); // 最大 sequence_no 的终点站
+        driverAppService.arrive(terminal);
 
         // 终点站：写到达时间，执行记录置已完成
         ArgumentCaptor<ShiftExecutionDO> captor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(captor.capture());
-        assertEquals(22L, captor.getValue().getCurrentStationId());
-        assertEquals(1, captor.getValue().getStatus());
-        assertNotNull(captor.getValue().getArriveTime());
+        verify(shiftExecutionMapper, times(2)).updateById(captor.capture());
+        ShiftExecutionDO finalUpdate = captor.getAllValues().get(1);
+        assertEquals(22L, finalUpdate.getCurrentStationId());
+        assertEquals(1, finalUpdate.getStatus());
+        assertNotNull(finalUpdate.getArriveTime());
     }
 
     @Test
