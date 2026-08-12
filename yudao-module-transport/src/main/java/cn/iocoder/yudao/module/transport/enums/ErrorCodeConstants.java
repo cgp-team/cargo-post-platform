@@ -51,4 +51,7 @@ public interface ErrorCodeConstants {
     ErrorCode SEND_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_006, "请先登录");
     // Driver App（司机端）
     ErrorCode DRIVER_NOT_FOUND = new ErrorCode(1_005_011_000, "未找到司机档案");
+    ErrorCode DRIVER_VEHICLE_NOT_BOUND = new ErrorCode(1_005_011_001, "司机未绑定车辆");
+    ErrorCode DRIVER_ORDER_STATUS_ILLEGAL = new ErrorCode(1_005_011_002, "订单当前状态不允许该操作");
+    ErrorCode DRIVER_SHIFT_EXECUTION_NOT_EXISTS = new ErrorCode(1_005_011_003, "班次执行记录不存在，请先发车");
 }

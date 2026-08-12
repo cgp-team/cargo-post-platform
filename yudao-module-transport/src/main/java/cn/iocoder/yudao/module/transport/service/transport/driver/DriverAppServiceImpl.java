@@ -11,8 +11,10 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
@@ -21,12 +23,15 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 
 import java.math.BigDecimal;
@@ -38,6 +43,9 @@ import java.time.LocalTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 
 /**
  * 司机端 App 聚合查询 Service 实现。
@@ -53,6 +61,10 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int ORDER_TYPE_CARGO = 2;
     /** 订单已取消 */
     private static final int ORDER_STATUS_CANCELLED = 5;
+    /** 执行状态：在途 */
+    private static final int EXEC_STATUS_IN_TRANSIT = 0;
+    /** 执行状态：已完成 */
+    private static final int EXEC_STATUS_COMPLETED = 1;
     /** 待处理状态集合（待调度/已入池/已分配） */
     private static final List<Integer> PENDING_STATUSES = List.of(0, 1, 2);
 
@@ -73,6 +85,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private CargoOrderMapper cargoOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private ShiftExecutionMapper shiftExecutionMapper;
+    @Resource private VehicleLocationMapper vehicleLocationMapper;
 
     @Override
     public AppDriverProfileRespVO profile(String mobile) {
@@ -118,6 +132,9 @@ public class DriverAppServiceImpl implements DriverAppService {
                 .collect(Collectors.toMap(StationDO::getId, Function.identity()));
         Map<Long, List<RouteStationDO>> routeStationMap = loadRouteStationMap(
                 routeMap.values().stream().map(RouteDO::getId).toList());
+        // 当天班次执行记录（司机维度不限）：有记录时班次状态以执行记录为准，否则保留时钟推导
+        Map<Long, ShiftExecutionDO> executionMap = loadTodayExecutionMap(
+                shifts.stream().map(ShiftDO::getId).toList());
         return shifts.stream().map(shift -> {
             AppDriverShiftRespVO vo = new AppDriverShiftRespVO();
             vo.setShiftId(shift.getId());
@@ -127,7 +144,8 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setRouteName(route != null ? route.getRouteName() : null);
             vo.setPlannedDepartureTime(shift.getPlannedDepartureTime());
             vo.setPlannedDurationMinutes(shift.getPlannedDurationMinutes());
-            int status = calcShiftStatus(shift, now);
+            ShiftExecutionDO execution = executionMap.get(shift.getId());
+            int status = execution != null ? toShiftStatus(execution) : calcShiftStatus(shift, now);
             vo.setStatus(status);
             vo.setStatusName(SHIFT_STATUS_NAMES.getOrDefault(status, ""));
             vo.setStops(buildStops(routeStationMap.getOrDefault(shift.getRouteId(), List.of()), stationMap));
@@ -228,6 +246,158 @@ public class DriverAppServiceImpl implements DriverAppService {
         return planStatus != null && (planStatus == 1 || planStatus == 2);
     }
 
+    // ==================== 司机端写操作闭环 ====================
+
+    @Override
+    @Transactional
+    public void depart(AppDriverDepartReqVO reqVO) {
+        DriverDO driver = validateDriverExists(reqVO.getDriverId());
+        ShiftDO shift = validateShiftExists(reqVO.getShiftId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        // 创建/复用当天执行记录并置在途
+        LocalDate today = LocalDate.now();
+        ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                shift.getId(), driver.getId(), today);
+        if (execution == null) {
+            shiftExecutionMapper.insert(ShiftExecutionDO.builder()
+                    .shiftId(shift.getId())
+                    .driverId(driver.getId())
+                    .vehicleId(vehicleId)
+                    .execDate(today)
+                    .departTime(LocalDateTime.now())
+                    .status(EXEC_STATUS_IN_TRANSIT)
+                    .build());
+        } else if (!Objects.equals(execution.getStatus(), EXEC_STATUS_IN_TRANSIT)) {
+            execution.setStatus(EXEC_STATUS_IN_TRANSIT);
+            execution.setDepartTime(LocalDateTime.now());
+            execution.setArriveTime(null);
+            shiftExecutionMapper.updateById(execution);
+        }
+        // 该司机名下已分配的货运订单推进为已发车
+        List<Long> orderIds = dispatchPlanItemMapper.selectListByDriverId(driver.getId()).stream()
+                .map(DispatchPlanItemDO::getOrderId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (orderIds.isEmpty()) {
+            return;
+        }
+        TransportOrderDO updateObj = new TransportOrderDO();
+        updateObj.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
+        transportOrderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getId, orderIds)
+                .eq(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO)
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.ASSIGNED.getStatus()));
+    }
+
+    @Override
+    @Transactional
+    public void arrive(AppDriverArriveReqVO reqVO) {
+        DriverDO driver = validateDriverExists(reqVO.getDriverId());
+        ShiftDO shift = validateShiftExists(reqVO.getShiftId());
+        ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                shift.getId(), driver.getId(), LocalDate.now());
+        if (execution == null) {
+            throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
+        }
+        execution.setCurrentStationId(reqVO.getStationId());
+        // 到达线路终点站（route_station 最大 sequence_no）：执行记录置已完成
+        Long terminalStationId = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId())).stream()
+                .max(Comparator.comparing(RouteStationDO::getSequenceNo))
+                .map(RouteStationDO::getStationId)
+                .orElse(null);
+        if (Objects.equals(terminalStationId, reqVO.getStationId())) {
+            execution.setArriveTime(LocalDateTime.now());
+            execution.setStatus(EXEC_STATUS_COMPLETED);
+        }
+        shiftExecutionMapper.updateById(execution);
+    }
+
+    @Override
+    @Transactional
+    public void pickupConfirm(AppDriverOrderActionReqVO reqVO) {
+        validateDriverExists(reqVO.getDriverId());
+        TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
+        // 待调度/已入池/已分配 → 已发车
+        if (!PENDING_STATUSES.contains(order.getStatus())) {
+            throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
+        }
+        order.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
+        transportOrderMapper.updateById(order);
+    }
+
+    @Override
+    @Transactional
+    public void deliver(AppDriverOrderActionReqVO reqVO) {
+        validateDriverExists(reqVO.getDriverId());
+        TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
+        // 已发车 → 已完成
+        if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.DEPARTED.getStatus())) {
+            throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
+        }
+        order.setStatus(TransportOrderStatusEnum.COMPLETED.getStatus());
+        transportOrderMapper.updateById(order);
+    }
+
+    @Override
+    @Transactional
+    public void reportLocation(AppDriverLocationReqVO reqVO) {
+        DriverDO driver = validateDriverExists(reqVO.getDriverId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        // 每车一行，按车辆 upsert
+        VehicleLocationDO location = vehicleLocationMapper.selectByVehicleId(vehicleId);
+        if (location == null) {
+            vehicleLocationMapper.insert(VehicleLocationDO.builder()
+                    .vehicleId(vehicleId)
+                    .shiftId(reqVO.getShiftId())
+                    .longitude(reqVO.getLongitude())
+                    .latitude(reqVO.getLatitude())
+                    .speedKmh(reqVO.getSpeedKmh())
+                    .reportTime(LocalDateTime.now())
+                    .build());
+            return;
+        }
+        location.setShiftId(reqVO.getShiftId());
+        location.setLongitude(reqVO.getLongitude());
+        location.setLatitude(reqVO.getLatitude());
+        location.setSpeedKmh(reqVO.getSpeedKmh());
+        location.setReportTime(LocalDateTime.now());
+        vehicleLocationMapper.updateById(location);
+    }
+
+    private DriverDO validateDriverExists(Long driverId) {
+        DriverDO driver = driverMapper.selectById(driverId);
+        if (driver == null) {
+            throw exception(DRIVER_NOT_FOUND);
+        }
+        return driver;
+    }
+
+    private ShiftDO validateShiftExists(Long shiftId) {
+        ShiftDO shift = shiftMapper.selectById(shiftId);
+        if (shift == null) {
+            throw exception(SHIFT_NOT_EXISTS);
+        }
+        return shift;
+    }
+
+    private TransportOrderDO validateOrderExists(Long orderId) {
+        TransportOrderDO order = transportOrderMapper.selectById(orderId);
+        if (order == null) {
+            throw exception(ORDER_NOT_EXISTS);
+        }
+        return order;
+    }
+
+    /** 司机当前绑定车辆编号；未绑定抛业务异常 */
+    private Long resolveVehicleId(Long driverId) {
+        return driverVehicleMapper.selectActiveBindings().stream()
+                .filter(bind -> Objects.equals(bind.getDriverId(), driverId))
+                .map(DriverVehicleDO::getVehicleId)
+                .findFirst()
+                .orElseThrow(() -> exception(DRIVER_VEHICLE_NOT_BOUND));
+    }
+
     private AppDriverEarningsRecordRespVO toRecord(TransportOrderDO order) {
         AppDriverEarningsRecordRespVO vo = new AppDriverEarningsRecordRespVO();
         vo.setOrderNo(order.getOrderNo());
@@ -296,6 +466,21 @@ public class DriverAppServiceImpl implements DriverAppService {
             return 0;
         }
         return elapsed <= durationMinutes(shift) ? 1 : 2;
+    }
+
+    /** 当天各班次的执行记录（同班次多条时已完成优先） */
+    private Map<Long, ShiftExecutionDO> loadTodayExecutionMap(List<Long> shiftIds) {
+        Map<Long, ShiftExecutionDO> map = new HashMap<>();
+        for (ShiftExecutionDO execution : shiftExecutionMapper.selectListByShiftIdsAndExecDate(shiftIds, LocalDate.now())) {
+            map.merge(execution.getShiftId(), execution,
+                    (a, b) -> Objects.equals(b.getStatus(), EXEC_STATUS_COMPLETED) ? b : a);
+        }
+        return map;
+    }
+
+    /** 执行状态映射班次状态：在途→1，已完成→2 */
+    private static int toShiftStatus(ShiftExecutionDO execution) {
+        return Objects.equals(execution.getStatus(), EXEC_STATUS_COMPLETED) ? 2 : 1;
     }
 
     private long elapsedMinutes(ShiftDO shift, LocalTime now) {
