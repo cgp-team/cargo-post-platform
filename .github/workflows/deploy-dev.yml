@@ -64,10 +64,28 @@ jobs:
           set +a
 
           echo "MySQL ready check (DB: ${DB_NAME})..."
-          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
-            mysqladmin ping -u root -p"${DB_PASSWORD}" --silent
+          mysql_ready=0
+          for attempt in $(seq 1 10); do
+            if docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
+                mysqladmin ping -u root -p"${DB_PASSWORD}" --silent 2>/dev/null; then
+              echo "MySQL is ready (attempt ${attempt})."
+              mysql_ready=1
+              break
+            fi
+            echo "MySQL not ready yet, retry ${attempt}/10 ..."
+            sleep 3
+          done
+          if [[ "${mysql_ready}" -ne 1 ]]; then
+            echo "ERROR: MySQL 容器不可达（10 次探测均失败）。" >&2
+            echo "--- docker compose ps（检查 mysql 容器状态）---" >&2
+            docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml ps >&2 || true
+            echo "--- 复现 ping 错误（观察真实报错）---" >&2
+            docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
+              mysqladmin ping -u root -p"${DB_PASSWORD}" --silent >&2 || true
+            exit 1
+          fi
 
-          for f in cleanup-upstream-menus transport-schema transport-menu transport-demo-data; do
+          for f in cleanup-upstream-menus transport-schema transport-schema-incremental transport-menu transport-demo-data; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
               # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
