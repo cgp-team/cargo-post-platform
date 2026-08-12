@@ -11,12 +11,14 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -25,6 +27,7 @@ import org.springframework.validation.annotation.Validated;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
 import java.util.function.Function;
@@ -33,7 +36,8 @@ import java.util.stream.Collectors;
 /**
  * 车辆监控 Service 实现
  *
- * 位置模拟规则（确定性，便于演示与测试）：
+ * 位置优先取司机端上报的真实位置（transport_vehicle_location，report_time 5 分钟内有效，状态置在途）；
+ * 无有效上报时回退以下确定性模拟规则（便于演示与测试）：
  * 1. 启用班次（status=0）按发车时间升序，轮转分配给可用车辆（status=0，一车多班，模拟排班）；
  * 2. 当前时间落在 [计划发车时间, 发车时间+计划时长] 内 → 在途，
  *    按已行驶分钟数在线路站点的累计 planned_minutes 上线性插值经纬度；
@@ -67,6 +71,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private RouteMapper routeMapper;
     @Resource private RouteStationMapper routeStationMapper;
     @Resource private StationMapper stationMapper;
+    @Resource private VehicleLocationMapper vehicleLocationMapper;
 
     @Override
     public MonitoringMapDataRespVO getMapData() {
@@ -117,6 +122,10 @@ public class MonitoringServiceImpl implements MonitoringService {
                 .collect(Collectors.toMap(StationDO::getId, Function.identity()));
         Map<Long, List<RouteStationDO>> routeStationMap = loadRouteStationMap(
                 routeMap.values().stream().map(RouteDO::getId).toList());
+        // 司机上报的实时位置（5 分钟内有效）：存在时优先于插值模拟
+        Map<Long, VehicleLocationDO> realLocationMap = vehicleLocationMapper
+                .selectRecent(LocalDateTime.now().minusMinutes(5)).stream()
+                .collect(Collectors.toMap(VehicleLocationDO::getVehicleId, Function.identity(), (a, b) -> a));
 
         // 模拟排班：启用班次按发车时间升序，轮转分配给可用车辆（一车多班）。
         // 每辆车对应若干互不重叠的班次窗口，任意时段都可能有车在途，演示更真实。
@@ -146,6 +155,15 @@ public class MonitoringServiceImpl implements MonitoringService {
                     ? driverMap.get(driverId).getName() : null);
             if (Objects.equals(vehicle.getStatus(), VEHICLE_STATUS_DISABLED)) {
                 vo.setStatus(STATUS_DISABLED);
+                return vo;
+            }
+            // 真实位置优先：5 分钟内有司机上报位置时直接采用（状态置在途）
+            VehicleLocationDO realLocation = realLocationMap.get(vehicle.getId());
+            if (realLocation != null) {
+                vo.setStatus(STATUS_IN_TRANSIT);
+                vo.setLongitude(toDouble(realLocation.getLongitude()));
+                vo.setLatitude(toDouble(realLocation.getLatitude()));
+                vo.setSpeedKmh(toDouble(realLocation.getSpeedKmh()));
                 return vo;
             }
             // 选取当前班次：优先窗口内（在途），其次下一班待发，否则当天最后一班

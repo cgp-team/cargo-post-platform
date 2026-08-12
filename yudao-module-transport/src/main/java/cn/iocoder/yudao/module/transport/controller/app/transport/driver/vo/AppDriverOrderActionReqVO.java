@@ -1,0 +1,19 @@
+package cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+
+@Schema(description = "用户 APP - 司机订单操作 Request VO")
+@Data
+public class AppDriverOrderActionReqVO {
+
+    @Schema(description = "司机编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
+    @NotNull(message = "司机编号不能为空")
+    private Long driverId;
+
+    @Schema(description = "订单编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
+    @NotNull(message = "订单编号不能为空")
+    private Long orderId;
+
+}
