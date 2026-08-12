@@ -377,6 +377,7 @@ CREATE TABLE IF NOT EXISTS `transport_shift_execution` (
   `depart_time` datetime DEFAULT NULL COMMENT '实际发车时间',
   `arrive_time` datetime DEFAULT NULL COMMENT '到达终点时间',
   `current_station_id` bigint DEFAULT NULL COMMENT '当前所在站点编号',
+  `loaded_count` int NOT NULL DEFAULT 0 COMMENT '已装车件数(行李舱运力,受 vehicle.cargo_capacity 约束)',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '执行状态(0在途 1已完成)',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
@@ -418,3 +419,5 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle_location` (
 --   ADD COLUMN `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人' AFTER `photo_url`,
 --   ADD COLUMN `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话' AFTER `receiver_name`,
 --   ADD COLUMN `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址' AFTER `receiver_mobile`;
+-- ALTER TABLE `transport_shift_execution`
+--   ADD COLUMN `loaded_count` int NOT NULL DEFAULT 0 COMMENT '已装车件数(行李舱运力,受 vehicle.cargo_capacity 约束)' AFTER `current_station_id`;

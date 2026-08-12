@@ -9,6 +9,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
@@ -16,6 +17,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
@@ -27,6 +29,7 @@ import org.springframework.validation.annotation.Validated;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
@@ -72,6 +75,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private RouteStationMapper routeStationMapper;
     @Resource private StationMapper stationMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
+    @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Override
     public MonitoringMapDataRespVO getMapData() {
@@ -191,7 +195,19 @@ public class MonitoringServiceImpl implements MonitoringService {
         LocalTime now = LocalTime.now();
         Map<Long, RouteDO> routeMap = routeMapper.selectList().stream()
                 .collect(Collectors.toMap(RouteDO::getId, Function.identity()));
-        return listEnabledShifts().stream().map(shift -> {
+        Map<Long, DriverDO> driverMap = driverMapper.selectList().stream()
+                .collect(Collectors.toMap(DriverDO::getId, Function.identity()));
+        Map<Long, VehicleDO> vehicleMap = vehicleMapper.selectList().stream()
+                .collect(Collectors.toMap(VehicleDO::getId, Function.identity()));
+        Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity()));
+        List<ShiftDO> shifts = listEnabledShifts();
+        // 当天真实执行记录：有记录时以司机端落库状态为准（与司机端三态一致），否则时钟推导兜底
+        Map<Long, ShiftExecutionDO> executionMap = shifts.isEmpty() ? Map.of()
+                : shiftExecutionMapper.selectListByShiftIdsAndExecDate(
+                        shifts.stream().map(ShiftDO::getId).toList(), LocalDate.now()).stream()
+                        .collect(Collectors.toMap(ShiftExecutionDO::getShiftId, Function.identity(), (a, b) -> a));
+        return shifts.stream().map(shift -> {
             MonitoringShiftRespVO vo = new MonitoringShiftRespVO();
             vo.setShiftId(shift.getId());
             vo.setShiftCode(shift.getShiftCode());
@@ -199,16 +215,31 @@ public class MonitoringServiceImpl implements MonitoringService {
             vo.setRouteName(route != null ? route.getRouteName() : null);
             vo.setPlannedDepartureTime(shift.getPlannedDepartureTime());
             vo.setPlannedDurationMinutes(shift.getPlannedDurationMinutes());
-            long elapsed = elapsedMinutes(shift, now);
-            if (elapsed < 0) {
-                vo.setStatus(0); // 未发车
-            } else if (elapsed <= durationMinutes(shift)) {
-                vo.setStatus(1); // 在途
+            ShiftExecutionDO execution = executionMap.get(shift.getId());
+            if (execution != null) {
+                // 执行状态：0 在途 → 1，1 已完成 → 2
+                vo.setStatus(Objects.equals(execution.getStatus(), 1) ? 2 : 1);
+                vo.setDriverId(execution.getDriverId());
+                vo.setDriverName(nameOf(driverMap, execution.getDriverId(), DriverDO::getName));
+                vo.setVehicleId(execution.getVehicleId());
+                vo.setPlateNo(nameOf(vehicleMap, execution.getVehicleId(), VehicleDO::getPlateNo));
+                vo.setCurrentStationId(execution.getCurrentStationId());
+                vo.setCurrentStationName(nameOf(stationMap, execution.getCurrentStationId(), StationDO::getStationName));
+                vo.setLoadedCount(execution.getLoadedCount() != null ? execution.getLoadedCount() : 0);
+                vo.setDepartTime(execution.getDepartTime());
+                vo.setArriveTime(execution.getArriveTime());
             } else {
-                vo.setStatus(2); // 已完成
+                long elapsed = elapsedMinutes(shift, now);
+                vo.setStatus(elapsed < 0 ? 0 : (elapsed <= durationMinutes(shift) ? 1 : 2));
             }
             return vo;
         }).toList();
+    }
+
+    /** 从 map 按 id 取对象的指定字段（对象缺失返回 null） */
+    private static <T> String nameOf(Map<Long, T> map, Long id, Function<T, String> getter) {
+        T value = map.get(id);
+        return value != null ? getter.apply(value) : null;
     }
 
     // ==================== 私有方法 ====================
