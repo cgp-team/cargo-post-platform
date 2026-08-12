@@ -1,0 +1,34 @@
+package cn.iocoder.yudao.module.transport.controller.app.transport.bus;
+
+import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
+import cn.iocoder.yudao.module.transport.service.transport.bus.AppBusService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.annotation.Resource;
+import jakarta.annotation.security.PermitAll;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
+
+@Tag(name = "用户 APP - 实时公交")
+@RestController
+@RequestMapping("/transport/bus")
+@Validated
+public class AppBusController {
+
+    @Resource private AppBusService appBusService;
+
+    @GetMapping("/realtime")
+    @PermitAll
+    @Operation(summary = "实时公交列表（含线路起终点/下一站/ETA）")
+    public CommonResult<List<AppBusRespVO>> realtime() {
+        return success(appBusService.getRealtimeBuses());
+    }
+
+}

@@ -22,6 +22,7 @@
 - 已对接真实接口：登录注册（member 模块）、商城列表与详情与下单/订单页、寄件下单、包裹查询、我的寄货记录、司机端档案/班次/待装车/收益。
 - 司机端写操作闭环：`POST /app-api/transport/driver/depart`（发车）、`/arrive`（到站/终点完成班次）、`/pickup-confirm`（扫码装车）、`/deliver`（扫码妥投）、`/location`（位置上报）。班次执行状态落 `transport_shift_execution` 表（按天一条），车辆最新位置落 `transport_vehicle_location` 表（每车一行）；两张表见 `sql/incremental/V005__driver_execution.sql`。货运订单状态机：0待调度 → 1已入池 → 2已分配 → 3已发车 → 4已完成（5已取消）。
 - 监控中心（管理端）车辆位置：司机上报 5 分钟内的真实位置优先，否则回退按时刻表的插值模拟。
+- 实时公交（首页「附近公交 · 实时到站」）：`GET /app-api/transport/bus/realtime`（免登录）复用监控车辆位置，返回线路起终点/下一站/ETA；首页拉取失败时回退静态演示数据。后续完善方向：车来了式地图车辆动画、寄货流程「X班车距村口站还有Y分钟」到达预估、商品溯源大巴轨迹。
 - 首页天气走 Open-Meteo 免费接口（无 Key），失败时回退本地模拟（`utils/weather.js`）。
 - 仍为页面内静态演示数据：首页公告与附近公交——后端对应 `/app-api` 端点尚未提供，对接时需替换为真实数据。
 
