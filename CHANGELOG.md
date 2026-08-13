@@ -1,3 +1,10 @@
+# 2026-08-13 部署修复：checkout 竞速下载 + 迁移补 13 列漂移
+
+- **deploy-dev.yml checkout 改 8 流竞速 tarball**：服务器直连 github 实测每流仅 ~25KB/s 且随机被重置，代理订阅 44 节点全灭，codeload 不支持 Range（无法续传/分段），git 单流必断；竞速任一流完整即胜出（PR #45 的 git 重试 → PR #46 竞速 tarball）。
+- **transport-schema-incremental.sql 补 13 列**：活库建于 07-23，此后 PR 只改 CREATE TABLE IF NOT EXISTS（不给老表补列）→ demo-data 报 `Unknown column 'batch_start'`，这才是 PR #42 起迁移失败的真因（#44 的"MySQL 不可达"为误诊）。补齐：`transport_order.member_user_id`、`transport_cargo_order` 6 列（goods_name/note/photo_url/receiver_*）、`transport_dispatch_task` 3 列（batch_start/batch_end/error_message）、`transport_dispatch_plan` 2 列（mode/total_distance）、`transport_dispatch_plan_item.station_id`。已在活库手动应用 + demo-data 全链路验证通过。
+
+---
+
 # 2026-08-12 司机写闭环安全加固 + 监控执行视图 + 前端完善
 
 ## 一、写接口安全（司机身份从登录态解析）
