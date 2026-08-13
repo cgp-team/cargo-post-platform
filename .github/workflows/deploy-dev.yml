@@ -24,13 +24,14 @@ jobs:
     # self-hosted runner 运行在开发云服务器上（deploy 用户），构建与部署同机完成。
     # 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），故放弃 SSH 上传方案。
     runs-on: [self-hosted, cargo-post]
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment: dev
     steps:
-      # actions/checkout 对 git fetch 没有重试，跨境网络抖动一次即整 job 失败
-      # （实测 GnuTLS 握手失败 / RPC failed; curl 35 / exit 128）。
-      # 改为 bash 重试浅克隆：token 只走命令行 extraheader，不写入 .git/config。
-      - name: Checkout (retry on flaky network)
+      # 当前服务器网络现实：github 直连每连接仅 ~25KB/s 且随机被重置，代理订阅节点全灭；
+      # codeload 不支持 Range（无法续传/分段），git 协议单流被重置即前功尽弃。
+      # 改为「多路竞速下载 tarball」：8 条流各下全量包，gzip 校验完整即胜出，
+      # 单流被重置不影响其他流；30 分钟预算内反复竞速。token 只走 curl 请求头，不落盘。
+      - name: Checkout (racing parallel tarball)
         env:
           REPO: ${{ github.repository }}
           REF_SHA: ${{ github.sha }}
@@ -38,31 +39,54 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
+          URL="https://api.github.com/repos/${REPO}/tarball/${REF_SHA}"
+          WORK=$(mktemp -d /tmp/checkout-XXXXXX)
+          trap 'rm -rf "${WORK}"' EXIT
+          DEADLINE=$(( $(date +%s) + 1800 ))
 
-          # 弱网调优：强制 HTTP/1.1 规避 GnuTLS/HTTP2 握手问题；
-          # 低速/卡死连接及时掐断（低于 1KB/s 持续 120s），交给重试而不是干等
-          git config --global http.version HTTP/1.1
-          git config --global http.postBuffer 524288000
-          git config --global http.lowSpeedLimit 1000
-          git config --global http.lowSpeedTime 120
+          download_one() {
+            local i=$1
+            # --speed-limit/time：低于 1KB/s 持续 60s 判定流已死，及时杀掉让位下轮
+            curl -sfL --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+              -H "Authorization: token ${CHECKOUT_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -o "${WORK}/part${i}.tgz" "${URL}" \
+              && gzip -t "${WORK}/part${i}.tgz" 2>/dev/null
+          }
 
-          git init -q
-          git remote remove origin 2>/dev/null || true
-          git remote add origin "https://github.com/${REPO}.git"
-
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${CHECKOUT_TOKEN}" | base64)"
-          for i in 1 2 3 4 5; do
-            echo "=== fetch attempt ${i}/5 (depth 1, sha ${REF_SHA}) ==="
-            if git -c http.extraheader="${AUTH_HEADER}" fetch --depth 1 --no-tags origin "${REF_SHA}"; then
-              git checkout -q --force FETCH_HEAD
-              git clean -fdx
-              echo "Checkout succeeded on attempt ${i}"
-              exit 0
-            fi
-            sleep $((i * 15))
+          winner=""
+          round=0
+          while [[ -z "${winner}" && $(date +%s) -lt ${DEADLINE} ]]; do
+            round=$((round + 1))
+            echo "=== race round ${round}: 8 streams ==="
+            pids=""
+            for i in $(seq 1 8); do
+              ( download_one $i && touch "${WORK}/part${i}.ok" ) &
+              pids="${pids} $!"
+            done
+            while [[ -z "${winner}" ]]; do
+              winner=$(ls "${WORK}"/part*.ok 2>/dev/null | sed -n 1p || true)
+              [[ -n "${winner}" ]] && break
+              alive=0
+              for p in ${pids}; do kill -0 "$p" 2>/dev/null && alive=$((alive+1)); done
+              [[ ${alive} -eq 0 ]] && break
+              [[ $(date +%s) -ge ${DEADLINE} ]] && break
+              sleep 10
+            done
+            for p in ${pids}; do kill "$p" 2>/dev/null || true; done
+            wait ${pids} 2>/dev/null || true
           done
-          echo "ERROR: git fetch 重试 5 次均失败，runner 到 github.com 网络不通，请检查服务器网络/代理。" >&2
-          exit 1
+
+          if [[ -z "${winner}" ]]; then
+            echo "ERROR: 30 分钟内未能完整下载 tarball，github 直连过慢且代理不可用。" >&2
+            exit 1
+          fi
+
+          tgz="${winner%.ok}.tgz"
+          echo "winner: ${tgz} ($(stat -c%s "${tgz}") bytes), extracting..."
+          find . -mindepth 1 -delete
+          tar -xzf "${tgz}" --strip-components=1
+          echo "Checkout (racing tarball) succeeded on round ${round}"
 
       # 测试已在 ci.yml 的 PR 门禁中执行，这里只打包
       # 服务器本机 JDK 21 + Maven，依赖走 ~/.m2/settings.xml 的阿里云镜像
