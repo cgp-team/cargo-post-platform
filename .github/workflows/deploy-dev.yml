@@ -27,7 +27,42 @@ jobs:
     timeout-minutes: 45
     environment: dev
     steps:
-      - uses: actions/checkout@v7
+      # actions/checkout 对 git fetch 没有重试，跨境网络抖动一次即整 job 失败
+      # （实测 GnuTLS 握手失败 / RPC failed; curl 35 / exit 128）。
+      # 改为 bash 重试浅克隆：token 只走命令行 extraheader，不写入 .git/config。
+      - name: Checkout (retry on flaky network)
+        env:
+          REPO: ${{ github.repository }}
+          REF_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          # 弱网调优：强制 HTTP/1.1 规避 GnuTLS/HTTP2 握手问题；
+          # 低速/卡死连接及时掐断（低于 1KB/s 持续 120s），交给重试而不是干等
+          git config --global http.version HTTP/1.1
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 120
+
+          git init -q
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "https://github.com/${REPO}.git"
+
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${CHECKOUT_TOKEN}" | base64)"
+          for i in 1 2 3 4 5; do
+            echo "=== fetch attempt ${i}/5 (depth 1, sha ${REF_SHA}) ==="
+            if git -c http.extraheader="${AUTH_HEADER}" fetch --depth 1 --no-tags origin "${REF_SHA}"; then
+              git checkout -q --force FETCH_HEAD
+              git clean -fdx
+              echo "Checkout succeeded on attempt ${i}"
+              exit 0
+            fi
+            sleep $((i * 15))
+          done
+          echo "ERROR: git fetch 重试 5 次均失败，runner 到 github.com 网络不通，请检查服务器网络/代理。" >&2
+          exit 1
 
       # 测试已在 ci.yml 的 PR 门禁中执行，这里只打包
       # 服务器本机 JDK 21 + Maven，依赖走 ~/.m2/settings.xml 的阿里云镜像
