@@ -304,6 +304,11 @@ yudao:
     algorithm:
       # 仅由后端 transport 算法适配层访问，前端不得直连。
       base-url: ${ALGORITHM_BASE_URL:http://127.0.0.1:18080}
+    voice:
+      baidu:
+        # 百度智能云语音服务密钥（服务器 .env 注入，不提交仓库）：短语音识别 + 机器翻译 + 语音合成
+        api-key: ${BAIDU_VOICE_API_KEY:}
+        secret-key: ${BAIDU_VOICE_SECRET_KEY:}
   codegen:
     base-package: ${yudao.info.base-package}
     db-schemas: ${spring.datasource.dynamic.datasource.master.name}
