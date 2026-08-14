@@ -9,7 +9,7 @@
               <div class="text-gray-500 text-sm">车辆总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.vehicleCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:van" :size="40" color="#409EFF" />
+            <Icon icon="ep:van" :size="40" color="#2E7D32" />
           </div>
         </el-card>
       </el-col>
@@ -20,7 +20,7 @@
               <div class="text-gray-500 text-sm">司机总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.driverCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:user" :size="40" color="#67C23A" />
+            <Icon icon="ep:user" :size="40" color="#4CAF50" />
           </div>
         </el-card>
       </el-col>
@@ -31,7 +31,7 @@
               <div class="text-gray-500 text-sm">站点总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.stationCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:location" :size="40" color="#E6A23C" />
+            <Icon icon="ep:location" :size="40" color="#D9A441" />
           </div>
         </el-card>
       </el-col>
@@ -42,7 +42,7 @@
               <div class="text-gray-500 text-sm">线路总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.routeCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:guide" :size="40" color="#F56C6C" />
+            <Icon icon="ep:guide" :size="40" color="#C75B2A" />
           </div>
         </el-card>
       </el-col>
@@ -162,7 +162,7 @@ const fmtAmount = (value?: number) => Number(value ?? 0).toFixed(2)
 
 /** 订单类型分布饼图 */
 const typeChartOptions = computed<EChartsOption>(() => ({
-  color: ['#409EFF', '#E6A23C', '#67C23A', '#909399'],
+  color: ['#2E7D32', '#D9A441', '#4CAF50', '#86BB88'],
   tooltip: { trigger: 'item', formatter: '{b}: {c} 单 ({d}%)' },
   legend: { bottom: 0 },
   series: [
@@ -181,7 +181,7 @@ const typeChartOptions = computed<EChartsOption>(() => ({
 
 /** 车辆状态分布环图 */
 const vehicleChartOptions = computed<EChartsOption>(() => ({
-  color: ['#67C23A', '#409EFF', '#909399'],
+  color: ['#4CAF50', '#2E7D32', '#86BB88'],
   tooltip: { trigger: 'item', formatter: '{b}: {c} 辆 ({d}%)' },
   legend: { bottom: 0 },
   series: [
@@ -201,7 +201,7 @@ const vehicleChartOptions = computed<EChartsOption>(() => ({
 
 /** 近7日订单量(柱)与营收(线)双轴趋势 */
 const trendChartOptions = computed<EChartsOption>(() => ({
-  color: ['#409EFF', '#F56C6C'],
+  color: ['#2E7D32', '#C75B2A'],
   tooltip: { trigger: 'axis' },
   legend: { top: 0, data: ['订单量', '营收(元)'] },
   grid: { top: 40, left: 24, right: 24, bottom: 24, containLabel: true },
