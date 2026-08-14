@@ -13,6 +13,8 @@ public class AppDriverPickupRespVO {
     private Long orderId;
     @Schema(description = "业务订单号", requiredMode = Schema.RequiredMode.REQUIRED)
     private String orderNo;
+    @Schema(description = "订单类型：2货运 3邮快件")
+    private Integer orderType;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")
@@ -23,4 +25,8 @@ public class AppDriverPickupRespVO {
     private String receiverMobile;
     @Schema(description = "收货地址")
     private String receiverAddress;
+    @Schema(description = "快递单号（邮快件）")
+    private String mailNo;
+    @Schema(description = "取件码（邮快件，6位数字）")
+    private String pickupCode;
 }

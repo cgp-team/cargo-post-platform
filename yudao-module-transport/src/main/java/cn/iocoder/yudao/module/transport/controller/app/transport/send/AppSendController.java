@@ -8,7 +8,9 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.S
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
@@ -22,6 +24,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Objects;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 import static cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
@@ -34,6 +37,7 @@ public class AppSendController {
 
     @Resource private TransportOrderService transportOrderService;
     @Resource private StationService stationService;
+    @Resource private PostalOrderMapper postalOrderMapper;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -69,15 +73,30 @@ public class AppSendController {
     private AppSendOrderRespVO toRespVO(TransportOrderDO order) {
         AppSendOrderRespVO vo = BeanUtils.toBean(order, AppSendOrderRespVO.class);
         vo.setStatusName(TransportOrderStatusEnum.nameOf(order.getStatus()));
-        CargoOrderDO cargo = transportOrderService.getCargoOrder(order.getId());
-        if (cargo != null) {
-            vo.setGoodsName(cargo.getGoodsName());
-            vo.setGoodsWeight(cargo.getWeightKg());
-            vo.setGoodsNote(cargo.getGoodsNote());
-            vo.setPhotoUrl(cargo.getPhotoUrl());
-            vo.setReceiverName(cargo.getReceiverName());
-            vo.setReceiverMobile(cargo.getReceiverMobile());
-            vo.setReceiverAddress(cargo.getReceiverAddress());
+        vo.setOrderType(order.getOrderType());
+        if (Objects.equals(order.getOrderType(), 3)) {
+            // 邮快件：快递单号/取件码/收件人（包裹查询展示取件码核销）
+            PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
+            if (postal != null) {
+                vo.setGoodsName(postal.getMailNo());
+                vo.setGoodsWeight(postal.getWeightKg());
+                vo.setMailNo(postal.getMailNo());
+                vo.setPickupCode(postal.getPickupCode());
+                vo.setReceiverName(postal.getReceiverName());
+                vo.setReceiverMobile(postal.getReceiverMobile());
+                vo.setReceiverAddress(postal.getReceiverAddress());
+            }
+        } else {
+            CargoOrderDO cargo = transportOrderService.getCargoOrder(order.getId());
+            if (cargo != null) {
+                vo.setGoodsName(cargo.getGoodsName());
+                vo.setGoodsWeight(cargo.getWeightKg());
+                vo.setGoodsNote(cargo.getGoodsNote());
+                vo.setPhotoUrl(cargo.getPhotoUrl());
+                vo.setReceiverName(cargo.getReceiverName());
+                vo.setReceiverMobile(cargo.getReceiverMobile());
+                vo.setReceiverAddress(cargo.getReceiverAddress());
+            }
         }
         return vo;
     }

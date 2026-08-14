@@ -15,7 +15,9 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
@@ -26,6 +28,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
@@ -55,8 +58,11 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_NOT_FOUND;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_ORDER_NOT_ASSIGNED;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_ORDER_STATUS_ILLEGAL;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_CARGO_PHOTO_REQUIRED;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_STATION_NOT_IN_ROUTE;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_STATION_ORDER_ILLEGAL;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.POSTAL_ALREADY_PICKED;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.POSTAL_PICKUP_CODE_INVALID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -81,6 +87,7 @@ class DriverAppServiceImplTest {
     @Mock private StationMapper stationMapper;
     @Mock private TransportOrderMapper transportOrderMapper;
     @Mock private CargoOrderMapper cargoOrderMapper;
+    @Mock private PostalOrderMapper postalOrderMapper;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private ShiftExecutionMapper shiftExecutionMapper;
@@ -101,6 +108,7 @@ class DriverAppServiceImplTest {
         ReflectionTestUtils.setField(driverAppService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(driverAppService, "transportOrderMapper", transportOrderMapper);
         ReflectionTestUtils.setField(driverAppService, "cargoOrderMapper", cargoOrderMapper);
+        ReflectionTestUtils.setField(driverAppService, "postalOrderMapper", postalOrderMapper);
         ReflectionTestUtils.setField(driverAppService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(driverAppService, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(driverAppService, "shiftExecutionMapper", shiftExecutionMapper);
@@ -329,6 +337,7 @@ class DriverAppServiceImplTest {
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
         reqVO.setDriverId(DRIVER_ID);
         reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         driverAppService.pickupConfirm(reqVO);
 
         // 订单状态推进已发车 + 执行记录已装件数 +1
@@ -353,6 +362,7 @@ class DriverAppServiceImplTest {
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
         reqVO.setDriverId(DRIVER_ID);
         reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         driverAppService.pickupConfirm(reqVO);
 
         // 已发车订单装车后仍保持已发车（loaded 记录 +1），deliver 仍可 3→4
@@ -409,6 +419,7 @@ class DriverAppServiceImplTest {
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
         reqVO.setDriverId(DRIVER_ID);
         reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupConfirm(reqVO));
 
         assertEquals(DRIVER_CARGO_FULL.getCode(), ex.getCode());
@@ -431,10 +442,98 @@ class DriverAppServiceImplTest {
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
         reqVO.setDriverId(DRIVER_ID);
         reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupConfirm(reqVO));
 
         assertEquals(DRIVER_ORDER_STATUS_ILLEGAL.getCode(), ex.getCode());
         verify(shiftExecutionMapper, never()).updateById(any(ShiftExecutionDO.class));
+    }
+
+    @Test
+    void pickupConfirm_cargo_missing_photo_throws() {
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.POOLED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        // 不传 driverPhotoUrl：货运散件强制收件照片，缺照片不能装车
+        ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupConfirm(reqVO));
+
+        assertEquals(DRIVER_CARGO_PHOTO_REQUIRED.getCode(), ex.getCode());
+        verify(transportOrderMapper, never()).update(any(), any());
+    }
+
+    // ==================== 取件核销（邮快件） ====================
+
+    @Test
+    void pickupVerify_postal_order_success() {
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(3).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(postalOrderMapper.selectOne(any(SFunction.class), any())).thenReturn(
+                PostalOrderDO.builder().id(9L).orderId(1000L).pickupCode("123456").pickupStatus(0).build());
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setPickupCode("123456");
+        driverAppService.pickupVerify(reqVO);
+
+        // 主表已发车→已完成 + 子表已取件
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(transportOrderMapper).update(orderCaptor.capture(), any());
+        assertEquals(TransportOrderStatusEnum.COMPLETED.getStatus(), orderCaptor.getValue().getStatus());
+        ArgumentCaptor<PostalOrderDO> postalCaptor = ArgumentCaptor.forClass(PostalOrderDO.class);
+        verify(postalOrderMapper).updateById(postalCaptor.capture());
+        assertEquals(1, postalCaptor.getValue().getPickupStatus());
+    }
+
+    @Test
+    void pickupVerify_wrong_code_throws() {
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(3).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(postalOrderMapper.selectOne(any(SFunction.class), any())).thenReturn(
+                PostalOrderDO.builder().id(9L).orderId(1000L).pickupCode("123456").pickupStatus(0).build());
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setPickupCode("999999"); // 错误取件码
+        ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupVerify(reqVO));
+
+        assertEquals(POSTAL_PICKUP_CODE_INVALID.getCode(), ex.getCode());
+        verify(transportOrderMapper, never()).update(any(), any());
+        verify(postalOrderMapper, never()).updateById(any(PostalOrderDO.class));
+    }
+
+    @Test
+    void pickupVerify_already_picked_throws() {
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(3).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(postalOrderMapper.selectOne(any(SFunction.class), any())).thenReturn(
+                PostalOrderDO.builder().id(9L).orderId(1000L).pickupCode("123456").pickupStatus(1).build());
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setPickupCode("123456");
+        ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupVerify(reqVO));
+
+        assertEquals(POSTAL_ALREADY_PICKED.getCode(), ex.getCode());
+        verify(transportOrderMapper, never()).update(any(), any());
     }
 
     // ==================== 妥投 ====================

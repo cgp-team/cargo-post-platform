@@ -60,4 +60,8 @@ public interface ErrorCodeConstants {
     ErrorCode DRIVER_STATION_NOT_IN_ROUTE = new ErrorCode(1_005_011_007, "站点不属于该班次线路");
     ErrorCode DRIVER_STATION_ORDER_ILLEGAL = new ErrorCode(1_005_011_008, "到站顺序不合法");
     ErrorCode DRIVER_VEHICLE_NOT_EXISTS = new ErrorCode(1_005_011_009, "人车绑定记录不存在");
+    ErrorCode DRIVER_CARGO_PHOTO_REQUIRED = new ErrorCode(1_005_011_010, "请拍摄货物照片后再装车");
+    // Postal Pickup（邮快件取件核销）
+    ErrorCode POSTAL_PICKUP_CODE_INVALID = new ErrorCode(1_005_013_000, "取件码不正确");
+    ErrorCode POSTAL_ALREADY_PICKED = new ErrorCode(1_005_013_001, "该件已取件");
 }
