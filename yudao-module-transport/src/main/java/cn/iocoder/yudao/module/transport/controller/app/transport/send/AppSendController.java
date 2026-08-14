@@ -93,6 +93,8 @@ public class AppSendController {
                 vo.setGoodsWeight(cargo.getWeightKg());
                 vo.setGoodsNote(cargo.getGoodsNote());
                 vo.setPhotoUrl(cargo.getPhotoUrl());
+                vo.setAuditStatus(cargo.getAuditStatus());
+                vo.setRejectReason(cargo.getRejectReason());
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());

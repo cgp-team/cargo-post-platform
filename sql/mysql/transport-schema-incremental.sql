@@ -339,3 +339,17 @@ SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @ddl := IF(@col_exists = 0,
   'ALTER TABLE `transport_cargo_order` ADD COLUMN `driver_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机收件照片(装车强制拍，快递总站核对凭证)'' AFTER `photo_url`', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------- 货运物品审核：transport_cargo_order.audit_status / reject_reason ----------
+-- 村民寄货散件需管理端审核（危险品/违禁品拒绝运输）；未审核/被拒的货运不能进调度池
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='audit_status');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `audit_status` tinyint NOT NULL DEFAULT 0 COMMENT ''审核状态：0待审核 1已通过 2已拒绝'' AFTER `driver_photo_url`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='reject_reason');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `reject_reason` varchar(255) NOT NULL DEFAULT '''' COMMENT ''拒绝原因(审核拒绝时)'' AFTER `audit_status`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;

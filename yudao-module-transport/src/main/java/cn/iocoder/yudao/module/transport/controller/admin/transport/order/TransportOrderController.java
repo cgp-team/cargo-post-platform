@@ -38,6 +38,14 @@ public class TransportOrderController {
         return success(orderService.create(reqVO));
     }
 
+    @PostMapping("/audit")
+    @Operation(summary = "审核货运订单（通过/拒绝，危险品/违禁品拒绝运输）")
+    @PreAuthorize("@ss.hasPermission('transport:order:update')")
+    public CommonResult<Boolean> audit(@Valid @RequestBody OrderAuditReqVO reqVO) {
+        orderService.audit(reqVO);
+        return success(true);
+    }
+
     @PutMapping("/update")
     @Operation(summary = "更新订单")
     @PreAuthorize("@ss.hasPermission('transport:order:update')")
@@ -93,6 +101,8 @@ public class TransportOrderController {
                 vo.setGoodsNote(cargo.getGoodsNote());
                 vo.setPhotoUrl(cargo.getPhotoUrl());
                 vo.setDriverPhotoUrl(cargo.getDriverPhotoUrl());
+                vo.setAuditStatus(cargo.getAuditStatus());
+                vo.setRejectReason(cargo.getRejectReason());
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());

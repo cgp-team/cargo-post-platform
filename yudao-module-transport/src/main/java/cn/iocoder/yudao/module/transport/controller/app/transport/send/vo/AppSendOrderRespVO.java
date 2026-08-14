@@ -24,6 +24,10 @@ public class AppSendOrderRespVO {
     private String mailNo;
     @Schema(description = "取件码（邮快件，6位数字）")
     private String pickupCode;
+    @Schema(description = "货运审核状态：0待审核 1已通过 2已拒绝")
+    private Integer auditStatus;
+    @Schema(description = "拒绝原因（审核拒绝时）")
+    private String rejectReason;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")
