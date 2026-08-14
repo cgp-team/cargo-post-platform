@@ -251,3 +251,30 @@ SET @ddl := IF(
 PREPARE stmt FROM @ddl;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+-- ---------- transport_dispatch_plan_item.order_id：应为可空（场站起止点无订单） ----------
+-- 历史活库该列是 NOT NULL，而手工/智能派单对 DEPART(场站出发)/RETURN(返回场站) 经停不填
+-- order_id（insertPlanItems 对 null orderId 不落该列）→ 插入报 Field 'order_id' doesn't have a
+-- default value。这里同时覆盖「列缺失→ADD」与「列已存在且 NOT NULL→MODIFY」两种情况，幂等安全。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'order_id'
+);
+SET @col_is_nullable := (
+  SELECT IS_NULLABLE FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'order_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `order_id` bigint DEFAULT NULL COMMENT ''订单编号（场站起止点无订单）'' AFTER `shift_id`',
+  IF(@col_is_nullable = 'NO',
+     'ALTER TABLE `transport_dispatch_plan_item` MODIFY COLUMN `order_id` bigint DEFAULT NULL COMMENT ''订单编号（场站起止点无订单）''',
+     'SELECT 1')
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
