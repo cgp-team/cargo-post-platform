@@ -32,10 +32,21 @@ export interface OrderVO {
   goodsName?: string
   goodsNote?: string
   photoUrl?: string
+  driverPhotoUrl?: string
   receiverName?: string
   receiverMobile?: string
   receiverAddress?: string
+  // Postal pickup
+  pickupCode?: string
+  pickupStatus?: number
+  // Cargo audit
+  auditStatus?: number
+  rejectReason?: string
   createTime?: string
+}
+
+export const auditOrder = (data: { orderId: number; pass: boolean; rejectReason?: string }) => {
+  return request.post({ url: '/transport/order/audit', data })
 }
 
 export const getOrderPage = (params: PageParam & Partial<OrderVO>) => {

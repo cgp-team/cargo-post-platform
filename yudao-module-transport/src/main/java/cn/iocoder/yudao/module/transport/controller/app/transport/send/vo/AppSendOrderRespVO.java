@@ -14,10 +14,20 @@ public class AppSendOrderRespVO {
     private Long id;
     @Schema(description = "业务订单号", requiredMode = Schema.RequiredMode.REQUIRED)
     private String orderNo;
+    @Schema(description = "订单类型：1客运 2货运 3邮快件")
+    private Integer orderType;
     @Schema(description = "订单状态(0待调度 1已入池 2已分配 3已发车 4已完成 5已取消)")
     private Integer status;
     @Schema(description = "订单状态名")
     private String statusName;
+    @Schema(description = "快递单号（邮快件）")
+    private String mailNo;
+    @Schema(description = "取件码（邮快件，6位数字）")
+    private String pickupCode;
+    @Schema(description = "货运审核状态：0待审核 1已通过 2已拒绝")
+    private Integer auditStatus;
+    @Schema(description = "拒绝原因（审核拒绝时）")
+    private String rejectReason;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")
