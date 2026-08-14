@@ -3,9 +3,11 @@ package cn.iocoder.yudao.module.transport.service.dispatch;
 import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.*;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
@@ -84,6 +86,13 @@ class DispatchServiceImplTest {
 
     @Test
     void collectOrders_marks_created_orders_pooled() {
+        // 候选订单：2 货运(已审核通过) + 1 邮快件，均可归集
+        when(orderMapper.selectList(any())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).orderType(2).build(),
+                TransportOrderDO.builder().id(3L).orderType(3).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().auditStatus(1).build());
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(3);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -95,6 +104,26 @@ class DispatchServiceImplTest {
         ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).update(captor.capture(), any());
         assertEquals(TransportOrderStatusEnum.POOLED.getStatus(), captor.getValue().getStatus());
+    }
+
+    @Test
+    void collectOrders_skips_unaudited_cargo() {
+        // 候选订单：2 货运(1未审核) + 1 邮快件 → 未审核货运不入池
+        when(orderMapper.selectList(any())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).orderType(2).build(),
+                TransportOrderDO.builder().id(3L).orderType(3).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().auditStatus(0).build()); // 未审核
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setBatchStart(LocalDateTime.of(2026, 8, 9, 10, 0));
+        reqVO.setBatchEnd(LocalDateTime.of(2026, 8, 9, 10, 30));
+        int count = dispatchService.collectOrders(reqVO);
+
+        // 2 个入池：1 个已审核货运 + 1 个邮快件（未审核货运被过滤）
+        assertEquals(2, count);
     }
 
     @Test

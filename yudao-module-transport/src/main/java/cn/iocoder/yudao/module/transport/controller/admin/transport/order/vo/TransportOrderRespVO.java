@@ -29,6 +29,10 @@ public class TransportOrderRespVO extends TransportOrderBaseVO {
     private String photoUrl;
     @Schema(description = "司机收件照片（装车强制拍，快递总站核对凭证）")
     private String driverPhotoUrl;
+    @Schema(description = "货运审核状态：0待审核 1已通过 2已拒绝")
+    private Integer auditStatus;
+    @Schema(description = "拒绝原因")
+    private String rejectReason;
     @Schema(description = "收货人")
     private String receiverName;
     @Schema(description = "收货电话")

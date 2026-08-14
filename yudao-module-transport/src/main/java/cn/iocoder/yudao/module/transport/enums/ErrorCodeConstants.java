@@ -64,4 +64,6 @@ public interface ErrorCodeConstants {
     // Postal Pickup（邮快件取件核销）
     ErrorCode POSTAL_PICKUP_CODE_INVALID = new ErrorCode(1_005_013_000, "取件码不正确");
     ErrorCode POSTAL_ALREADY_PICKED = new ErrorCode(1_005_013_001, "该件已取件");
+    // Cargo Audit（货运物品审核）
+    ErrorCode CARGO_AUDIT_ONLY_CARGO = new ErrorCode(1_005_014_000, "仅货运订单需要审核");
 }

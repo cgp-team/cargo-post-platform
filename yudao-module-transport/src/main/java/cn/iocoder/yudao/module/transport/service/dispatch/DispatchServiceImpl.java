@@ -81,11 +81,29 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     @Transactional
     public int collectOrders(DispatchCollectReqVO reqVO) {
+        // 查区间内待归集订单
+        List<TransportOrderDO> orders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus())
+                .between(TransportOrderDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
+        // 过滤：货运需管理端审核通过（危险品/违禁品拒绝运输）；客运/邮快件直接可归集
+        List<Long> ids = orders.stream()
+                .filter(o -> !Objects.equals(o.getOrderType(), 2) || isCargoAudited(o.getId()))
+                .map(TransportOrderDO::getId)
+                .toList();
+        if (ids.isEmpty()) {
+            return 0;
+        }
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(TransportOrderStatusEnum.POOLED.getStatus());
         return orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
-                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus())
-                .between(TransportOrderDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
+                .in(TransportOrderDO::getId, ids)
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus()));
+    }
+
+    /** 货运是否已管理端审核通过（audit_status=1） */
+    private boolean isCargoAudited(Long orderId) {
+        CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, orderId);
+        return cargo != null && Objects.equals(cargo.getAuditStatus(), 1);
     }
 
     @Override

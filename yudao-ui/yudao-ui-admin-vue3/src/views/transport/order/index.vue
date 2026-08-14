@@ -68,10 +68,19 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="审核状态" align="center" width="90">
+          <template #default="scope">
+            <el-tag v-if="scope.row.orderType === 2 && scope.row.auditStatus !== undefined && scope.row.auditStatus !== null" :type="scope.row.auditStatus === 1 ? 'success' : (scope.row.auditStatus === 2 ? 'danger' : 'warning')" size="small">
+              {{ scope.row.auditStatus === 1 ? '已通过' : (scope.row.auditStatus === 2 ? '已拒绝' : '待审核') }}
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="订单金额" prop="totalAmount" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
-        <el-table-column label="操作" align="center" width="150">
+        <el-table-column label="操作" align="center" width="200">
           <template #default="scope">
+            <el-button v-if="scope.row.orderType === 2 && scope.row.auditStatus === 0" link type="warning" v-hasPermi="['transport:order:update']" @click="openAudit(scope.row)">审核</el-button>
             <el-button link type="primary" v-hasPermi="['transport:order:update']" @click="openForm('update', scope.row.id)">编辑</el-button>
             <el-button link type="danger" v-hasPermi="['transport:order:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
@@ -81,6 +90,34 @@
     </ContentWrap>
   </ContentWrap>
   <OrderForm ref="formRef" @success="getList" />
+
+  <!-- 货运物品审核 -->
+  <Dialog v-model="auditVisible" title="审核货运物品" width="560px">
+    <el-form label-width="100px">
+      <el-form-item label="寄件照">
+        <el-image v-if="auditRow.photoUrl" :src="auditRow.photoUrl" :preview-src-list="[auditRow.photoUrl]" fit="cover" style="width:120px;height:120px;border-radius:8px" />
+        <span v-else>无</span>
+      </el-form-item>
+      <el-form-item label="司机收件照">
+        <el-image v-if="auditRow.driverPhotoUrl" :src="auditRow.driverPhotoUrl" :preview-src-list="[auditRow.driverPhotoUrl]" fit="cover" style="width:120px;height:120px;border-radius:8px" />
+        <span v-else>无</span>
+      </el-form-item>
+      <el-form-item label="货物信息">
+        <span>{{ auditRow.goodsName || '-' }} · {{ auditRow.weightKg ? auditRow.weightKg + 'kg' : '-' }} · {{ auditRow.goodsNote || '无备注' }}</span>
+      </el-form-item>
+      <el-form-item label="收件信息">
+        <span>{{ auditRow.receiverName || '-' }} {{ auditRow.receiverMobile || '' }}</span>
+      </el-form-item>
+      <el-form-item label="拒绝原因">
+        <el-input v-model="auditForm.rejectReason" type="textarea" :rows="3" placeholder="拒绝时填写，如：疑似易燃易爆 / 违禁品 / 超限" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="auditVisible = false">取 消</el-button>
+      <el-button type="success" :loading="auditLoading" @click="submitAudit(true)">审核通过</el-button>
+      <el-button type="danger" :loading="auditLoading" @click="submitAudit(false)">拒绝运输</el-button>
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -119,6 +156,31 @@ const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10,
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
   try { await message.confirm('确认删除该订单？'); await OrderApi.deleteOrder(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }
+}
+// 货运物品审核
+const auditVisible = ref(false)
+const auditLoading = ref(false)
+const auditRow = ref<any>({})
+const auditForm = ref<{ rejectReason: string }>({ rejectReason: '' })
+const openAudit = (row: any) => {
+  auditRow.value = row
+  auditForm.value = { rejectReason: '' }
+  auditVisible.value = true
+}
+const submitAudit = async (pass: boolean) => {
+  if (!pass && !auditForm.value.rejectReason) {
+    message.warning('拒绝时请填写原因')
+    return
+  }
+  auditLoading.value = true
+  try {
+    await OrderApi.auditOrder({ orderId: auditRow.value.id, pass, rejectReason: auditForm.value.rejectReason })
+    message.success(pass ? '审核通过' : '已拒绝该订单')
+    auditVisible.value = false
+    getList()
+  } finally {
+    auditLoading.value = false
+  }
 }
 onMounted(getList)
 </script>

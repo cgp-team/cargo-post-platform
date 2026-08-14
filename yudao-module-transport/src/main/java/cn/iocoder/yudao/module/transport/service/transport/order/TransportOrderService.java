@@ -23,4 +23,6 @@ public interface TransportOrderService {
     TransportOrderDO getByOrderNo(String orderNo);
     /** 货运子表（寄货货物信息） */
     CargoOrderDO getCargoOrder(Long orderId);
+    /** 货运物品审核：通过 / 拒绝（危险品/违禁品） */
+    void audit(@Valid OrderAuditReqVO reqVO);
 }

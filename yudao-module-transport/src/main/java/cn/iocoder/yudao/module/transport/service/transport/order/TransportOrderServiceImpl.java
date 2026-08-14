@@ -17,8 +17,10 @@ import org.springframework.validation.annotation.Validated;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Objects;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_ONLY_CARGO;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ORDER_NOT_EXISTS;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_USER_NOT_LOGIN;
 
@@ -149,6 +151,35 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         return cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, orderId);
     }
 
+    @Override
+    @Transactional
+    public void audit(OrderAuditReqVO reqVO) {
+        TransportOrderDO order = validateExists(reqVO.getOrderId());
+        // 仅货运（村民寄货散件）需要审核
+        if (!Objects.equals(order.getOrderType(), 2)) {
+            throw exception(CARGO_AUDIT_ONLY_CARGO);
+        }
+        CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, order.getId());
+        if (cargo == null) {
+            throw exception(ORDER_NOT_EXISTS);
+        }
+        CargoOrderDO upd = new CargoOrderDO();
+        upd.setId(cargo.getId());
+        if (Boolean.TRUE.equals(reqVO.getPass())) {
+            // 通过：标记审核通过，可进调度池
+            upd.setAuditStatus(1);
+        } else {
+            // 拒绝（危险品/违禁品等）：标记拒绝 + 原因，主表置取消，村民查件可见
+            upd.setAuditStatus(2);
+            upd.setRejectReason(reqVO.getRejectReason());
+            TransportOrderDO orderUpd = new TransportOrderDO();
+            orderUpd.setId(order.getId());
+            orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
+            orderMapper.updateById(orderUpd);
+        }
+        cargoOrderMapper.updateById(upd);
+    }
+
     private TransportOrderDO validateExists(Long id) {
         TransportOrderDO o = orderMapper.selectById(id);
         if (o == null) throw exception(ORDER_NOT_EXISTS);
@@ -185,6 +216,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .receiverName(reqVO.getReceiverName())
                 .receiverMobile(reqVO.getReceiverMobile())
                 .receiverAddress(reqVO.getReceiverAddress())
+                .auditStatus(1) // 管理端录入即视为已审核通过
                 .build();
         cargoOrderMapper.insert(sub);
     }
