@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.service.transport.order;
 
+import cn.hutool.core.util.RandomUtil;
 import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
@@ -196,6 +197,11 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .carrierCode(reqVO.getCarrierCode())
                 .itemCount(reqVO.getPostalItemCount() != null ? reqVO.getPostalItemCount() : 1)
                 .weightKg(reqVO.getPostalWeightKg())
+                .receiverName(reqVO.getReceiverName())
+                .receiverMobile(reqVO.getReceiverMobile())
+                .receiverAddress(reqVO.getReceiverAddress())
+                .pickupCode(RandomUtil.randomNumbers(6)) // 6 位数字取件码，收件人凭码取件
+                .pickupStatus(0)
                 .build();
         postalOrderMapper.insert(sub);
     }

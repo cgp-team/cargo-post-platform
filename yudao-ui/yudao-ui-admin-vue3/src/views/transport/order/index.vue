@@ -42,6 +42,32 @@
         <el-table-column label="收货电话" align="center" width="120">
           <template #default="scope">{{ scope.row.receiverMobile || '-' }}</template>
         </el-table-column>
+        <el-table-column label="寄件照" align="center" width="70">
+          <template #default="scope">
+            <el-image v-if="scope.row.photoUrl" :src="scope.row.photoUrl" :preview-src-list="[scope.row.photoUrl]" fit="cover" style="width:44px;height:44px;border-radius:6px" />
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="司机收件照" align="center" width="70">
+          <template #default="scope">
+            <el-image v-if="scope.row.driverPhotoUrl" :src="scope.row.driverPhotoUrl" :preview-src-list="[scope.row.driverPhotoUrl]" fit="cover" style="width:44px;height:44px;border-radius:6px" />
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="取件码" align="center" width="90">
+          <template #default="scope">
+            <span v-if="scope.row.pickupCode">{{ scope.row.pickupCode }}</span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="取件状态" align="center" width="90">
+          <template #default="scope">
+            <el-tag v-if="scope.row.pickupStatus !== undefined && scope.row.pickupStatus !== null" :type="scope.row.pickupStatus === 1 ? 'success' : 'warning'" size="small">
+              {{ scope.row.pickupStatus === 1 ? '已取件' : '待取件' }}
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="订单金额" prop="totalAmount" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">

@@ -32,9 +32,13 @@ export interface OrderVO {
   goodsName?: string
   goodsNote?: string
   photoUrl?: string
+  driverPhotoUrl?: string
   receiverName?: string
   receiverMobile?: string
   receiverAddress?: string
+  // Postal pickup
+  pickupCode?: string
+  pickupStatus?: number
   createTime?: string
 }
 
