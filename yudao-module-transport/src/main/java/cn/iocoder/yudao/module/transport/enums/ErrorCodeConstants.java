@@ -60,4 +60,8 @@ public interface ErrorCodeConstants {
     ErrorCode DRIVER_STATION_NOT_IN_ROUTE = new ErrorCode(1_005_011_007, "站点不属于该班次线路");
     ErrorCode DRIVER_STATION_ORDER_ILLEGAL = new ErrorCode(1_005_011_008, "到站顺序不合法");
     ErrorCode DRIVER_VEHICLE_NOT_EXISTS = new ErrorCode(1_005_011_009, "人车绑定记录不存在");
+    // Voice（百度智能云语音/翻译，小程序寄货语音 + 面对面翻译）
+    ErrorCode VOICE_RECOGNIZE_FAIL = new ErrorCode(1_005_012_000, "语音识别失败：{}");
+    ErrorCode VOICE_TRANSLATE_FAIL = new ErrorCode(1_005_012_001, "翻译失败：{}");
+    ErrorCode VOICE_NOT_CONFIGURED = new ErrorCode(1_005_012_002, "语音服务未配置，请联系管理员");
 }
