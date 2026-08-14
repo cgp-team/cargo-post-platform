@@ -4,7 +4,7 @@
       <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
         <el-form-item label="司机">
           <el-select v-model="queryParams.driverId" placeholder="请选择司机" clearable filterable style="width:180px">
-            <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id" />
+            <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id!" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
@@ -53,12 +53,12 @@
       <el-form ref="bindFormRef" :model="bindForm" :rules="bindRules" label-width="80px">
         <el-form-item label="司机" prop="driverId">
           <el-select v-model="bindForm.driverId" placeholder="请选择司机" clearable filterable style="width:100%">
-            <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id" />
+            <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id!" />
           </el-select>
         </el-form-item>
         <el-form-item label="车辆" prop="vehicleId">
           <el-select v-model="bindForm.vehicleId" placeholder="请选择车辆" clearable filterable style="width:100%">
-            <el-option v-for="v in vehicleOptions" :key="v.id" :label="v.plateNo" :value="v.id" />
+            <el-option v-for="v in vehicleOptions" :key="v.id" :label="v.plateNo" :value="v.id!" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -71,6 +71,9 @@
 </template>
 
 <script setup lang="ts">
+import type { DriverVehicleVO } from '@/api/transport/driver-vehicle'
+import type { DriverVO } from '@/api/transport/driver'
+import type { VehicleVO } from '@/api/transport/vehicle'
 import * as DriverVehicleApi from '@/api/transport/driver-vehicle'
 import * as DriverApi from '@/api/transport/driver'
 import * as VehicleApi from '@/api/transport/vehicle'
@@ -78,13 +81,13 @@ defineOptions({ name: 'TransportDriverVehicle' })
 const message = useMessage()
 const loading = ref(true)
 const total = ref(0)
-const list = ref([])
+const list = ref<DriverVehicleVO[]>([])
 
 type QueryParams = { pageNo: number; pageSize: number; driverId?: number; status?: number }
 const queryParams = reactive<QueryParams>({ pageNo: 1, pageSize: 10, driverId: undefined, status: undefined })
 
-const driverOptions = ref([])
-const vehicleOptions = ref([])
+const driverOptions = ref<DriverVO[]>([])
+const vehicleOptions = ref<VehicleVO[]>([])
 const loadOptions = async () => {
   driverOptions.value = await DriverApi.getSimpleDriverList()
   vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
@@ -118,9 +121,15 @@ const openBind = () => {
 const submitBind = async () => {
   const valid = await bindFormRef.value?.validate()
   if (!valid) return
+  // 校验已通过但 TS 无法推断，运行时再兜底
+  const { driverId, vehicleId } = bindForm.value
+  if (driverId == null || vehicleId == null) {
+    message.error('请选择司机与车辆')
+    return
+  }
   bindLoading.value = true
   try {
-    await DriverVehicleApi.bindDriverVehicle(bindForm.value)
+    await DriverVehicleApi.bindDriverVehicle({ driverId, vehicleId })
     message.success('绑定成功')
     bindVisible.value = false
     getList()
