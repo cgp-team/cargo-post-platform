@@ -5,7 +5,9 @@ import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -17,6 +19,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Objects;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 
@@ -26,12 +29,21 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 @Validated
 public class TransportOrderController {
     @Resource private TransportOrderService orderService;
+    @Resource private PostalOrderMapper postalOrderMapper;
 
     @PostMapping("/create")
     @Operation(summary = "创建订单")
     @PreAuthorize("@ss.hasPermission('transport:order:create')")
     public CommonResult<Long> create(@Valid @RequestBody TransportOrderCreateReqVO reqVO) {
         return success(orderService.create(reqVO));
+    }
+
+    @PostMapping("/audit")
+    @Operation(summary = "审核货运订单（通过/拒绝，危险品/违禁品拒绝运输）")
+    @PreAuthorize("@ss.hasPermission('transport:order:update')")
+    public CommonResult<Boolean> audit(@Valid @RequestBody OrderAuditReqVO reqVO) {
+        orderService.audit(reqVO);
+        return success(true);
     }
 
     @PutMapping("/update")
@@ -68,17 +80,33 @@ public class TransportOrderController {
         return success(new PageResult<>(list, pageResult.getTotal()));
     }
 
-    /** 组装订单与货运子表寄货信息 */
+    /** 组装订单与货运/邮快件子表信息 */
     private TransportOrderRespVO toVO(TransportOrderDO order) {
         TransportOrderRespVO vo = BeanUtils.toBean(order, TransportOrderRespVO.class);
-        CargoOrderDO cargo = orderService.getCargoOrder(order.getId());
-        if (cargo != null) {
-            vo.setGoodsName(cargo.getGoodsName());
-            vo.setGoodsNote(cargo.getGoodsNote());
-            vo.setPhotoUrl(cargo.getPhotoUrl());
-            vo.setReceiverName(cargo.getReceiverName());
-            vo.setReceiverMobile(cargo.getReceiverMobile());
-            vo.setReceiverAddress(cargo.getReceiverAddress());
+        if (Objects.equals(order.getOrderType(), 3)) {
+            // 邮快件：快递单号/取件码/核销状态/收件人
+            PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
+            if (postal != null) {
+                vo.setMailNo(postal.getMailNo());
+                vo.setPickupCode(postal.getPickupCode());
+                vo.setPickupStatus(postal.getPickupStatus());
+                vo.setReceiverName(postal.getReceiverName());
+                vo.setReceiverMobile(postal.getReceiverMobile());
+                vo.setReceiverAddress(postal.getReceiverAddress());
+            }
+        } else {
+            CargoOrderDO cargo = orderService.getCargoOrder(order.getId());
+            if (cargo != null) {
+                vo.setGoodsName(cargo.getGoodsName());
+                vo.setGoodsNote(cargo.getGoodsNote());
+                vo.setPhotoUrl(cargo.getPhotoUrl());
+                vo.setDriverPhotoUrl(cargo.getDriverPhotoUrl());
+                vo.setAuditStatus(cargo.getAuditStatus());
+                vo.setRejectReason(cargo.getRejectReason());
+                vo.setReceiverName(cargo.getReceiverName());
+                vo.setReceiverMobile(cargo.getReceiverMobile());
+                vo.setReceiverAddress(cargo.getReceiverAddress());
+            }
         }
         return vo;
     }

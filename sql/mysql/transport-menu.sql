@@ -69,7 +69,8 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6841, '司机列表', 'transport:driver:query', 2, 1, 6840, 'list', '', 'transport/driver/index', 'TransportDriver', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6842, '司机新增', 'transport:driver:create', 3, 2, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6843, '司机编辑', 'transport:driver:update', 3, 3, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
-(6844, '司机删除', 'transport:driver:delete', 3, 4, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+(6844, '司机删除', 'transport:driver:delete', 3, 4, 6841, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6845, '人车绑定', 'transport:driver:query', 2, 2, 6840, 'driver-vehicle', 'ep:link', 'transport/driver-vehicle/index', 'TransportDriverVehicle', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 -- Order

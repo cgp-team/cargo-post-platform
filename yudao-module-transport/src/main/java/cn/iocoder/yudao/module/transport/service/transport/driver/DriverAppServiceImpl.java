@@ -11,6 +11,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanIte
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
@@ -24,6 +25,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
@@ -63,6 +65,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int SHIFT_STATUS_ENABLED = 0;
     /** 订单类型：货运/生鲜 */
     private static final int ORDER_TYPE_CARGO = 2;
+    /** 订单类型：邮快件（快递进村取件核销） */
+    private static final int ORDER_TYPE_POSTAL = 3;
     /** 订单已取消 */
     private static final int ORDER_STATUS_CANCELLED = 5;
     /** 执行状态：在途 */
@@ -71,6 +75,11 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int EXEC_STATUS_COMPLETED = 1;
     /** 待处理状态集合（待调度/已入池/已分配） */
     private static final List<Integer> PENDING_STATUSES = List.of(0, 1, 2);
+    /** 可确认装车的状态集合（待调度/已入池/已分配/已发车）：
+     *  depart 已把司机名下已分配订单推进为已发车(3)，真实流程「先发车→到站扫码装车」必须放行已发车，
+     *  否则装车永远失败；deliver 仍要求已发车(3)→已完成(4)。已发车订单装车后保持 3，仅累计 loaded_count。
+     *  防重依赖 loaded >= capacity 容量上限兜底（严格防重复装车留待后续）。 */
+    private static final List<Integer> PICKUP_CONFIRM_STATUSES = List.of(0, 1, 2, 3);
 
     private static final Map<Integer, String> SHIFT_STATUS_NAMES = Map.of(0, "未发车", 1, "在途", 2, "已完成");
 
@@ -87,6 +96,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private StationMapper stationMapper;
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
+    @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
@@ -166,27 +176,43 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (driver == null) {
             return List.of();
         }
-        // 仅返回当前司机已下发/执行中派单明细里的待处理货运订单（与装车/妥投归属校验一致）
+        // 仅返回当前司机已下发/执行中派单明细里可确认装车的货运+邮快件订单（与装车/妥投归属校验一致）；
+        // 用 PICKUP_CONFIRM_STATUSES 而非 PENDING_STATUSES：depart 后订单已为已发车(3)，发车后仍须可见待装车任务
         Set<Long> assignedOrderIds = listAssignedOrderIds(driver.getId());
         if (assignedOrderIds.isEmpty()) {
             return List.of();
         }
         List<TransportOrderDO> orders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
-                .eq(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO)
-                .in(TransportOrderDO::getStatus, PENDING_STATUSES)
+                .in(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO, ORDER_TYPE_POSTAL)
+                .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES)
                 .in(TransportOrderDO::getId, assignedOrderIds)
                 .orderByDesc(TransportOrderDO::getId));
         return orders.stream().map(order -> {
             AppDriverPickupRespVO vo = new AppDriverPickupRespVO();
             vo.setOrderId(order.getId());
             vo.setOrderNo(order.getOrderNo());
-            CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, order.getId());
-            if (cargo != null) {
-                vo.setGoodsName(cargo.getGoodsName());
-                vo.setWeightKg(cargo.getWeightKg());
-                vo.setReceiverName(cargo.getReceiverName());
-                vo.setReceiverMobile(cargo.getReceiverMobile());
-                vo.setReceiverAddress(cargo.getReceiverAddress());
+            vo.setOrderType(order.getOrderType());
+            if (Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL)) {
+                // 邮快件：取件码/快递单号，收件人取件核销凭证
+                PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
+                if (postal != null) {
+                    vo.setGoodsName(StrUtil.blankToDefault(postal.getMailNo(), "快递"));
+                    vo.setWeightKg(postal.getWeightKg());
+                    vo.setReceiverName(postal.getReceiverName());
+                    vo.setReceiverMobile(postal.getReceiverMobile());
+                    vo.setReceiverAddress(postal.getReceiverAddress());
+                    vo.setMailNo(postal.getMailNo());
+                    vo.setPickupCode(postal.getPickupCode());
+                }
+            } else {
+                CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, order.getId());
+                if (cargo != null) {
+                    vo.setGoodsName(cargo.getGoodsName());
+                    vo.setWeightKg(cargo.getWeightKg());
+                    vo.setReceiverName(cargo.getReceiverName());
+                    vo.setReceiverMobile(cargo.getReceiverMobile());
+                    vo.setReceiverAddress(cargo.getReceiverAddress());
+                }
             }
             return vo;
         }).toList();
@@ -358,12 +384,25 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void pickupConfirm(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
-        // 待调度/已入池/已分配 → 已发车
-        if (!PENDING_STATUSES.contains(order.getStatus())) {
+        // 待调度/已入池/已分配/已发车 → 已发车（depart 已把已分配订单推进为已发车，此处放行已发车实现「先发车后装车」）
+        if (!PICKUP_CONFIRM_STATUSES.contains(order.getStatus())) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
         // 订单归属校验：必须在当前司机已下发/执行中的调度方案明细里
         DispatchPlanItemDO planItem = validateOrderAssignedToDriver(order.getId(), driver.getId());
+        // 货运散件强制司机收件照片（快递总站核对"这是哪家货"的凭证，缺照片不能装车）
+        if (Objects.equals(order.getOrderType(), ORDER_TYPE_CARGO) && StrUtil.isBlank(reqVO.getDriverPhotoUrl())) {
+            throw exception(DRIVER_CARGO_PHOTO_REQUIRED);
+        }
+        if (StrUtil.isNotBlank(reqVO.getDriverPhotoUrl())) {
+            CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, order.getId());
+            if (cargo != null) {
+                CargoOrderDO upd = new CargoOrderDO();
+                upd.setId(cargo.getId());
+                upd.setDriverPhotoUrl(reqVO.getDriverPhotoUrl());
+                cargoOrderMapper.updateById(upd);
+            }
+        }
         Long shiftId = planItem.getShiftId();
         if (shiftId == null) {
             throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
@@ -380,12 +419,12 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (capacity >= 0 && loaded >= capacity) {
             throw exception(DRIVER_CARGO_FULL);
         }
-        // CAS 推进订单状态：仅待处理状态可更新，防重复装车
+        // CAS 推进订单状态：可确认装车状态内更新（已发车订单装车后保持 3，幂等），防非法状态装车
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
         int affected = transportOrderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
                 .eq(TransportOrderDO::getId, order.getId())
-                .in(TransportOrderDO::getStatus, PENDING_STATUSES));
+                .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES));
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
@@ -428,6 +467,43 @@ public class DriverAppServiceImpl implements DriverAppService {
                 shiftExecutionMapper.updateById(loadedUpdate);
             }
         }
+    }
+
+    @Override
+    @Transactional
+    public void pickupVerify(AppDriverOrderActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
+        // 仅邮快件（order_type=3）支持取件核销
+        if (!Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL)) {
+            throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
+        }
+        // 订单归属校验：必须在当前司机已下发/执行中的调度方案明细里
+        validateOrderAssignedToDriver(order.getId(), driver.getId());
+        // 邮快件子表 + 取件码校验（防错领）
+        PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
+        if (postal == null || !Objects.equals(postal.getPickupCode(), reqVO.getPickupCode())) {
+            throw exception(POSTAL_PICKUP_CODE_INVALID);
+        }
+        if (Objects.equals(postal.getPickupStatus(), 1)) {
+            throw exception(POSTAL_ALREADY_PICKED);
+        }
+        // CAS 主表已发车(3) → 已完成(4)，防重复核销
+        TransportOrderDO updateObj = new TransportOrderDO();
+        updateObj.setStatus(TransportOrderStatusEnum.COMPLETED.getStatus());
+        int affected = transportOrderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getId, order.getId())
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.DEPARTED.getStatus()));
+        if (affected == 0) {
+            throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
+        }
+        // 子表核销落库
+        PostalOrderDO upd = new PostalOrderDO();
+        upd.setId(postal.getId());
+        upd.setPickupStatus(1);
+        upd.setPickedUpTime(LocalDateTime.now());
+        upd.setPickerMemberUserId(SecurityFrameworkUtils.getLoginUserId());
+        postalOrderMapper.updateById(upd);
     }
 
     @Override

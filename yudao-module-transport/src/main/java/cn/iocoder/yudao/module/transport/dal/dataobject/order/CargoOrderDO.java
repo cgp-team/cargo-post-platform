@@ -28,8 +28,14 @@ public class CargoOrderDO extends TenantBaseDO {
     private String goodsName;
     /** 货物备注 */
     private String goodsNote;
-    /** 货物照片 */
+    /** 货物照片（村民寄货时拍） */
     private String photoUrl;
+    /** 司机收件照片（装车时强制拍，快递总站核对"这是哪家货"的凭证） */
+    private String driverPhotoUrl;
+    /** 审核状态：0待审核 1已通过 2已拒绝（村民寄货散件需管理端审核） */
+    private Integer auditStatus;
+    /** 拒绝原因（审核拒绝时） */
+    private String rejectReason;
     /** 收货人 */
     private String receiverName;
     /** 收货电话 */

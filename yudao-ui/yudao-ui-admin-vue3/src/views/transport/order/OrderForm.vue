@@ -77,6 +77,15 @@
         <el-form-item label="重量(kg)" prop="postalWeightKg">
           <el-input v-model.number="formData.postalWeightKg" placeholder="请输入重量(kg)" />
         </el-form-item>
+        <el-form-item label="收件人" prop="receiverName">
+          <el-input v-model="formData.receiverName" placeholder="请输入收件人姓名" />
+        </el-form-item>
+        <el-form-item label="收件电话" prop="receiverMobile">
+          <el-input v-model="formData.receiverMobile" placeholder="请输入收件电话" />
+        </el-form-item>
+        <el-form-item label="收件地址" prop="receiverAddress">
+          <el-input v-model="formData.receiverAddress" placeholder="请输入收件地址" />
+        </el-form-item>
       </template>
     </el-form>
     <template #footer>
@@ -120,6 +129,9 @@ const formData = ref<any>({
   carrierCode: '',
   postalItemCount: null,
   postalWeightKg: null,
+  receiverName: '',
+  receiverMobile: '',
+  receiverAddress: '',
 })
 
 const formRules = reactive({
@@ -135,6 +147,7 @@ const resetForm = () => {
     passengerCount: null, contactName: '', contactMobile: '',
     cargoCategory: '', freshFlag: false, cargoItemCount: null, cargoWeightKg: null, cargoVolumeM3: null,
     mailNo: '', carrierCode: '', postalItemCount: null, postalWeightKg: null,
+    receiverName: '', receiverMobile: '', receiverAddress: '',
   }
   formRef.value?.resetFields()
 }

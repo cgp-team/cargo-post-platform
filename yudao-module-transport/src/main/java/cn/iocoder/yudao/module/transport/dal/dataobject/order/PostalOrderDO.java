@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @TableName("transport_postal_order")
 @KeySequence("transport_postal_order_seq")
@@ -23,4 +24,16 @@ public class PostalOrderDO extends TenantBaseDO {
     private String carrierCode;
     private Integer itemCount;
     private BigDecimal weightKg;
+    /** 收件人（快递进村取件核销） */
+    private String receiverName;
+    private String receiverMobile;
+    private String receiverAddress;
+    /** 取件码（6位数字，收件人凭码取件） */
+    private String pickupCode;
+    /** 取件状态：0待取件 1已取件 */
+    private Integer pickupStatus;
+    /** 取件时间 */
+    private LocalDateTime pickedUpTime;
+    /** 核销人会员编号 */
+    private Long pickerMemberUserId;
 }

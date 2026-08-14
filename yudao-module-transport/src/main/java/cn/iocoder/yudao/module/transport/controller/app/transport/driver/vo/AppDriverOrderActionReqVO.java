@@ -15,4 +15,10 @@ public class AppDriverOrderActionReqVO {
     @NotNull(message = "订单编号不能为空")
     private Long orderId;
 
+    @Schema(description = "取件码（pickup-verify 邮快件核销用，6位数字）", example = "123456")
+    private String pickupCode;
+
+    @Schema(description = "司机收件照片URL（pickup-confirm 货运装车强制上传，快递总站核对凭证）")
+    private String driverPhotoUrl;
+
 }

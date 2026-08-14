@@ -87,6 +87,13 @@ public class AppDriverController {
         return success(true);
     }
 
+    @PostMapping("/pickup-verify")
+    @Operation(summary = "取件核销（邮快件收件人取件，司机确认，校验取件码）")
+    public CommonResult<Boolean> pickupVerify(@Valid @RequestBody AppDriverOrderActionReqVO reqVO) {
+        driverAppService.pickupVerify(reqVO);
+        return success(true);
+    }
+
     @PostMapping("/location")
     @Operation(summary = "上报车辆实时位置")
     public CommonResult<Boolean> reportLocation(@Valid @RequestBody AppDriverLocationReqVO reqVO) {

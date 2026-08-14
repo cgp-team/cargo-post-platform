@@ -251,3 +251,105 @@ SET @ddl := IF(
 PREPARE stmt FROM @ddl;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+-- ---------- transport_dispatch_plan_item.order_id：应为可空（场站起止点无订单） ----------
+-- 历史活库该列是 NOT NULL，而手工/智能派单对 DEPART(场站出发)/RETURN(返回场站) 经停不填
+-- order_id（insertPlanItems 对 null orderId 不落该列）→ 插入报 Field 'order_id' doesn't have a
+-- default value。这里同时覆盖「列缺失→ADD」与「列已存在且 NOT NULL→MODIFY」两种情况，幂等安全。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'order_id'
+);
+SET @col_is_nullable := (
+  SELECT IS_NULLABLE FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'order_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `order_id` bigint DEFAULT NULL COMMENT ''订单编号（场站起止点无订单）'' AFTER `shift_id`',
+  IF(@col_is_nullable = 'NO',
+     'ALTER TABLE `transport_dispatch_plan_item` MODIFY COLUMN `order_id` bigint DEFAULT NULL COMMENT ''订单编号（场站起止点无订单）''',
+     'SELECT 1')
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- 取件核销：transport_postal_order 补收件人/取件码/核销字段 ----------
+-- 邮快件（order_type=3）下行快递进村：快递到总站 → 司机取件装车 → 送上门/定点 → 收件人取件核销。
+-- 每列独立 information_schema 守卫，幂等安全。
+
+-- receiver_name 收件人
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='receiver_name');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `receiver_name` varchar(64) NOT NULL DEFAULT '''' COMMENT ''收件人'' AFTER `weight_kg`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- receiver_mobile 收件电话
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='receiver_mobile');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `receiver_mobile` varchar(32) NOT NULL DEFAULT '''' COMMENT ''收件电话'' AFTER `receiver_name`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- receiver_address 收件地址
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='receiver_address');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `receiver_address` varchar(255) NOT NULL DEFAULT '''' COMMENT ''收件地址'' AFTER `receiver_mobile`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- pickup_code 取件码（6位数字，收件人凭码取件）
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='pickup_code');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `pickup_code` varchar(32) NOT NULL DEFAULT '''' COMMENT ''取件码（6位数字，收件人凭码取件）'' AFTER `receiver_address`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- pickup_status 取件状态：0待取件 1已取件
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='pickup_status');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `pickup_status` tinyint NOT NULL DEFAULT 0 COMMENT ''取件状态：0待取件 1已取件'' AFTER `pickup_code`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- picked_up_time 取件时间
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='picked_up_time');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `picked_up_time` datetime DEFAULT NULL COMMENT ''取件时间'' AFTER `pickup_status`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- picker_member_user_id 核销人会员编号
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_postal_order' AND COLUMN_NAME='picker_member_user_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_postal_order` ADD COLUMN `picker_member_user_id` bigint DEFAULT NULL COMMENT ''核销人会员编号'' AFTER `picked_up_time`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------- 货运拍照核对：transport_cargo_order.driver_photo_url ----------
+-- 司机收件装车时强制拍照（快递总站核对"这是哪家货"的凭证）
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='driver_photo_url');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `driver_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机收件照片(装车强制拍，快递总站核对凭证)'' AFTER `photo_url`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------- 货运物品审核：transport_cargo_order.audit_status / reject_reason ----------
+-- 村民寄货散件需管理端审核（危险品/违禁品拒绝运输）；未审核/被拒的货运不能进调度池
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='audit_status');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `audit_status` tinyint NOT NULL DEFAULT 0 COMMENT ''审核状态：0待审核 1已通过 2已拒绝'' AFTER `driver_photo_url`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='reject_reason');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `reject_reason` varchar(255) NOT NULL DEFAULT '''' COMMENT ''拒绝原因(审核拒绝时)'' AFTER `audit_status`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
