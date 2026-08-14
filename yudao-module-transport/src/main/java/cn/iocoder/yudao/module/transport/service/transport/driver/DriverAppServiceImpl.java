@@ -71,6 +71,11 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int EXEC_STATUS_COMPLETED = 1;
     /** 待处理状态集合（待调度/已入池/已分配） */
     private static final List<Integer> PENDING_STATUSES = List.of(0, 1, 2);
+    /** 可确认装车的状态集合（待调度/已入池/已分配/已发车）：
+     *  depart 已把司机名下已分配订单推进为已发车(3)，真实流程「先发车→到站扫码装车」必须放行已发车，
+     *  否则装车永远失败；deliver 仍要求已发车(3)→已完成(4)。已发车订单装车后保持 3，仅累计 loaded_count。
+     *  防重依赖 loaded >= capacity 容量上限兜底（严格防重复装车留待后续）。 */
+    private static final List<Integer> PICKUP_CONFIRM_STATUSES = List.of(0, 1, 2, 3);
 
     private static final Map<Integer, String> SHIFT_STATUS_NAMES = Map.of(0, "未发车", 1, "在途", 2, "已完成");
 
@@ -166,14 +171,15 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (driver == null) {
             return List.of();
         }
-        // 仅返回当前司机已下发/执行中派单明细里的待处理货运订单（与装车/妥投归属校验一致）
+        // 仅返回当前司机已下发/执行中派单明细里可确认装车的货运订单（与装车/妥投归属校验一致）；
+        // 用 PICKUP_CONFIRM_STATUSES 而非 PENDING_STATUSES：depart 后订单已为已发车(3)，发车后仍须可见待装车任务
         Set<Long> assignedOrderIds = listAssignedOrderIds(driver.getId());
         if (assignedOrderIds.isEmpty()) {
             return List.of();
         }
         List<TransportOrderDO> orders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
                 .eq(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO)
-                .in(TransportOrderDO::getStatus, PENDING_STATUSES)
+                .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES)
                 .in(TransportOrderDO::getId, assignedOrderIds)
                 .orderByDesc(TransportOrderDO::getId));
         return orders.stream().map(order -> {
@@ -358,8 +364,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void pickupConfirm(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
-        // 待调度/已入池/已分配 → 已发车
-        if (!PENDING_STATUSES.contains(order.getStatus())) {
+        // 待调度/已入池/已分配/已发车 → 已发车（depart 已把已分配订单推进为已发车，此处放行已发车实现「先发车后装车」）
+        if (!PICKUP_CONFIRM_STATUSES.contains(order.getStatus())) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
         // 订单归属校验：必须在当前司机已下发/执行中的调度方案明细里
@@ -380,12 +386,12 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (capacity >= 0 && loaded >= capacity) {
             throw exception(DRIVER_CARGO_FULL);
         }
-        // CAS 推进订单状态：仅待处理状态可更新，防重复装车
+        // CAS 推进订单状态：可确认装车状态内更新（已发车订单装车后保持 3，幂等），防非法状态装车
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
         int affected = transportOrderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
                 .eq(TransportOrderDO::getId, order.getId())
-                .in(TransportOrderDO::getStatus, PENDING_STATUSES));
+                .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES));
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }

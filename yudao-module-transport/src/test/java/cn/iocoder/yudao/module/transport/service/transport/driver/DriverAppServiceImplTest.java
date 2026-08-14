@@ -338,6 +338,30 @@ class DriverAppServiceImplTest {
     }
 
     @Test
+    void pickupConfirm_departed_order_allowed() {
+        loginMember();
+        stubLoginDriver();
+        // depart 已把司机名下已分配订单推进为已发车(3)，真实流程「先发车→到站扫码装车」必须放行已发车
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(0));
+        when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        driverAppService.pickupConfirm(reqVO);
+
+        // 已发车订单装车后仍保持已发车（loaded 记录 +1），deliver 仍可 3→4
+        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
+        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
+        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+    }
+
+    @Test
     void pickupConfirm_completed_order_throws() {
         loginMember();
         stubLoginDriver();
@@ -562,6 +586,25 @@ class DriverAppServiceImplTest {
         when(transportOrderMapper.selectList(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(1000L).orderNo("TP1000").orderType(2)
                         .status(TransportOrderStatusEnum.ASSIGNED.getStatus()).build()));
+
+        List<AppDriverPickupRespVO> pickups = driverAppService.pickups();
+
+        assertEquals(1, pickups.size());
+        assertEquals(1000L, pickups.get(0).getOrderId());
+    }
+
+    @Test
+    void pickups_returns_departed_order() {
+        loginMember();
+        stubLoginDriver();
+        // 司机发车(depart)后订单已为已发车(3)，待装车列表仍须可见（否则前端扫码装车无入口）
+        when(dispatchPlanItemMapper.selectListByDriverId(DRIVER_ID)).thenReturn(List.of(
+                DispatchPlanItemDO.builder().planId(100L).driverId(DRIVER_ID).orderId(1000L).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build()));
+        when(transportOrderMapper.selectList(any())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1000L).orderNo("TP1000").orderType(2)
+                        .status(TransportOrderStatusEnum.DEPARTED.getStatus()).build()));
 
         List<AppDriverPickupRespVO> pickups = driverAppService.pickups();
 
