@@ -35,3 +35,47 @@
     border-left-color: var(--el-color-primary);
   }
 }
+
+/* ========== 客货邮主题：站牌绿（与小程序"山乡巴士"设计语言呼应） ========== */
+:root {
+  --el-color-primary: #2e7d32;
+  --el-color-primary-light-3: #5b9e5e;
+  --el-color-primary-light-5: #86bb88;
+  --el-color-primary-light-7: #b1d5b2;
+  --el-color-primary-light-8: #c6e0c7;
+  --el-color-primary-light-9: #eaf3ea;
+  --el-color-primary-dark-2: #256427;
+  --el-color-success: #2e7d32;
+  --el-color-warning: #d9a441;
+  --el-color-danger: #c75b2a;
+}
+
+/* 卡片统一圆角与轻阴影 */
+.el-card {
+  border-radius: 12px;
+}
+.el-card.is-always-shadow,
+.el-card.is-hover-shadow:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+
+/* 表格圆角 + 表头浅绿底 */
+.el-table {
+  border-radius: 8px;
+}
+.el-table th.el-table__cell {
+  background-color: #f4f8f4;
+  color: #2b2b28;
+  font-weight: 600;
+}
+
+/* 分页右对齐留白 */
+.el-pagination {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* 主按钮圆角 */
+.el-button--primary {
+  border-radius: 6px;
+}
