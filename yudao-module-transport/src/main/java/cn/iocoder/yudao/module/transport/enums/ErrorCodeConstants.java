@@ -59,4 +59,5 @@ public interface ErrorCodeConstants {
     ErrorCode DRIVER_CARGO_FULL = new ErrorCode(1_005_011_006, "行李舱已满，无法装车");
     ErrorCode DRIVER_STATION_NOT_IN_ROUTE = new ErrorCode(1_005_011_007, "站点不属于该班次线路");
     ErrorCode DRIVER_STATION_ORDER_ILLEGAL = new ErrorCode(1_005_011_008, "到站顺序不合法");
+    ErrorCode DRIVER_VEHICLE_NOT_EXISTS = new ErrorCode(1_005_011_009, "人车绑定记录不存在");
 }
