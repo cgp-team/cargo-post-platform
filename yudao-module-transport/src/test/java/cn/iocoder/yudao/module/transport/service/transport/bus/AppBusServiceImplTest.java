@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.transport.service.transport.bus;
 
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusLineRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
@@ -91,6 +92,80 @@ class AppBusServiceImplTest {
         when(shiftMapper.selectList()).thenReturn(List.of());
 
         assertTrue(appBusService.getRealtimeBuses().isEmpty());
+    }
+
+    @Test
+    void realtimeBuses_carries_position_for_map() {
+        MonitoringVehicleRespVO vehicle = new MonitoringVehicleRespVO();
+        vehicle.setVehicleId(7L);
+        vehicle.setPlateNo("川A·5201");
+        vehicle.setShiftCode("SH001");
+        vehicle.setRouteName("县城—青山镇线");
+        vehicle.setStatus(1);
+        vehicle.setProgress(40);
+        vehicle.setLongitude(103.1234567);
+        vehicle.setLatitude(30.7654321);
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(vehicle));
+        when(monitoringService.getMapData()).thenReturn(new MonitoringMapDataRespVO());
+        when(shiftMapper.selectList()).thenReturn(List.of(
+                ShiftDO.builder().shiftCode("SH001").plannedDurationMinutes(50).build()));
+
+        AppBusRespVO vo = appBusService.getRealtimeBuses().get(0);
+
+        assertEquals(103.1234567, vo.getLongitude());
+        assertEquals(30.7654321, vo.getLatitude());
+    }
+
+    @Test
+    void lines_groups_points_and_buses_by_route() {
+        MonitoringVehicleRespVO vehicle = new MonitoringVehicleRespVO();
+        vehicle.setVehicleId(7L);
+        vehicle.setPlateNo("川A·5201");
+        vehicle.setShiftCode("SH001");
+        vehicle.setRouteName("县城—青山镇线");
+        vehicle.setStatus(1);
+        vehicle.setProgress(50);
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(vehicle));
+        when(shiftMapper.selectList()).thenReturn(List.of(
+                ShiftDO.builder().shiftCode("SH001").plannedDurationMinutes(50).build()));
+
+        MonitoringMapDataRespVO mapData = new MonitoringMapDataRespVO();
+        MonitoringMapDataRespVO.Route route = new MonitoringMapDataRespVO.Route();
+        route.setId(3L);
+        route.setRouteCode("C302");
+        route.setRouteName("县城—青山镇线");
+        route.setDistanceKm(25.5);
+        MonitoringMapDataRespVO.Point start = new MonitoringMapDataRespVO.Point();
+        start.setSequenceNo(1);
+        start.setStationId(1L);
+        start.setStationName("县城客运中心");
+        start.setLongitude(103.0);
+        start.setLatitude(30.0);
+        MonitoringMapDataRespVO.Point end = new MonitoringMapDataRespVO.Point();
+        end.setSequenceNo(2);
+        end.setStationId(2L);
+        end.setStationName("青山镇站");
+        end.setLongitude(103.5);
+        end.setLatitude(30.5);
+        route.setPoints(List.of(start, end));
+        mapData.setRoutes(List.of(route));
+        when(monitoringService.getMapData()).thenReturn(mapData);
+
+        List<AppBusLineRespVO> lines = appBusService.getLines();
+
+        assertEquals(1, lines.size());
+        AppBusLineRespVO line = lines.get(0);
+        assertEquals(3L, line.getRouteId());
+        assertEquals("C302", line.getRouteCode());
+        assertEquals("县城客运中心", line.getStartStation());
+        assertEquals("青山镇站", line.getEndStation());
+        assertEquals(25.5, line.getDistanceKm());
+        assertEquals(2, line.getPoints().size());
+        assertEquals(1L, line.getPoints().get(0).getStationId());
+        assertEquals("县城客运中心", line.getPoints().get(0).getStationName());
+        // 该线车辆聚合
+        assertEquals(1, line.getBuses().size());
+        assertEquals("川A·5201", line.getBuses().get(0).getPlateNo());
     }
 
 }
