@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.transport.service.transport.bus;
 
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusLineRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
@@ -56,6 +57,8 @@ public class AppBusServiceImpl implements AppBusService {
                     }
                     vo.setStatus(v.getStatus());
                     vo.setNextStation(v.getNextStationName());
+                    vo.setLongitude(v.getLongitude());
+                    vo.setLatitude(v.getLatitude());
                     vo.setProgress(v.getProgress());
                     vo.setSpeedKmh(v.getSpeedKmh());
                     // ETA = 剩余进度占比 × 班次计划时长（向下取整至少 1 分钟）
@@ -64,6 +67,43 @@ public class AppBusServiceImpl implements AppBusService {
                     vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
                     return vo;
                 }).toList();
+    }
+
+    @Override
+    public List<AppBusLineRespVO> getLines() {
+        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
+        List<AppBusRespVO> buses = getRealtimeBuses();
+        // 线路名称 → 在线车辆（无线路的车辆不计入）
+        Map<String, List<AppBusRespVO>> busesByRoute = buses.stream()
+                .filter(b -> b.getRouteName() != null)
+                .collect(Collectors.groupingBy(AppBusRespVO::getRouteName));
+        if (mapData.getRoutes() == null) {
+            return List.of();
+        }
+        return mapData.getRoutes().stream().map(route -> {
+            AppBusLineRespVO vo = new AppBusLineRespVO();
+            vo.setRouteId(route.getId());
+            vo.setRouteCode(route.getRouteCode());
+            vo.setRouteName(route.getRouteName());
+            vo.setDistanceKm(route.getDistanceKm());
+            List<MonitoringMapDataRespVO.Point> points = route.getPoints() == null ? List.of() : route.getPoints();
+            vo.setPoints(points.stream().map(p -> {
+                AppBusLineRespVO.Point point = new AppBusLineRespVO.Point();
+                point.setSequenceNo(p.getSequenceNo());
+                point.setStationId(p.getStationId());
+                point.setStationName(p.getStationName());
+                point.setLongitude(p.getLongitude());
+                point.setLatitude(p.getLatitude());
+                point.setPlannedMinutes(p.getPlannedMinutes());
+                return point;
+            }).toList());
+            if (!points.isEmpty()) {
+                vo.setStartStation(points.get(0).getStationName());
+                vo.setEndStation(points.get(points.size() - 1).getStationName());
+            }
+            vo.setBuses(busesByRoute.getOrDefault(route.getRouteName(), List.of()));
+            return vo;
+        }).toList();
     }
 
 }
