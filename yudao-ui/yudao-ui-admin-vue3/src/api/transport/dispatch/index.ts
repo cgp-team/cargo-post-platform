@@ -69,6 +69,48 @@ export interface DispatchSmartPlanReqVO {
   algorithmConfig?: Record<string, any>
 }
 
+/** 智能派单前约束校验请求 */
+export interface DispatchValidateReqVO {
+  depotStationId: number
+  vehicleIds: number[]
+}
+
+/** 智能派单前约束校验响应 */
+export interface DispatchValidateRespVO {
+  orderStats?: {
+    passengerCount?: number
+    deliveryCount?: number
+    pickupCount?: number
+    parcelCount?: number
+  }
+  vehicles?: {
+    vehicleId?: number
+    plateNo?: string
+    passengerCapacity?: number
+    cargoCapacity?: number
+  }[]
+  capacityCheck?: {
+    totalPassengerCapacity?: number
+    totalCargoCapacity?: number
+    passengerExceed?: number
+    cargoExceed?: number
+    overCapacity?: boolean
+  }
+  markers?: {
+    stationId?: number
+    stationName?: string
+    longitude?: number
+    latitude?: number
+    types?: string[]
+    orderCount?: number
+  }[]
+  timeSeqIssues?: {
+    orderId?: number
+    orderNo?: string
+    issue?: string
+  }[]
+}
+
 /** 方案审核请求 */
 export interface DispatchPlanReviewReqVO {
   planId: number
@@ -104,6 +146,11 @@ export const createSmartPlan = (data: DispatchSmartPlanReqVO): Promise<number> =
   return request.post({ url: '/transport/dispatch/plan/smart', data })
 }
 
+/** 智能派单前约束校验（订单统计/运力预警/站点标记/时序检查） */
+export const validateDispatch = (data: DispatchValidateReqVO): Promise<DispatchValidateRespVO> => {
+  return request.post({ url: '/transport/dispatch/validate', data })
+}
+
 /** 分页查询调度方案 */
 export const getDispatchPlanPage = (params: PageParam & { status?: number; mode?: number; createTime?: string[] }) => {
   return request.get({ url: '/transport/dispatch/plan/page', params })
@@ -122,4 +169,30 @@ export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
 /** 发车核验 */
 export const checkDeparture = (data: DispatchCheckReqVO) => {
   return request.post({ url: '/transport/dispatch/departure-check', data })
+}
+
+/** 返程结算请求 */
+export interface DispatchSettlementReqVO {
+  batchStart: string
+  batchEnd: string
+}
+
+/** 返程结算响应 */
+export interface DispatchSettlementRespVO {
+  totalDistance?: number
+  passengerCount?: number
+  parcelCount?: number
+  avgPassengerWaitMinutes?: number
+  perVehicle?: {
+    vehicleId?: number
+    plateNo?: string
+    runCount?: number
+    passengerCount?: number
+    parcelCount?: number
+  }[]
+}
+
+/** 返程结算（已完成方案里程/乘客/包裹/分车汇总） */
+export const getDispatchSettlement = (params: DispatchSettlementReqVO): Promise<DispatchSettlementRespVO> => {
+  return request.get({ url: '/transport/dispatch/settlement', params })
 }

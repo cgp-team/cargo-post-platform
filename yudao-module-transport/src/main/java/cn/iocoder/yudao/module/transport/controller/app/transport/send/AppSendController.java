@@ -4,13 +4,23 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
+import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.StationSimpleRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendArrangementRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderRespVO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
@@ -24,7 +34,9 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 import static cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
@@ -38,6 +50,10 @@ public class AppSendController {
     @Resource private TransportOrderService transportOrderService;
     @Resource private StationService stationService;
     @Resource private PostalOrderMapper postalOrderMapper;
+    @Resource private TransportOrderMapper transportOrderMapper;
+    @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
+    @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private VehicleMapper vehicleMapper;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -68,6 +84,51 @@ public class AppSendController {
     @PermitAll
     public CommonResult<List<StationSimpleRespVO>> stations() {
         return success(BeanUtils.toBean(stationService.getSimpleList(), StationSimpleRespVO.class));
+    }
+
+    @GetMapping("/arrangements")
+    @Operation(summary = "我的乘车安排（客运订单已分配/已发车/已完成，含承运车辆与方案，供村民到站通知）")
+    public CommonResult<List<AppSendArrangementRespVO>> arrangements() {
+        Long userId = getLoginUserId();
+        List<TransportOrderDO> orders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getMemberUserId, userId)
+                .eq(TransportOrderDO::getOrderType, 1)
+                .in(TransportOrderDO::getStatus, TransportOrderStatusEnum.ASSIGNED.getStatus(),
+                        TransportOrderStatusEnum.DEPARTED.getStatus(), TransportOrderStatusEnum.COMPLETED.getStatus())
+                .orderByDesc(TransportOrderDO::getId));
+        if (orders.isEmpty()) {
+            return success(List.of());
+        }
+        Map<Long, String> stationNameMap = stationService.getSimpleList().stream()
+                .collect(Collectors.toMap(StationDO::getId, StationDO::getStationName, (a, b) -> a));
+        return success(orders.stream().map(order -> {
+            AppSendArrangementRespVO vo = new AppSendArrangementRespVO();
+            vo.setOrderId(order.getId());
+            vo.setOrderNo(order.getOrderNo());
+            vo.setStatus(order.getStatus());
+            vo.setStatusName(TransportOrderStatusEnum.nameOf(order.getStatus()));
+            vo.setBoardingStationId(order.getPickupStationId());
+            vo.setBoardingStationName(stationNameMap.get(order.getPickupStationId()));
+            vo.setAlightingStationId(order.getDeliveryStationId());
+            vo.setAlightingStationName(stationNameMap.get(order.getDeliveryStationId()));
+            // 承运车辆与方案：取该订单在调度方案明细中的首条（方案下发后村民可见）
+            DispatchPlanItemDO item = dispatchPlanItemMapper.selectList(DispatchPlanItemDO::getOrderId, order.getId())
+                    .stream().findFirst().orElse(null);
+            if (item != null) {
+                vo.setPlanId(item.getPlanId());
+                DispatchPlanDO plan = dispatchPlanMapper.selectById(item.getPlanId());
+                if (plan != null) {
+                    vo.setPlanStatus(plan.getStatus());
+                }
+                if (item.getVehicleId() != null) {
+                    VehicleDO vehicle = vehicleMapper.selectById(item.getVehicleId());
+                    if (vehicle != null) {
+                        vo.setVehiclePlateNo(vehicle.getPlateNo());
+                    }
+                }
+            }
+            return vo;
+        }).toList());
     }
 
     private AppSendOrderRespVO toRespVO(TransportOrderDO order) {

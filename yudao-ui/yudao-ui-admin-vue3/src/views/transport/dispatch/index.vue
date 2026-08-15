@@ -162,23 +162,159 @@
     </template>
   </Dialog>
 
-  <!-- 智能派单弹窗 -->
-  <Dialog title="智能派单" v-model="smartVisible" width="500px">
-    <el-form ref="smartFormRef" :model="smartForm" :rules="smartRules" label-width="120px" v-loading="smartLoading">
-      <el-form-item label="场站" prop="depotStationId">
-        <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%">
-          <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="可用车辆" prop="vehicleIds">
-        <el-select v-model="smartForm.vehicleIds" placeholder="请选择车辆(最多 3 台)" multiple :multiple-limit="3" style="width:100%">
-          <el-option v-for="v in vehicleList" :key="v.id!" :label="v.plateNo" :value="v.id!" />
-        </el-select>
-      </el-form-item>
-    </el-form>
+  <!-- 智能派单弹窗（两步：约束校验 → 算法参数） -->
+  <Dialog title="智能派单" v-model="smartVisible" width="720px">
+    <el-steps :active="smartStep" finish-status="success" align-center style="margin-bottom:16px">
+      <el-step title="约束校验" />
+      <el-step title="算法参数" />
+    </el-steps>
+
+    <!-- 第 1 步：约束校验 / 运力预警 -->
+    <div v-show="smartStep === 0" v-loading="smartLoading">
+      <el-form :model="smartForm" label-width="100px">
+        <el-form-item label="场站">
+          <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%">
+            <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="可用车辆">
+          <el-select v-model="smartForm.vehicleIds" placeholder="请选择车辆(最多 3 台)" multiple :multiple-limit="3" style="width:100%">
+            <el-option v-for="v in vehicleList" :key="v.id!" :label="v.plateNo" :value="v.id!" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button
+            type="primary"
+            :loading="smartLoading"
+            :disabled="!smartForm.depotStationId || smartForm.vehicleIds.length === 0"
+            @click="runValidate"
+          >
+            开始校验
+          </el-button>
+        </el-form-item>
+      </el-form>
+
+      <template v-if="validateResult">
+        <!-- 运力不足预警 -->
+        <el-alert
+          v-if="validateResult.capacityCheck?.overCapacity"
+          type="error"
+          :closable="false"
+          show-icon
+          title="运力不足预警"
+          :description="`本时段乘客 ${validateResult.orderStats?.passengerCount ?? 0} 人(上限 ${validateResult.capacityCheck?.totalPassengerCapacity})、包裹 ${validateResult.orderStats?.parcelCount ?? 0} 件(上限 ${validateResult.capacityCheck?.totalCargoCapacity})，单车单趟无法一次性完成全部业务`"
+          style="margin-bottom:12px"
+        />
+        <el-alert
+          v-else
+          type="success"
+          :closable="false"
+          show-icon
+          title="运力充足"
+          :description="`乘客 ${validateResult.orderStats?.passengerCount ?? 0} 人 / 包裹 ${validateResult.orderStats?.parcelCount ?? 0} 件，当前车辆均可容纳`"
+          style="margin-bottom:12px"
+        />
+
+        <!-- 订单统计三栏 -->
+        <div class="validate-stats">
+          <div class="stat-item">
+            <div class="stat-num">{{ validateResult.orderStats?.passengerCount ?? 0 }}</div>
+            <div class="stat-label">乘车需求(人)</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-num">{{ validateResult.orderStats?.pickupCount ?? 0 }}</div>
+            <div class="stat-label">揽收(件)</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-num">{{ validateResult.orderStats?.deliveryCount ?? 0 }}</div>
+            <div class="stat-label">派送(件)</div>
+          </div>
+        </div>
+
+        <!-- 车辆容量 -->
+        <el-table
+          v-if="validateResult.vehicles?.length"
+          :data="validateResult.vehicles"
+          size="small"
+          border
+          style="margin-top:12px"
+        >
+          <el-table-column label="车牌" prop="plateNo" align="center" />
+          <el-table-column label="载客上限" prop="passengerCapacity" align="center" />
+          <el-table-column label="载货上限" prop="cargoCapacity" align="center" />
+        </el-table>
+
+        <!-- 站点作业标记（上车绿点/下车红点/派送/揽收） -->
+        <div v-if="validateResult.markers?.length" class="marker-list">
+          <div class="marker-item" v-for="m in validateResult.markers" :key="m.stationId">
+            <span class="marker-dots">
+              <i v-for="t in m.types" :key="t" :class="markerDotClass(t)">{{ markerDotText(t) }}</i>
+            </span>
+            <span class="marker-name">{{ m.stationName ?? m.stationId }} · {{ m.orderCount }}单</span>
+          </div>
+        </div>
+
+        <!-- 客运时序问题 -->
+        <el-alert
+          v-if="validateResult.timeSeqIssues?.length"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="客运时序问题"
+          :description="validateResult.timeSeqIssues!.map((i) => `${i.orderNo}:${i.issue}`).join('；')"
+          style="margin-top:12px"
+        />
+
+        <div style="margin-top:16px; text-align:right">
+          <el-button v-if="validateResult.capacityCheck?.overCapacity" type="primary" disabled>
+            运力不足，请增派车辆或调整订单
+          </el-button>
+          <el-button v-else type="primary" @click="smartStep = 1">运力充足，下一步</el-button>
+        </div>
+      </template>
+    </div>
+
+    <!-- 第 2 步：算法参数 -->
+    <div v-show="smartStep === 1">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="蚁群算法(ACO)参数"
+        description="全部可选，不填使用算法默认值(ant_count=30, max_iterations=100, alpha=1.0, beta=3.0, rho=0.1, Q=100, convergence_threshold=20)"
+        style="margin-bottom:12px"
+      />
+      <el-form :model="acoForm" label-width="150px">
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="蚂蚁种群数量"><el-input-number v-model="acoForm.ant_count" :min="1" :max="500" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="最大迭代次数"><el-input-number v-model="acoForm.max_iterations" :min="1" :max="10000" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="信息素因子 α"><el-input-number v-model="acoForm.alpha" :min="0" :max="10" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="启发因子 β"><el-input-number v-model="acoForm.beta" :min="0" :max="20" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="挥发系数 ρ"><el-input-number v-model="acoForm.rho" :min="0" :max="1" :step="0.01" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="信息素增量 Q"><el-input-number v-model="acoForm.Q" :min="1" :max="10000" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="收敛判定阈值"><el-input-number v-model="acoForm.convergence_threshold" :min="1" :max="100" controls-position="right" style="width:100%" /></el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+    </div>
+
     <template #footer>
       <el-button @click="smartVisible = false">取 消</el-button>
-      <el-button type="primary" :loading="smartLoading" @click="submitSmart">确 定</el-button>
+      <el-button v-if="smartStep === 1" @click="smartStep = 0">上一步</el-button>
+      <el-button v-if="smartStep === 1" type="primary" :loading="smartLoading" @click="submitSmart">提交规划</el-button>
     </template>
   </Dialog>
 
@@ -431,31 +567,60 @@ const submitManual = async () => {
   }
 }
 
-/** 智能派单 */
+/** 智能派单（两步：约束校验 → 算法参数） */
 const smartVisible = ref(false)
 const smartLoading = ref(false)
-const smartFormRef = ref()
+const smartStep = ref(0)
 const smartForm = ref<{ depotStationId?: number; vehicleIds: number[] }>({
   depotStationId: undefined,
   vehicleIds: [],
 })
-const smartRules = reactive({
-  depotStationId: [{ required: true, message: '请选择场站', trigger: 'change' }],
-  vehicleIds: [{ required: true, type: 'array', min: 1, message: '请选择车辆', trigger: 'change' }],
+const validateResult = ref<DispatchApi.DispatchValidateRespVO>()
+const acoForm = reactive<Record<string, number | undefined>>({
+  ant_count: undefined,
+  max_iterations: undefined,
+  alpha: undefined,
+  beta: undefined,
+  rho: undefined,
+  Q: undefined,
+  convergence_threshold: undefined,
 })
 const openSmart = () => {
   smartForm.value = { depotStationId: undefined, vehicleIds: [] }
+  validateResult.value = undefined
+  smartStep.value = 0
+  Object.keys(acoForm).forEach((k) => (acoForm[k] = undefined))
   smartVisible.value = true
 }
-const submitSmart = async () => {
-  const valid = await smartFormRef.value?.validate()
-  if (!valid) return
+/** 第 1 步：约束校验 / 运力预警 */
+const runValidate = async () => {
+  if (!smartForm.value.depotStationId || smartForm.value.vehicleIds.length === 0) return
   smartLoading.value = true
-  // 失败时由框架统一弹出后端错误信息,弹窗保持打开可再次提交
   try {
+    validateResult.value = await DispatchApi.validateDispatch({
+      depotStationId: smartForm.value.depotStationId!,
+      vehicleIds: smartForm.value.vehicleIds,
+    })
+  } finally {
+    smartLoading.value = false
+  }
+}
+/** 站点作业标记：动作 → 文案/样式（上车绿点/下车红点/派送揽收金色） */
+const markerDotText = (t: string) => (t === 'BOARD' ? '上' : t === 'ALIGHT' ? '下' : t === 'DELIVER' ? '派' : '揽')
+const markerDotClass = (t: string) =>
+  t === 'BOARD' ? 'dot-green' : t === 'ALIGHT' ? 'dot-red' : 'dot-gold'
+/** 第 2 步：提交规划（ACO 参数为空则不传，用算法默认值） */
+const submitSmart = async () => {
+  smartLoading.value = true
+  try {
+    const algorithmConfig = Object.entries(acoForm).reduce<Record<string, number>>((acc, [k, v]) => {
+      if (v !== undefined && v !== null) acc[k] = v
+      return acc
+    }, {})
     const planId = await DispatchApi.createSmartPlan({
       depotStationId: smartForm.value.depotStationId!,
       vehicleIds: smartForm.value.vehicleIds,
+      algorithmConfig: Object.keys(algorithmConfig).length ? algorithmConfig : undefined,
     })
     message.success(`智能派单成功,方案号:${planId}`)
     smartVisible.value = false
@@ -573,3 +738,70 @@ onMounted(() => {
   loadSimpleLists()
 })
 </script>
+
+<style lang="scss" scoped>
+.validate-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+.stat-item {
+  flex: 1;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  padding: 12px 8px;
+  text-align: center;
+}
+.stat-num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--el-color-primary);
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+.marker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.marker-item {
+  display: inline-flex;
+  align-items: center;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.marker-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: 6px;
+}
+.marker-dots i {
+  font-style: normal;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.marker-dots .dot-green {
+  background: var(--el-color-success);
+}
+.marker-dots .dot-red {
+  background: var(--el-color-danger);
+}
+.marker-dots .dot-gold {
+  background: var(--el-color-warning);
+}
+.marker-name {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+</style>
