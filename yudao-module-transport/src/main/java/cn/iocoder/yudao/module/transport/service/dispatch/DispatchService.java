@@ -47,6 +47,18 @@ public interface DispatchService {
     void departureCheck(DispatchCheckReqVO reqVO);
 
     /**
+     * 智能派单前约束校验：订单池按类别统计 + 车辆容量对比 + 站点作业标记 + 客运时序检查，
+     * 输出运力不足预警（对应故事「约束校验/运力预警」环节，规划前主动校验）。
+     */
+    DispatchValidateRespVO validate(DispatchValidateReqVO reqVO);
+
+    /**
+     * 返程结算：按日期区间汇总已完成方案的里程、乘客数、包裹量、乘客平均等待与分车统计
+     * （对应故事「返程结算/运营报表」环节）。
+     */
+    DispatchSettlementRespVO settlement(DispatchSettlementReqVO reqVO);
+
+    /**
      * 获得调度方案（含经停明细）
      */
     DispatchPlanRespVO getPlan(Long id);
