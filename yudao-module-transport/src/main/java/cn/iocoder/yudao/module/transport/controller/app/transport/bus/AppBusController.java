@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.controller.app.transport.bus;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusLineRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.service.transport.bus.AppBusService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,9 +27,16 @@ public class AppBusController {
 
     @GetMapping("/realtime")
     @PermitAll
-    @Operation(summary = "实时公交列表（含线路起终点/下一站/ETA）")
+    @Operation(summary = "实时公交列表（含线路起终点/下一站/ETA/位置）")
     public CommonResult<List<AppBusRespVO>> realtime() {
         return success(appBusService.getRealtimeBuses());
+    }
+
+    @GetMapping("/lines")
+    @PermitAll
+    @Operation(summary = "实时公交线路（含经停点与该线在线车辆，供车来了式地图+列表）")
+    public CommonResult<List<AppBusLineRespVO>> lines() {
+        return success(appBusService.getLines());
     }
 
 }

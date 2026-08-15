@@ -84,6 +84,68 @@
       </el-col>
     </el-row>
 
+    <!-- 返程结算（运营报表） -->
+    <el-card shadow="never" class="stat-card">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-700">返程结算 · 运营报表</span>
+          <div>
+            <el-date-picker
+              v-model="settleRange"
+              type="datetimerange"
+              range-separator="至"
+              start-placeholder="开始时间"
+              end-placeholder="结束时间"
+              value-format="YYYY-MM-DD HH:mm:ss"
+              style="width: 340px"
+            />
+            <el-button type="primary" class="ml-8px" :loading="settleLoading" @click="loadSettlement">查询</el-button>
+          </div>
+        </div>
+      </template>
+      <template v-if="settlement">
+        <el-row :gutter="16">
+          <el-col :md="6" :sm="12" :xs="24">
+            <div class="settle-item">
+              <div class="text-gray-500 text-sm">总行驶里程(km)</div>
+              <div class="text-2xl font-bold mt-1">{{ Number(settlement.totalDistance ?? 0).toFixed(2) }}</div>
+            </div>
+          </el-col>
+          <el-col :md="6" :sm="12" :xs="24">
+            <div class="settle-item">
+              <div class="text-gray-500 text-sm">服务乘客</div>
+              <div class="text-2xl font-bold mt-1">{{ settlement.passengerCount ?? 0 }} 人</div>
+            </div>
+          </el-col>
+          <el-col :md="6" :sm="12" :xs="24">
+            <div class="settle-item">
+              <div class="text-gray-500 text-sm">包裹收发量</div>
+              <div class="text-2xl font-bold mt-1">{{ settlement.parcelCount ?? 0 }} 件</div>
+            </div>
+          </el-col>
+          <el-col :md="6" :sm="12" :xs="24">
+            <div class="settle-item">
+              <div class="text-gray-500 text-sm">乘客平均等待</div>
+              <div class="text-2xl font-bold mt-1">{{ settlement.avgPassengerWaitMinutes ?? '-' }} 分钟</div>
+            </div>
+          </el-col>
+        </el-row>
+        <el-table
+          v-if="settlement.perVehicle?.length"
+          :data="settlement.perVehicle"
+          size="small"
+          border
+          style="margin-top:12px"
+        >
+          <el-table-column label="车牌" prop="plateNo" align="center" />
+          <el-table-column label="承运方案数" prop="runCount" align="center" />
+          <el-table-column label="载客总数" prop="passengerCount" align="center" />
+          <el-table-column label="包裹收发量" prop="parcelCount" align="center" />
+        </el-table>
+        <el-empty v-else :image-size="80" description="该区间暂无已完成方案" />
+      </template>
+    </el-card>
+
     <!-- 图表区 -->
     <el-row :gutter="16" class="mt-16px">
       <el-col :md="12" :xs="24">
@@ -138,6 +200,8 @@ import {
   type DashboardSummaryVO,
   type OrderStatisticsVO
 } from '@/api/transport/dashboard'
+import { getDispatchSettlement, type DispatchSettlementRespVO } from '@/api/transport/dispatch'
+import { formatDate } from '@/utils/formatTime'
 
 defineOptions({ name: 'TransportDashboard' })
 
@@ -147,6 +211,32 @@ const loading = ref(true)
 const stats = ref<Record<string, number>>({})
 const summary = ref<Partial<DashboardSummaryVO>>({})
 const orderStats = ref<OrderStatisticsVO>({ typeDistribution: [], statusDistribution: [], dailyTrend: [] })
+
+// 返程结算
+const settleRange = ref<[string, string]>(['', ''])
+const settleLoading = ref(false)
+const settlement = ref<DispatchSettlementRespVO>()
+const loadSettlement = async () => {
+  if (!settleRange.value?.[0] || !settleRange.value?.[1]) {
+    useMessage().warning('请选择结算时间区间')
+    return
+  }
+  settleLoading.value = true
+  try {
+    settlement.value = await getDispatchSettlement({
+      batchStart: settleRange.value[0],
+      batchEnd: settleRange.value[1]
+    })
+  } finally {
+    settleLoading.value = false
+  }
+}
+/** 默认结算区间 = 今天 00:00 ~ 当前 */
+const initSettleRange = () => {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)
+  settleRange.value = [formatDate(start), formatDate(now)]
+}
 
 const quickLinks = [
   { label: '实时监控', path: '/transport/monitoring/map', icon: 'ep:map-location' },
@@ -248,11 +338,21 @@ const loadAll = async () => {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  loadAll()
+  initSettleRange()
+  loadSettlement()
+})
 </script>
 
 <style scoped>
 .stat-card {
   margin-bottom: 16px;
+}
+.settle-item {
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
 }
 </style>

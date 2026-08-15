@@ -31,6 +31,12 @@ public class AppBusRespVO {
     @Schema(description = "下一站名称")
     private String nextStation;
 
+    @Schema(description = "经度（供地图标记车辆位置）")
+    private Double longitude;
+
+    @Schema(description = "纬度（供地图标记车辆位置）")
+    private Double latitude;
+
     @Schema(description = "预计到站分钟数（由进度与班次计划时长估算）")
     private Integer etaMinutes;
 
