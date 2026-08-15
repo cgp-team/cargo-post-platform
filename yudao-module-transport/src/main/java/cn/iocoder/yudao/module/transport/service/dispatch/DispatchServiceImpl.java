@@ -34,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -125,9 +126,11 @@ public class DispatchServiceImpl implements DispatchService {
                     stops.add(buildStop(order.getPickupStationId(), algorithmOrderId, AlgorithmRouteStopDTO.ACTION_BOARD));
                     stops.add(buildStop(order.getDeliveryStationId(), algorithmOrderId, AlgorithmRouteStopDTO.ACTION_ALIGHT));
                 }
-            } else { // 货运/邮快件：派送
-                stops.add(buildStop(order.getDeliveryStationId(), String.valueOf(order.getId()),
-                        AlgorithmRouteStopDTO.ACTION_DELIVER));
+            } else { // 货运/邮快件：终点为场站 → 揽收(村→场站)，否则 → 派送(场站→村)
+                boolean isPickup = Objects.equals(order.getDeliveryStationId(), depot.getId());
+                stops.add(buildStop(isPickup ? order.getPickupStationId() : order.getDeliveryStationId(),
+                        String.valueOf(order.getId()),
+                        isPickup ? AlgorithmRouteStopDTO.ACTION_PICKUP : AlgorithmRouteStopDTO.ACTION_DELIVER));
             }
         }
         stops.add(buildStop(depot.getId(), null, AlgorithmRouteStopDTO.ACTION_RETURN));
@@ -287,6 +290,206 @@ public class DispatchServiceImpl implements DispatchService {
         return dispatchPlanMapper.selectPage(reqVO);
     }
 
+    @Override
+    public DispatchValidateRespVO validate(DispatchValidateReqVO reqVO) {
+        // 订单池（与智能派单取数一致：已入池订单）
+        List<TransportOrderDO> pooledOrders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
+        StationDO depot = validateDepotExists(reqVO.getDepotStationId());
+        List<VehicleDO> vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
+        Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
+                .collect(Collectors.toMap(StationDO::getId, java.util.function.Function.identity()));
+
+        // 订单统计 + 站点作业标记 + 客运时序检查
+        DispatchValidateRespVO.OrderStats stats = new DispatchValidateRespVO.OrderStats();
+        stats.setPassengerCount(0);
+        stats.setDeliveryCount(0);
+        stats.setPickupCount(0);
+        stats.setParcelCount(0);
+        Map<Long, DispatchValidateRespVO.Marker> markerMap = new LinkedHashMap<>();
+        List<DispatchValidateRespVO.TimeSeqIssue> issues = new ArrayList<>();
+        for (TransportOrderDO order : pooledOrders) {
+            if (Objects.equals(order.getOrderType(), 1)) { // 客运
+                stats.setPassengerCount(stats.getPassengerCount() + getPassengerCount(order));
+                addMarker(markerMap, order.getPickupStationId(), AlgorithmRouteStopDTO.ACTION_BOARD, stationMap);
+                addMarker(markerMap, order.getDeliveryStationId(), AlgorithmRouteStopDTO.ACTION_ALIGHT, stationMap);
+                if (order.getPickupStationId() == null || order.getDeliveryStationId() == null) {
+                    issues.add(timeSeqIssue(order, "上车站或下车站缺失"));
+                } else if (Objects.equals(order.getPickupStationId(), order.getDeliveryStationId())) {
+                    issues.add(timeSeqIssue(order, "上车站与下车站相同，先上后下时序无法成立"));
+                }
+            } else { // 货运/邮快件：下车站为场站 → 揽收(村→场站)，否则 → 派送(场站→村)
+                boolean isPickup = Objects.equals(order.getDeliveryStationId(), depot.getId());
+                if (isPickup) {
+                    stats.setPickupCount(stats.getPickupCount() + 1);
+                    addMarker(markerMap, order.getPickupStationId(), AlgorithmRouteStopDTO.ACTION_PICKUP, stationMap);
+                } else {
+                    stats.setDeliveryCount(stats.getDeliveryCount() + 1);
+                    addMarker(markerMap, order.getDeliveryStationId(), AlgorithmRouteStopDTO.ACTION_DELIVER, stationMap);
+                }
+                stats.setParcelCount(stats.getParcelCount() + getItemCount(order));
+            }
+        }
+
+        // 运力校验：总容量 vs 总需求，超出即预警
+        DispatchValidateRespVO.CapacityCheck capacityCheck = new DispatchValidateRespVO.CapacityCheck();
+        int passengerCapacity = vehicles.stream()
+                .mapToInt(v -> v.getPassengerCapacity() != null ? v.getPassengerCapacity() : 0).sum();
+        int cargoCapacity = vehicles.stream()
+                .mapToInt(v -> v.getCargoCapacity() != null ? v.getCargoCapacity() : 0).sum();
+        capacityCheck.setTotalPassengerCapacity(passengerCapacity);
+        capacityCheck.setTotalCargoCapacity(cargoCapacity);
+        capacityCheck.setPassengerExceed(Math.max(0, stats.getPassengerCount() - passengerCapacity));
+        capacityCheck.setCargoExceed(Math.max(0, stats.getParcelCount() - cargoCapacity));
+        capacityCheck.setOverCapacity(capacityCheck.getPassengerExceed() > 0 || capacityCheck.getCargoExceed() > 0);
+
+        List<DispatchValidateRespVO.VehicleItem> vehicleItems = vehicles.stream().map(v -> {
+            DispatchValidateRespVO.VehicleItem item = new DispatchValidateRespVO.VehicleItem();
+            item.setVehicleId(v.getId());
+            item.setPlateNo(v.getPlateNo());
+            item.setPassengerCapacity(v.getPassengerCapacity());
+            item.setCargoCapacity(v.getCargoCapacity());
+            return item;
+        }).toList();
+
+        DispatchValidateRespVO respVO = new DispatchValidateRespVO();
+        respVO.setOrderStats(stats);
+        respVO.setVehicles(vehicleItems);
+        respVO.setCapacityCheck(capacityCheck);
+        respVO.setMarkers(markerMap.values().stream().toList());
+        respVO.setTimeSeqIssues(issues);
+        return respVO;
+    }
+
+    /** 聚合站点作业标记：同站多个动作去重，订单数累加 */
+    private void addMarker(Map<Long, DispatchValidateRespVO.Marker> markerMap, Long stationId, String action,
+                           Map<Long, StationDO> stationMap) {
+        if (stationId == null) {
+            return;
+        }
+        DispatchValidateRespVO.Marker marker = markerMap.computeIfAbsent(stationId, k -> {
+            DispatchValidateRespVO.Marker m = new DispatchValidateRespVO.Marker();
+            m.setStationId(k);
+            StationDO station = stationMap.get(k);
+            m.setStationName(station != null ? station.getStationName() : null);
+            m.setLongitude(station != null ? toDouble(station.getLongitude()) : null);
+            m.setLatitude(station != null ? toDouble(station.getLatitude()) : null);
+            m.setTypes(new ArrayList<>());
+            m.setOrderCount(0);
+            return m;
+        });
+        if (!marker.getTypes().contains(action)) {
+            marker.getTypes().add(action);
+        }
+        marker.setOrderCount(marker.getOrderCount() + 1);
+    }
+
+    private DispatchValidateRespVO.TimeSeqIssue timeSeqIssue(TransportOrderDO order, String issue) {
+        DispatchValidateRespVO.TimeSeqIssue item = new DispatchValidateRespVO.TimeSeqIssue();
+        item.setOrderId(order.getId());
+        item.setOrderNo(order.getOrderNo());
+        item.setIssue(issue);
+        return item;
+    }
+
+    private static Double toDouble(BigDecimal value) {
+        return value != null ? value.doubleValue() : null;
+    }
+
+    @Override
+    public DispatchSettlementRespVO settlement(DispatchSettlementReqVO reqVO) {
+        // 已完成方案（返程结算口径：方案状态=3 已完成）
+        List<DispatchPlanDO> plans = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
+                .eq(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.COMPLETED.getStatus())
+                .between(DispatchPlanDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
+        DispatchSettlementRespVO respVO = new DispatchSettlementRespVO();
+        if (plans.isEmpty()) {
+            respVO.setTotalDistance(BigDecimal.ZERO);
+            respVO.setPassengerCount(0);
+            respVO.setParcelCount(0);
+            respVO.setAvgPassengerWaitMinutes(null);
+            respVO.setPerVehicle(List.of());
+            return respVO;
+        }
+        List<Long> planIds = plans.stream().map(DispatchPlanDO::getId).toList();
+        Map<Long, DispatchPlanDO> planMap = plans.stream()
+                .collect(Collectors.toMap(DispatchPlanDO::getId, java.util.function.Function.identity()));
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .in(DispatchPlanItemDO::getPlanId, planIds));
+
+        // 总里程
+        BigDecimal totalDistance = plans.stream()
+                .map(DispatchPlanDO::getTotalDistance).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // 经停明细 → 订单、订单所属车辆/方案
+        Map<Long, Long> orderVehicleMap = new HashMap<>();
+        Map<Long, Long> orderPlanMap = new HashMap<>();
+        Set<Long> orderIds = new HashSet<>();
+        for (DispatchPlanItemDO item : items) {
+            if (item.getOrderId() != null) {
+                orderVehicleMap.putIfAbsent(item.getOrderId(), item.getVehicleId());
+                orderPlanMap.putIfAbsent(item.getOrderId(), item.getPlanId());
+                orderIds.add(item.getOrderId());
+            }
+        }
+        Map<Long, TransportOrderDO> orderMap = new HashMap<>();
+        if (!orderIds.isEmpty()) {
+            orderMapper.selectBatchIds(orderIds).forEach(o -> orderMap.put(o.getId(), o));
+        }
+
+        // 汇总乘客/包裹与平均等待
+        Map<Long, Integer> vehiclePassenger = new HashMap<>();
+        Map<Long, Integer> vehicleParcel = new HashMap<>();
+        Map<Long, Set<Long>> vehiclePlans = new HashMap<>();
+        int passengerCount = 0;
+        int parcelCount = 0;
+        List<Double> waits = new ArrayList<>();
+        for (DispatchPlanItemDO item : items) {
+            if (item.getVehicleId() != null && item.getPlanId() != null) {
+                vehiclePlans.computeIfAbsent(item.getVehicleId(), k -> new HashSet<>()).add(item.getPlanId());
+            }
+        }
+        for (TransportOrderDO order : orderMap.values()) {
+            Long vehicleId = orderVehicleMap.get(order.getId());
+            if (Objects.equals(order.getOrderType(), 1)) { // 客运
+                int count = getPassengerCount(order);
+                passengerCount += count;
+                vehiclePassenger.merge(vehicleId, count, Integer::sum);
+                // 平均等待：下单 → 方案创建（近似）
+                Long planId = orderPlanMap.get(order.getId());
+                DispatchPlanDO plan = planId != null ? planMap.get(planId) : null;
+                if (order.getCreateTime() != null && plan != null && plan.getCreateTime() != null) {
+                    waits.add((double) Duration.between(order.getCreateTime(), plan.getCreateTime()).toMinutes());
+                }
+            } else { // 货运/邮快件
+                int count = getItemCount(order);
+                parcelCount += count;
+                vehicleParcel.merge(vehicleId, count, Integer::sum);
+            }
+        }
+        // 分车汇总
+        List<DispatchSettlementRespVO.VehicleSettlement> perVehicle = vehiclePlans.entrySet().stream()
+                .map(e -> {
+                    DispatchSettlementRespVO.VehicleSettlement vs = new DispatchSettlementRespVO.VehicleSettlement();
+                    vs.setVehicleId(e.getKey());
+                    VehicleDO vehicle = vehicleMapper.selectById(e.getKey());
+                    vs.setPlateNo(vehicle != null ? vehicle.getPlateNo() : null);
+                    vs.setRunCount(e.getValue().size());
+                    vs.setPassengerCount(vehiclePassenger.getOrDefault(e.getKey(), 0));
+                    vs.setParcelCount(vehicleParcel.getOrDefault(e.getKey(), 0));
+                    return vs;
+                }).toList();
+
+        respVO.setTotalDistance(totalDistance);
+        respVO.setPassengerCount(passengerCount);
+        respVO.setParcelCount(parcelCount);
+        respVO.setAvgPassengerWaitMinutes(waits.isEmpty() ? null
+                : Math.round(waits.stream().mapToDouble(Double::doubleValue).average().orElse(0) * 10) / 10.0);
+        respVO.setPerVehicle(perVehicle);
+        return respVO;
+    }
+
     // ==================== 私有方法 ====================
 
     private StationDO validateDepotExists(Long depotStationId) {
@@ -350,7 +553,7 @@ public class DispatchServiceImpl implements DispatchService {
                         .build())
                 .collect(Collectors.toList());
         List<AlgorithmOrderDTO> orderDTOs = orders.stream()
-                .map(this::toAlgorithmOrders).flatMap(List::stream).collect(Collectors.toList());
+                .map(order -> toAlgorithmOrders(order, depot.getId())).flatMap(List::stream).collect(Collectors.toList());
 
         LocalDateTime[] batch = currentBatch();
         return AlgorithmPlanReqDTO.builder()
@@ -373,8 +576,9 @@ public class DispatchServiceImpl implements DispatchService {
                 .build();
     }
 
-    /** 订单映射为算法订单：客运按乘客数拆单（一张算法客运单 = 1 人），货运/邮快件 -> DELIVERY */
-    private List<AlgorithmOrderDTO> toAlgorithmOrders(TransportOrderDO order) {
+    /** 订单映射为算法订单：客运按乘客数拆单（一张算法客运单 = 1 人）；
+     *  货运/邮快件按下车站是否为场站区分：场站→站点为派送(DELIVERY)，站点→场站为揽收(PICKUP)。 */
+    private List<AlgorithmOrderDTO> toAlgorithmOrders(TransportOrderDO order, Long depotStationId) {
         if (Objects.equals(order.getOrderType(), 1)) { // 客运
             List<AlgorithmOrderDTO> result = new ArrayList<>();
             for (String algorithmOrderId : passengerAlgorithmOrderIds(order)) {
@@ -387,6 +591,16 @@ public class DispatchServiceImpl implements DispatchService {
             }
             return result;
         }
+        // 揽收：村→场站（收货站为场站），算法经停上车站点并装载
+        if (depotStationId != null && Objects.equals(order.getDeliveryStationId(), depotStationId)) {
+            return Collections.singletonList(AlgorithmOrderDTO.builder()
+                    .orderId(String.valueOf(order.getId()))
+                    .orderType(AlgorithmOrderDTO.TYPE_PICKUP)
+                    .stationId(String.valueOf(order.getPickupStationId()))
+                    .itemCount(getItemCount(order))
+                    .build());
+        }
+        // 派送：场站→村
         return Collections.singletonList(AlgorithmOrderDTO.builder()
                 .orderId(String.valueOf(order.getId()))
                 .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)

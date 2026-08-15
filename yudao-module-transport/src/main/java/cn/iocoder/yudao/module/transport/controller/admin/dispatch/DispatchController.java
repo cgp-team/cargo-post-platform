@@ -53,6 +53,13 @@ public class DispatchController {
         return success(dispatchService.createSmartPlan(reqVO));
     }
 
+    @PostMapping("/validate")
+    @Operation(summary = "智能派单前约束校验（订单统计/运力预警/站点作业标记/客运时序检查）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:smart-plan')")
+    public CommonResult<DispatchValidateRespVO> validate(@Valid @RequestBody DispatchValidateReqVO reqVO) {
+        return success(dispatchService.validate(reqVO));
+    }
+
     @GetMapping("/plan/page")
     @Operation(summary = "获得调度方案分页")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
@@ -82,6 +89,13 @@ public class DispatchController {
     public CommonResult<Boolean> departureCheck(@Valid @RequestBody DispatchCheckReqVO reqVO) {
         dispatchService.departureCheck(reqVO);
         return success(true);
+    }
+
+    @GetMapping("/settlement")
+    @Operation(summary = "返程结算（已完成方案里程/乘客/包裹/分车汇总）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<DispatchSettlementRespVO> settlement(@Valid DispatchSettlementReqVO reqVO) {
+        return success(dispatchService.settlement(reqVO));
     }
 
 }

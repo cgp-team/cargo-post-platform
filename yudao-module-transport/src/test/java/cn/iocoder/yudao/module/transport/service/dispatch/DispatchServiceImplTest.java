@@ -5,6 +5,7 @@ import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
@@ -33,6 +34,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -269,6 +271,161 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_maps_collection_cargo_to_pickup() {
+        // 货运订单终点=场站(1) → 算法订单应映射为 PICKUP(上车站 13)，件数透传
+        TransportOrderDO pooled = TransportOrderDO.builder().id(1L).orderType(2)
+                .pickupStationId(13L).deliveryStationId(1L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(pooled));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(4).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(13L).build()));
+        // 注：cargoOrderMapper 不显式桩（selectList(SFunction,Object) 的类匹配对方法引用不可靠），
+        // getItemCount 命中空列表 → 件数取默认 1
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasiblePickupResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(101L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        AlgorithmOrderDTO order = reqCaptor.getValue().getOrders().get(0);
+        assertEquals(AlgorithmOrderDTO.TYPE_PICKUP, order.getOrderType());
+        assertEquals("13", order.getStationId());
+        assertEquals(1, order.getItemCount()); // 未桩件数 → 默认 1
+    }
+
+    @Test
+    void validate_reports_capacity_markers_and_time_issues() {
+        // 订单池：2 客运(各1人) + 1 货运(终点=场站→揽收) + 1 邮快件(终点=村→派送)
+        TransportOrderDO p1 = TransportOrderDO.builder().id(1L).orderNo("P1").orderType(1)
+                .pickupStationId(11L).deliveryStationId(12L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO p2 = TransportOrderDO.builder().id(2L).orderNo("P2").orderType(1)
+                .pickupStationId(11L).deliveryStationId(11L) // 上/下同站 → 时序问题
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO pickup = TransportOrderDO.builder().id(3L).orderNo("C1").orderType(2)
+                .pickupStationId(13L).deliveryStationId(1L) // 终点=场站 → 揽收
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO delivery = TransportOrderDO.builder().id(4L).orderNo("M1").orderType(3)
+                .pickupStationId(1L).deliveryStationId(14L) // 终点=村 → 派送
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any())).thenReturn(List.of(p1, p2, pickup, delivery));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).plateNo("川A·1").passengerCapacity(5).cargoCapacity(4).build()));
+        when(stationMapper.selectList()).thenReturn(List.of(
+                StationDO.builder().id(11L).stationName("S11")
+                        .longitude(new BigDecimal("103.1")).latitude(new BigDecimal("30.1")).build(),
+                StationDO.builder().id(12L).stationName("S12").build(),
+                StationDO.builder().id(13L).stationName("S13").build(),
+                StationDO.builder().id(14L).stationName("S14").build()));
+        when(passengerOrderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                PassengerOrderDO.builder().orderId(1L).passengerCount(1).build(),
+                PassengerOrderDO.builder().orderId(2L).passengerCount(1).build()));
+        // 注：cargo/postal 子表不显式桩，getItemCount 默认每件 1，包裹总数 = 2
+
+        DispatchValidateReqVO reqVO = new DispatchValidateReqVO();
+        reqVO.setDepotStationId(1L);
+        reqVO.setVehicleIds(Collections.singletonList(7L));
+        DispatchValidateRespVO resp = dispatchService.validate(reqVO);
+
+        assertEquals(2, resp.getOrderStats().getPassengerCount());
+        assertEquals(1, resp.getOrderStats().getPickupCount());   // C1 终点=场站 → 揽收
+        assertEquals(1, resp.getOrderStats().getDeliveryCount()); // M1 终点=村 → 派送
+        assertEquals(2, resp.getOrderStats().getParcelCount());
+        // 运力：载客 5 ≥ 2、载货 4 ≥ 2 → 不预警
+        assertFalse(resp.getCapacityCheck().getOverCapacity());
+        assertEquals(0, resp.getCapacityCheck().getPassengerExceed());
+        assertEquals(0, resp.getCapacityCheck().getCargoExceed());
+        // 时序问题：P2 上/下同站
+        assertEquals(1, resp.getTimeSeqIssues().size());
+        assertEquals("P2", resp.getTimeSeqIssues().get(0).getOrderNo());
+        // 站点标记：S11 上车(2单)+下车(1单，p2 上下同站)、S12 下车、S13 揽收、S14 派送
+        assertEquals(4, resp.getMarkers().size());
+        assertEquals(3, resp.getMarkers().get(0).getOrderCount());
+        assertEquals(List.of("BOARD", "ALIGHT"), resp.getMarkers().get(0).getTypes());
+        assertEquals(List.of("PICKUP"), resp.getMarkers().get(2).getTypes());
+    }
+
+    @Test
+    void validate_warns_when_over_capacity() {
+        TransportOrderDO p = TransportOrderDO.builder().id(1L).orderNo("P1").orderType(1)
+                .pickupStationId(11L).deliveryStationId(12L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any())).thenReturn(List.of(p));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(2).cargoCapacity(1).build()));
+        when(stationMapper.selectList()).thenReturn(List.of(
+                StationDO.builder().id(11L).build(), StationDO.builder().id(12L).build()));
+        when(passengerOrderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                PassengerOrderDO.builder().orderId(1L).passengerCount(3).build()));
+
+        DispatchValidateReqVO reqVO = new DispatchValidateReqVO();
+        reqVO.setDepotStationId(1L);
+        reqVO.setVehicleIds(Collections.singletonList(7L));
+        DispatchValidateRespVO resp = dispatchService.validate(reqVO);
+
+        // 载客 3 > 2 → 超员 1，运力不足预警
+        assertTrue(resp.getCapacityCheck().getOverCapacity());
+        assertEquals(1, resp.getCapacityCheck().getPassengerExceed());
+    }
+
+    @Test
+    void settlement_aggregates_completed_plans() {
+        LocalDateTime start = LocalDateTime.of(2026, 8, 9, 10, 0);
+        LocalDateTime end = LocalDateTime.of(2026, 8, 9, 10, 30);
+        // 已完成方案：1 张，里程 12.5，含 1 客运(2人) + 1 货运
+        DispatchPlanDO plan = DispatchPlanDO.builder().id(100L).totalDistance(new BigDecimal("12.5"))
+                .status(DispatchPlanStatusEnum.COMPLETED.getStatus()).build();
+        plan.setCreateTime(LocalDateTime.of(2026, 8, 9, 10, 5));
+        when(dispatchPlanMapper.selectList(any(Wrapper.class))).thenReturn(List.of(plan));
+        when(dispatchPlanItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                DispatchPlanItemDO.builder().planId(100L).vehicleId(7L).orderId(1L).build(),
+                DispatchPlanItemDO.builder().planId(100L).vehicleId(7L).orderId(2L).build()));
+        TransportOrderDO passengerOrder = TransportOrderDO.builder().id(1L).orderType(1).build();
+        passengerOrder.setCreateTime(LocalDateTime.of(2026, 8, 9, 10, 0));
+        when(orderMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                passengerOrder,
+                TransportOrderDO.builder().id(2L).orderType(2).build()));
+        when(passengerOrderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                PassengerOrderDO.builder().orderId(1L).passengerCount(2).build()));
+        when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).plateNo("川A·5201").build());
+
+        DispatchSettlementReqVO reqVO = new DispatchSettlementReqVO();
+        reqVO.setBatchStart(start);
+        reqVO.setBatchEnd(end);
+        DispatchSettlementRespVO resp = dispatchService.settlement(reqVO);
+
+        assertEquals(0, new BigDecimal("12.5").compareTo(resp.getTotalDistance()));
+        assertEquals(2, resp.getPassengerCount());
+        assertEquals(1, resp.getParcelCount()); // 货运未桩件数 → 默认 1
+        assertEquals(5.0, resp.getAvgPassengerWaitMinutes()); // 下单 10:00 → 方案 10:05 = 5 分钟
+        assertEquals(1, resp.getPerVehicle().size());
+        assertEquals("川A·5201", resp.getPerVehicle().get(0).getPlateNo());
+        assertEquals(2, resp.getPerVehicle().get(0).getPassengerCount());
+        assertEquals(1, resp.getPerVehicle().get(0).getRunCount());
+    }
+
+    @Test
+    void settlement_empty_when_no_completed_plan() {
+        when(dispatchPlanMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+        DispatchSettlementReqVO reqVO = new DispatchSettlementReqVO();
+        reqVO.setBatchStart(LocalDateTime.of(2026, 8, 9, 10, 0));
+        reqVO.setBatchEnd(LocalDateTime.of(2026, 8, 9, 10, 30));
+        DispatchSettlementRespVO resp = dispatchService.settlement(reqVO);
+        assertEquals(0, new BigDecimal("0").compareTo(resp.getTotalDistance()));
+        assertEquals(0, resp.getPassengerCount());
+        assertTrue(resp.getPerVehicle().isEmpty());
+    }
+
+    @Test
     void createManualPlan_splits_passenger_order_and_maps_back_business_id() {
         TransportOrderDO pooled = TransportOrderDO.builder().id(1L).orderType(1)
                 .pickupStationId(11L).deliveryStationId(12L)
@@ -340,6 +497,23 @@ class DispatchServiceImplTest {
                 .totalDistance(12.5)
                 .vehiclePlans(List.of(AlgorithmVehiclePlanDTO.builder()
                         .vehicleId(7L).stops(stops).totalDistance(12.5).build()))
+                .build();
+    }
+
+    /** 揽收场景可行解：DEPART@1 -> PICKUP@13 -> RETURN@1 */
+    private AlgorithmPlanRespDTO feasiblePickupResult() {
+        List<AlgorithmRouteStopDTO> stops = List.of(
+                AlgorithmRouteStopDTO.builder().stationId("1").action(AlgorithmRouteStopDTO.ACTION_DEPART).build(),
+                AlgorithmRouteStopDTO.builder().stationId("13").orderId("1").action(AlgorithmRouteStopDTO.ACTION_PICKUP).build(),
+                AlgorithmRouteStopDTO.builder().stationId("1").action(AlgorithmRouteStopDTO.ACTION_RETURN).build());
+        return AlgorithmPlanRespDTO.builder()
+                .requestId("req-2")
+                .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
+                .algorithmVersion("algo-1.0")
+                .parameterVersion("param-1.0")
+                .totalDistance(9.0)
+                .vehiclePlans(List.of(AlgorithmVehiclePlanDTO.builder()
+                        .vehicleId(7L).stops(stops).totalDistance(9.0).build()))
                 .build();
     }
 
