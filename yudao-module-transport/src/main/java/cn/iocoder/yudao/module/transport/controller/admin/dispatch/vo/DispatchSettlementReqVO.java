@@ -13,12 +13,12 @@ import static cn.iocoder.yudao.framework.common.util.date.DateUtils.FORMAT_YEAR_
 @Data
 public class DispatchSettlementReqVO {
 
-    @Schema(description = "结算起始时间", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "结算起始时间（需早于结束时间）", requiredMode = Schema.RequiredMode.REQUIRED)
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @NotNull(message = "起始时间不能为空")
     private LocalDateTime batchStart;
 
-    @Schema(description = "结算结束时间", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "结算结束时间（需晚于起始时间）", requiredMode = Schema.RequiredMode.REQUIRED)
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @NotNull(message = "结束时间不能为空")
     private LocalDateTime batchEnd;

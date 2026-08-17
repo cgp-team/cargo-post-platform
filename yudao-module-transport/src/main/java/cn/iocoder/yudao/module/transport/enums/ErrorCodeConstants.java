@@ -66,4 +66,5 @@ public interface ErrorCodeConstants {
     ErrorCode POSTAL_ALREADY_PICKED = new ErrorCode(1_005_013_001, "该件已取件");
     // Cargo Audit（货运物品审核）
     ErrorCode CARGO_AUDIT_ONLY_CARGO = new ErrorCode(1_005_014_000, "仅货运订单需要审核");
+    ErrorCode CARGO_AUDIT_STATUS_ILLEGAL = new ErrorCode(1_005_014_001, "订单当前状态不允许审核");
 }

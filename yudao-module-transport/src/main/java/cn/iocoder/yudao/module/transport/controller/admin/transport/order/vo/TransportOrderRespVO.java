@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Schema(description = "管理后台 - 订单 Response VO")
@@ -25,6 +26,8 @@ public class TransportOrderRespVO extends TransportOrderBaseVO {
     private String goodsName;
     @Schema(description = "货物备注")
     private String goodsNote;
+    @Schema(description = "货物重量（kg）")
+    private BigDecimal cargoWeightKg;
     @Schema(description = "货物照片（村民寄货拍）")
     private String photoUrl;
     @Schema(description = "司机收件照片（装车强制拍，快递总站核对凭证）")

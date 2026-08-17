@@ -30,8 +30,12 @@ public class AppBusServiceImpl implements AppBusService {
 
     @Override
     public List<AppBusRespVO> getRealtimeBuses() {
+        return getRealtimeBuses(monitoringService.getMapData());
+    }
+
+    /** 实时公交列表（地图数据由调用方加载，供 getLines 复用避免重复加载） */
+    private List<AppBusRespVO> getRealtimeBuses(MonitoringMapDataRespVO mapData) {
         List<MonitoringVehicleRespVO> vehicles = monitoringService.getRealtimeVehicles();
-        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
         // 线路名称 → 线路（取起点/终点站名）
         Map<String, MonitoringMapDataRespVO.Route> routeByName = mapData.getRoutes() == null ? Map.of()
                 : mapData.getRoutes().stream().collect(Collectors.toMap(
@@ -72,7 +76,7 @@ public class AppBusServiceImpl implements AppBusService {
     @Override
     public List<AppBusLineRespVO> getLines() {
         MonitoringMapDataRespVO mapData = monitoringService.getMapData();
-        List<AppBusRespVO> buses = getRealtimeBuses();
+        List<AppBusRespVO> buses = getRealtimeBuses(mapData); // 复用同一份地图数据，不重复加载
         // 线路名称 → 在线车辆（无线路的车辆不计入）
         Map<String, List<AppBusRespVO>> busesByRoute = buses.stream()
                 .filter(b -> b.getRouteName() != null)

@@ -16,7 +16,7 @@ public class OrderAuditReqVO {
     @NotNull(message = "审核结论不能为空")
     private Boolean pass;
 
-    @Schema(description = "拒绝原因（拒绝时必填，如危险品/违禁品）", example = "疑似易燃易爆物品")
+    @Schema(description = "拒绝原因（拒绝时必填，如危险品/违禁品；仅待调度/已入池且未审核的订单可审）", example = "疑似易燃易爆物品")
     private String rejectReason;
 
 }

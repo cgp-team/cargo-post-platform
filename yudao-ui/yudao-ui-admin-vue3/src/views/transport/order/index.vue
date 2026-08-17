@@ -103,7 +103,7 @@
         <span v-else>无</span>
       </el-form-item>
       <el-form-item label="货物信息">
-        <span>{{ auditRow.goodsName || '-' }} · {{ auditRow.weightKg ? auditRow.weightKg + 'kg' : '-' }} · {{ auditRow.goodsNote || '无备注' }}</span>
+        <span>{{ auditRow.goodsName || '-' }} · {{ auditRow.cargoWeightKg ? auditRow.cargoWeightKg + 'kg' : '-' }} · {{ auditRow.goodsNote || '无备注' }}</span>
       </el-form-item>
       <el-form-item label="收件信息">
         <span>{{ auditRow.receiverName || '-' }} {{ auditRow.receiverMobile || '' }}</span>
@@ -160,9 +160,9 @@ const handleDelete = async (id: number) => {
 // 货运物品审核
 const auditVisible = ref(false)
 const auditLoading = ref(false)
-const auditRow = ref<any>({})
+const auditRow = ref<OrderApi.OrderVO>({})
 const auditForm = ref<{ rejectReason: string }>({ rejectReason: '' })
-const openAudit = (row: any) => {
+const openAudit = (row: OrderApi.OrderVO) => {
   auditRow.value = row
   auditForm.value = { rejectReason: '' }
   auditVisible.value = true
@@ -174,7 +174,7 @@ const submitAudit = async (pass: boolean) => {
   }
   auditLoading.value = true
   try {
-    await OrderApi.auditOrder({ orderId: auditRow.value.id, pass, rejectReason: auditForm.value.rejectReason })
+    await OrderApi.auditOrder({ orderId: auditRow.value.id!, pass, rejectReason: auditForm.value.rejectReason })
     message.success(pass ? '审核通过' : '已拒绝该订单')
     auditVisible.value = false
     getList()
