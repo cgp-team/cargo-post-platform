@@ -418,6 +418,25 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle_location` (
   UNIQUE KEY `uk_vehicle_location_vehicle` (`vehicle_id`, `tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='车辆最新位置表（每车一行，司机端上报 upsert）';
 
+-- ---------- 车辆位置历史轨迹表 ----------
+CREATE TABLE IF NOT EXISTS `transport_vehicle_location_track` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '轨迹编号',
+  `vehicle_id` bigint NOT NULL COMMENT '车辆编号',
+  `shift_id` bigint DEFAULT NULL COMMENT '班次编号',
+  `longitude` decimal(10,7) NOT NULL COMMENT '经度',
+  `latitude` decimal(10,7) NOT NULL COMMENT '纬度',
+  `speed_kmh` decimal(6,1) DEFAULT NULL COMMENT '速度(km/h)',
+  `report_time` datetime NOT NULL COMMENT '上报时间',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_vehicle_time` (`vehicle_id`, `report_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='车辆位置历史轨迹表（班次在途时按上报落库）';
+
 -- ---------- 平台公告表 ----------
 CREATE TABLE IF NOT EXISTS `transport_notice` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '公告编号',
