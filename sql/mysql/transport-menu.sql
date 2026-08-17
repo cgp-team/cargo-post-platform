@@ -134,6 +134,10 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6893, '订单完成', 'transport:product-order:complete', 3, 3, 6891, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Operation（运维客服）
+(6900, '运维客服', '', 1, 12, 6800, 'operation', 'ep:service', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6901, '意见反馈', 'transport:feedback:query', 2, 1, 6900, 'feedback', '', 'transport/operation/feedback/index', 'TransportOperationFeedback', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6902, '反馈回复', 'transport:feedback:reply', 3, 2, 6901, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 -- Notice（平台公告）
 (6910, '公告管理', 'transport:notice:query', 2, 13, 6800, 'notice', 'ep:bell', 'transport/notice/index', 'TransportNotice', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6911, '公告新增', 'transport:notice:create', 3, 1, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
