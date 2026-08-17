@@ -213,7 +213,7 @@ const summary = ref<Partial<DashboardSummaryVO>>({})
 const orderStats = ref<OrderStatisticsVO>({ typeDistribution: [], statusDistribution: [], dailyTrend: [] })
 
 // 返程结算
-const settleRange = ref<[string, string]>(['', ''])
+const settleRange = ref<[string, string] | null>(['', ''])
 const settleLoading = ref(false)
 const settlement = ref<DispatchSettlementRespVO>()
 const loadSettlement = async () => {

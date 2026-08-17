@@ -26,4 +26,12 @@ public interface DriverVehicleMapper extends BaseMapperX<DriverVehicleDO> {
                 .isNull(DriverVehicleDO::getUnbindTime));
     }
 
+    /** 查询车辆当前有效绑定（绑定中且未解绑） */
+    default List<DriverVehicleDO> selectActiveByVehicleId(Long vehicleId) {
+        return selectList(new LambdaQueryWrapperX<DriverVehicleDO>()
+                .eq(DriverVehicleDO::getVehicleId, vehicleId)
+                .eq(DriverVehicleDO::getStatus, 1)
+                .isNull(DriverVehicleDO::getUnbindTime));
+    }
+
 }

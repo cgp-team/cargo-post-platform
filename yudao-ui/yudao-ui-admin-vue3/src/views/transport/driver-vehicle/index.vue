@@ -26,9 +26,9 @@
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="司机姓名" prop="driverName" align="center" width="120" />
         <el-table-column label="车牌号" prop="plateNo" align="center" width="140" />
-        <el-table-column label="绑定时间" prop="bindTime" align="center" width="180" />
+        <el-table-column label="绑定时间" prop="bindTime" align="center" width="180" :formatter="dateFormatter" />
         <el-table-column label="解绑时间" prop="unbindTime" align="center" width="180">
-          <template #default="scope">{{ scope.row.unbindTime || '—' }}</template>
+          <template #default="scope">{{ scope.row.unbindTime ? formatDate(scope.row.unbindTime) : '—' }}</template>
         </el-table-column>
         <el-table-column label="状态" prop="status" align="center" width="100">
           <template #default="scope">
@@ -77,6 +77,7 @@ import type { VehicleVO } from '@/api/transport/vehicle'
 import * as DriverVehicleApi from '@/api/transport/driver-vehicle'
 import * as DriverApi from '@/api/transport/driver'
 import * as VehicleApi from '@/api/transport/vehicle'
+import { dateFormatter, formatDate } from '@/utils/formatTime'
 defineOptions({ name: 'TransportDriverVehicle' })
 const message = useMessage()
 const loading = ref(true)
@@ -103,7 +104,7 @@ const getList = async () => {
     loading.value = false
   }
 }
-const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
+const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, driverId: undefined, status: undefined }); getList() }
 
 // 绑定
 const bindVisible = ref(false)
@@ -137,7 +138,7 @@ const submitBind = async () => {
     bindLoading.value = false
   }
 }
-const handleUnbind = async (row: any) => {
+const handleUnbind = async (row: DriverVehicleVO) => {
   try {
     await message.confirm(`确认解绑 ${row.driverName} 与 ${row.plateNo} 的绑定？`)
     await DriverVehicleApi.unbindDriverVehicle(row.id)

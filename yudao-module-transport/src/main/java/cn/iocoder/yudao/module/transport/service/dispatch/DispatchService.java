@@ -53,8 +53,8 @@ public interface DispatchService {
     DispatchValidateRespVO validate(DispatchValidateReqVO reqVO);
 
     /**
-     * 返程结算：按日期区间汇总已完成方案的里程、乘客数、包裹量、乘客平均等待与分车统计
-     * （对应故事「返程结算/运营报表」环节）。
+     * 返程结算：按日期区间汇总执行中/已完成方案的里程、乘客数、包裹量、乘客平均等待与分车统计
+     * （对应故事「返程结算/运营报表」环节；方案 COMPLETED 流转留待后续迭代）。
      */
     DispatchSettlementRespVO settlement(DispatchSettlementReqVO reqVO);
 

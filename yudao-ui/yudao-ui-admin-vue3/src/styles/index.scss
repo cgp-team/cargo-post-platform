@@ -37,14 +37,8 @@
 }
 
 /* ========== 客货邮主题：站牌绿（与小程序"山乡巴士"设计语言呼应） ========== */
+/* 主题色 --el-color-primary 由运行时主题系统注入（appStore 默认 #2e7d32，内联样式优先于样式表），此处仅覆盖辅助色 */
 :root {
-  --el-color-primary: #2e7d32;
-  --el-color-primary-light-3: #5b9e5e;
-  --el-color-primary-light-5: #86bb88;
-  --el-color-primary-light-7: #b1d5b2;
-  --el-color-primary-light-8: #c6e0c7;
-  --el-color-primary-light-9: #eaf3ea;
-  --el-color-primary-dark-2: #256427;
   --el-color-success: #2e7d32;
   --el-color-warning: #d9a441;
   --el-color-danger: #c75b2a;

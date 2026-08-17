@@ -22,7 +22,6 @@ interface AppState {
   size: boolean
   locale: boolean
   message: boolean
-  im: boolean
   tagsView: boolean
   tagsViewImmerse: boolean
   tagsViewIcon: boolean
@@ -61,7 +60,6 @@ export const useAppStore = defineStore('app', {
       size: true, // 尺寸图标
       locale: true, // 多语言图标
       message: true, // 消息图标
-      im: true, //IM即时通讯图标
       tagsView: true, // 标签页
       tagsViewImmerse: false, // 标签页沉浸
       tagsViewIcon: true, // 是否显示标签图标
@@ -76,7 +74,7 @@ export const useAppStore = defineStore('app', {
       currentSize: wsCache.get('default') || 'default', // 组件尺寸
       theme: wsCache.get(CACHE_KEY.THEME) || {
         // 主题色
-        elColorPrimary: '#409eff',
+        elColorPrimary: '#2e7d32',
         // 左侧菜单边框颜色
         leftMenuBorderColor: 'inherit',
         // 左侧菜单背景颜色
@@ -133,9 +131,6 @@ export const useAppStore = defineStore('app', {
     },
     getMessage(): boolean {
       return this.message
-    },
-    getIm(): boolean {
-      return this.im
     },
     getTagsView(): boolean {
       return this.tagsView
@@ -250,9 +245,6 @@ export const useAppStore = defineStore('app', {
     },
     setMessage(message: boolean) {
       this.message = message
-    },
-    setIm(im: boolean) {
-      this.im = im
     },
     setTagsView(tagsView: boolean) {
       this.tagsView = tagsView

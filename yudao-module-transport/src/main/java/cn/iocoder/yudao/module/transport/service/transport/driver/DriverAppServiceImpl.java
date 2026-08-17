@@ -249,10 +249,9 @@ public class DriverAppServiceImpl implements DriverAppService {
 
     @Override
     public List<AppDriverTaskRespVO> tasks(Long driverId) {
-        if (driverId == null) {
-            return List.of();
-        }
-        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectListByDriverId(driverId);
+        // 归属校验：司机身份从登录态解析，客户端 driverId 仅做一致性校验，防越权查看他人任务
+        DriverDO driver = requireCurrentDriver(driverId);
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectListByDriverId(driver.getId());
         if (items.isEmpty()) {
             return List.of();
         }
@@ -440,6 +439,10 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void deliver(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
+        // 邮快件不走妥投：由收件人凭取件码核销（pickup-verify）
+        if (Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL)) {
+            throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
+        }
         // 已发车 → 已完成
         if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.DEPARTED.getStatus())) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
@@ -479,7 +482,7 @@ public class DriverAppServiceImpl implements DriverAppService {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
         // 订单归属校验：必须在当前司机已下发/执行中的调度方案明细里
-        validateOrderAssignedToDriver(order.getId(), driver.getId());
+        DispatchPlanItemDO planItem = validateOrderAssignedToDriver(order.getId(), driver.getId());
         // 邮快件子表 + 取件码校验（防错领）
         PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
         if (postal == null || !Objects.equals(postal.getPickupCode(), reqVO.getPickupCode())) {
@@ -504,6 +507,18 @@ public class DriverAppServiceImpl implements DriverAppService {
         upd.setPickedUpTime(LocalDateTime.now());
         upd.setPickerMemberUserId(SecurityFrameworkUtils.getLoginUserId());
         postalOrderMapper.updateById(upd);
+        // 已装件数 -1（地板 0），与 deliver 的回减口径一致
+        Long shiftId = planItem.getShiftId();
+        if (shiftId != null) {
+            ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                    shiftId, driver.getId(), LocalDate.now());
+            if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
+                ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
+                loadedUpdate.setId(execution.getId());
+                loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
+                shiftExecutionMapper.updateById(loadedUpdate);
+            }
+        }
     }
 
     @Override

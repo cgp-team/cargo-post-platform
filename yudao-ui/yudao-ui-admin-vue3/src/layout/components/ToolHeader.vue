@@ -1,6 +1,5 @@
 <script lang="tsx">
 import { defineComponent, computed } from 'vue'
-import router from '@/router'
 import { Message } from '@/layout/components/Message'
 import { Collapse } from '@/layout/components/Collapse'
 import { UserInfo } from '@/layout/components/UserInfo'
@@ -39,21 +38,10 @@ const layout = computed(() => appStore.getLayout)
 // 消息图标
 const message = computed(() => appStore.getMessage)
 
-// IM即时通讯图标
-const im = computed(() => appStore.getIm)
-
 // 租户切换权限
 const hasTenantVisitPermission = computed(
   () => import.meta.env.VITE_APP_TENANT_ENABLE === 'true' && checkPermi(['system:tenant:visit'])
 )
-
-// 顶部聊天入口：用路由 name resolve 出完整 URL，在新标签页打开 IM 主页
-// 场景考虑：IM 是全屏沉浸式壳，如果在当前页 push 会把原来在用的后台管理界面挤掉；开新 Tab 更符合用户预期
-const goToChat = () => {
-  // 用路由 name resolve 出完整 URL，在新标签页打开 IM 主页
-  const { href } = router.resolve({ name: 'ImHome' })
-  window.open(href, '_blank')
-}
 
 export default defineComponent({
   name: 'ToolHeader',
@@ -101,12 +89,6 @@ export default defineComponent({
           ) : undefined}
           {message.value ? (
             <Message class="custom-hover" color="var(--top-header-text-color)"></Message>
-          ) : undefined}
-          {/* IM 聊天入口 */}
-          {im.value ? (
-            <div class="custom-hover" onClick={goToChat}>
-              <Icon color="var(--top-header-text-color)" size={18} icon="ep:chat-dot-round" />
-            </div>
           ) : undefined}
           <UserInfo></UserInfo>
         </div>
