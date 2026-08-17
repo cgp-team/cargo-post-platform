@@ -353,3 +353,17 @@ SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @ddl := IF(@col_exists = 0,
   'ALTER TABLE `transport_cargo_order` ADD COLUMN `reject_reason` varchar(255) NOT NULL DEFAULT '''' COMMENT ''拒绝原因(审核拒绝时)'' AFTER `audit_status`', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------- 商城订单溯源：transport_product_order.vehicle_id / shift_id ----------
+-- 发货时关联承运车辆/班次，小程序「商品溯源」据 vehicle_id 查轨迹
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='vehicle_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `vehicle_id` bigint DEFAULT NULL COMMENT ''承运车辆编号(发货时关联,溯源用)'' AFTER `status`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='shift_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `shift_id` bigint DEFAULT NULL COMMENT ''承运班次编号(发货时关联,溯源用)'' AFTER `vehicle_id`', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
