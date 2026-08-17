@@ -17,4 +17,11 @@ public interface RouteStationMapper extends BaseMapperX<RouteStationDO> {
                 .orderByAsc(RouteStationDO::getRouteId)
                 .orderByAsc(RouteStationDO::getSequenceNo));
     }
+
+    /** 单条线路的站点序列（按访问顺序升序） */
+    default List<RouteStationDO> selectListByRouteId(Long routeId) {
+        return selectList(new LambdaQueryWrapperX<RouteStationDO>()
+                .eq(RouteStationDO::getRouteId, routeId)
+                .orderByAsc(RouteStationDO::getSequenceNo));
+    }
 }

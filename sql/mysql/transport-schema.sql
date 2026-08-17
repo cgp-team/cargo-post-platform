@@ -343,6 +343,8 @@ CREATE TABLE IF NOT EXISTS `transport_product_order` (
   `user_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '购买会员手机号',
   `total_amount` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '订单总额',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '订单状态(0待发货 1已发货 2已完成 3已取消)',
+  `vehicle_id` bigint DEFAULT NULL COMMENT '承运车辆编号(发货时关联,溯源用)',
+  `shift_id` bigint DEFAULT NULL COMMENT '承运班次编号(发货时关联,溯源用)',
   `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人',
   `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话',
   `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址',

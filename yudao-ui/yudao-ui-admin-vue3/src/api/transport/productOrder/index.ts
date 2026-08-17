@@ -21,8 +21,17 @@ export interface ProductOrderVO {
   receiverMobile?: string
   receiverAddress?: string
   remark?: string
+  vehicleId?: number
+  shiftId?: number
   createTime?: string
   items?: ProductOrderItemVO[]
+}
+
+/** 发货请求：vehicleId/shiftId 可选，用于小程序商品溯源关联 */
+export interface ProductOrderShipReqVO {
+  id: number
+  vehicleId?: number
+  shiftId?: number
 }
 
 export const getProductOrderPage = (params: PageParam & Partial<ProductOrderVO>) => {
@@ -31,8 +40,8 @@ export const getProductOrderPage = (params: PageParam & Partial<ProductOrderVO>)
 export const getProductOrder = (id: number): Promise<ProductOrderVO> => {
   return request.get({ url: '/transport/product-order/get', params: { id } })
 }
-export const shipProductOrder = (id: number) => {
-  return request.put({ url: '/transport/product-order/ship', params: { id } })
+export const shipProductOrder = (data: ProductOrderShipReqVO) => {
+  return request.put({ url: '/transport/product-order/ship', data })
 }
 export const completeProductOrder = (id: number) => {
   return request.put({ url: '/transport/product-order/complete', params: { id } })
