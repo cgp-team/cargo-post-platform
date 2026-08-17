@@ -55,14 +55,9 @@ public class DriverVehicleServiceImpl implements DriverVehicleService {
             throw exception(VEHICLE_NOT_EXISTS);
         }
         // 同一司机已有有效绑定则先自动解绑（一司机同时只绑定一辆车）
-        List<DriverVehicleDO> active = driverVehicleMapper.selectActiveByDriverId(reqVO.getDriverId());
-        for (DriverVehicleDO old : active) {
-            DriverVehicleDO unbind = new DriverVehicleDO();
-            unbind.setId(old.getId());
-            unbind.setStatus(STATUS_UNBOUND);
-            unbind.setUnbindTime(LocalDateTime.now());
-            driverVehicleMapper.updateById(unbind);
-        }
+        unbindAll(driverVehicleMapper.selectActiveByDriverId(reqVO.getDriverId()));
+        // 同一车辆已有有效绑定则一并解绑（一车同时只归属一名司机，即一司机一车、一车一司机）
+        unbindAll(driverVehicleMapper.selectActiveByVehicleId(reqVO.getVehicleId()));
         // 插入新绑定
         DriverVehicleDO bind = new DriverVehicleDO();
         bind.setDriverId(reqVO.getDriverId());
@@ -70,6 +65,17 @@ public class DriverVehicleServiceImpl implements DriverVehicleService {
         bind.setBindTime(LocalDateTime.now());
         bind.setStatus(STATUS_BOUND);
         driverVehicleMapper.insert(bind);
+    }
+
+    /** 批量解绑有效绑定记录 */
+    private void unbindAll(List<DriverVehicleDO> active) {
+        for (DriverVehicleDO old : active) {
+            DriverVehicleDO unbind = new DriverVehicleDO();
+            unbind.setId(old.getId());
+            unbind.setStatus(STATUS_UNBOUND);
+            unbind.setUnbindTime(LocalDateTime.now());
+            driverVehicleMapper.updateById(unbind);
+        }
     }
 
     @Override

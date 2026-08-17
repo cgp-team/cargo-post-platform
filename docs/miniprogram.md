@@ -36,6 +36,13 @@
 
 `utils/config.js` 的 `getBaseUrl()` 按 `envVersion`（develop/trial/release）返回 BASE_URL，三个环境目前指向同一地址（暂无独立体验/正式环境）。本地调试需在微信开发者工具勾选「详情 → 本地设置 → 不校验合法域名」。
 
+## 上线前置条件
+
+- **正式版必须配置 HTTPS 域名**：微信小程序正式环境只允许 HTTPS 请求，后端需有正式域名并配置 TLS 证书，不能继续使用 IP + HTTP。
+- **合法域名需在微信公众平台登记**：`request` 合法域名与 `uploadFile` 合法域名是两个独立清单，都要在「微信公众平台 → 开发管理 → 开发设置 → 服务器域名」分别登记；只登记 request 不会自动覆盖 uploadFile。
+- **当前配置仅供开发版**：`utils/config.js` 三环境（develop/trial/release）均为 `http://1.15.29.107/api`，仅能在微信开发者工具勾选「不校验合法域名」的开发版下使用；体验版/正式版用该地址会直接请求失败。
+- **拍照上传依赖 uploadFile 域名**：寄货拍照（`pages/send/send.js`）与司机装车拍照（`pages/driver/workbench/workbench.js`）经 `utils/api.js` 的 `uploadFile` 上传照片，`uploadFile` 合法域名未登记时，上传在体验版/正式版直接失败。
+
 ## 位置权限
 
 `app.json` 声明了 `scope.userLocation` 与 `requiredPrivateInfos`（getLocation/chooseLocation）。司机工作台行驶中每 10 秒通过 `wx.getLocation`（gcj02）获取真实位置并调用 `/app-api/transport/driver/location` 上报，与监控中心共用 `transport_vehicle_location` 数据链路。

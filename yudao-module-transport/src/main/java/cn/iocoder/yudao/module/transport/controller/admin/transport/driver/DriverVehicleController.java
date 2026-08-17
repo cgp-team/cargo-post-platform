@@ -108,13 +108,15 @@ public class DriverVehicleController {
     }
 
     private String nameOf(Long driverId) {
+        // 兜底 ""：Map.of 不允许 null 值
         DriverDO driver = driverId == null ? null : driverMapper.selectById(driverId);
-        return driver == null ? null : driver.getName();
+        return driver == null ? "" : driver.getName();
     }
 
     private String plateOf(Long vehicleId) {
+        // 兜底 ""：Map.of 不允许 null 值
         VehicleDO vehicle = vehicleId == null ? null : vehicleMapper.selectById(vehicleId);
-        return vehicle == null ? null : vehicle.getPlateNo();
+        return vehicle == null ? "" : vehicle.getPlateNo();
     }
 
     private DriverVehicleRespVO fill(DriverVehicleRespVO vo, Map<Long, String> names, Map<Long, String> plates) {

@@ -7,8 +7,8 @@ export interface DriverVehicleVO {
   driverName?: string
   vehicleId: number
   plateNo?: string
-  bindTime?: string
-  unbindTime?: string
+  bindTime?: number
+  unbindTime?: number
   status: number
 }
 

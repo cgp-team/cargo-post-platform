@@ -25,7 +25,11 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlan
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteStopDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmVehiclePlanDTO;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -110,13 +114,15 @@ class DispatchServiceImplTest {
 
     @Test
     void collectOrders_skips_unaudited_cargo() {
-        // 候选订单：2 货运(1未审核) + 1 邮快件 → 未审核货运不入池
+        // 候选订单：2 货运(订单1已审核/订单2未审核) + 1 邮快件 → 未审核货运不入池
         when(orderMapper.selectList(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(1L).orderType(2).build(),
                 TransportOrderDO.builder().id(2L).orderType(2).build(),
                 TransportOrderDO.builder().id(3L).orderType(3).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
-                .thenReturn(CargoOrderDO.builder().auditStatus(0).build()); // 未审核
+        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
+                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(1).build()); // 已审核
+        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(2L)))
+                .thenReturn(CargoOrderDO.builder().orderId(2L).auditStatus(0).build()); // 未审核
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -126,6 +132,20 @@ class DispatchServiceImplTest {
 
         // 2 个入池：1 个已审核货运 + 1 个邮快件（未审核货运被过滤）
         assertEquals(2, count);
+        // 捕获入池更新条件：in 的订单编号含 1、3，不含 2
+        // （MyBatis-Plus 3.5.16 的 wrapper 参数延迟物化：先注册表信息，再触发 SQL 物化后才能读到参数）
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), TransportOrderDO.class);
+        ArgumentCaptor<Wrapper<TransportOrderDO>> wrapperCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(orderMapper).update(any(TransportOrderDO.class), wrapperCaptor.capture());
+        AbstractWrapper<?, ?, ?> wrapper = (AbstractWrapper<?, ?, ?>) wrapperCaptor.getValue();
+        wrapper.getSqlSegment(); // 触发物化，填充 paramNameValuePairs
+        List<Object> params = wrapper.getParamNameValuePairs().values().stream()
+                .flatMap(v -> v instanceof java.util.Collection
+                        ? ((java.util.Collection<?>) v).stream() : java.util.stream.Stream.of(v))
+                .toList();
+        assertTrue(params.contains(1L));
+        assertTrue(params.contains(3L));
+        assertFalse(params.contains(2L));
     }
 
     @Test
@@ -396,7 +416,8 @@ class DispatchServiceImplTest {
                 TransportOrderDO.builder().id(2L).orderType(2).build()));
         when(passengerOrderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
                 PassengerOrderDO.builder().orderId(1L).passengerCount(2).build()));
-        when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).plateNo("川A·5201").build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).plateNo("川A·5201").build()));
 
         DispatchSettlementReqVO reqVO = new DispatchSettlementReqVO();
         reqVO.setBatchStart(start);

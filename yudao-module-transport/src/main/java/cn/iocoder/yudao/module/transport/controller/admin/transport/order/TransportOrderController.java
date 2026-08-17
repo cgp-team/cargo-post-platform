@@ -99,6 +99,7 @@ public class TransportOrderController {
             if (cargo != null) {
                 vo.setGoodsName(cargo.getGoodsName());
                 vo.setGoodsNote(cargo.getGoodsNote());
+                vo.setCargoWeightKg(cargo.getWeightKg());
                 vo.setPhotoUrl(cargo.getPhotoUrl());
                 vo.setDriverPhotoUrl(cargo.getDriverPhotoUrl());
                 vo.setAuditStatus(cargo.getAuditStatus());
