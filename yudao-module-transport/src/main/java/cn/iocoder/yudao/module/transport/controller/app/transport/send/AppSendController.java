@@ -14,12 +14,14 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanIte
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
@@ -33,6 +35,9 @@ import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -54,6 +59,7 @@ public class AppSendController {
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private VehicleMapper vehicleMapper;
+    @Resource private ShiftMapper shiftMapper;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -81,7 +87,49 @@ public class AppSendController {
         if (!transportOrderService.canViewOrderDetail(order, getLoginUserId())) {
             return success(toProgressVO(order));
         }
-        return success(toRespVO(order));
+        AppSendOrderRespVO vo = toRespVO(order);
+        fillEta(vo, order);
+        return success(vo);
+    }
+
+    /** 填充到达预估（仅 track 详情调用；未分配车辆/班次时字段全 null，不影响原流程） */
+    private void fillEta(AppSendOrderRespVO vo, TransportOrderDO order) {
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(DispatchPlanItemDO::getOrderId, order.getId());
+        if (items.isEmpty()) {
+            return;
+        }
+        // 取送达方向（送客 2 / 派送 3）的最新一条；没有送达明细时兜底取最新一条
+        DispatchPlanItemDO item = items.stream()
+                .filter(i -> i.getActionType() != null && (i.getActionType() == 2 || i.getActionType() == 3))
+                .max(Comparator.comparing(DispatchPlanItemDO::getId))
+                .orElseGet(() -> items.stream().max(Comparator.comparing(DispatchPlanItemDO::getId)).orElse(null));
+        if (item == null) {
+            return;
+        }
+        if (item.getVehicleId() != null) {
+            VehicleDO vehicle = vehicleMapper.selectById(item.getVehicleId());
+            if (vehicle != null) {
+                vo.setVehiclePlate(vehicle.getPlateNo());
+            }
+        }
+        if (item.getShiftId() != null) {
+            ShiftDO shift = shiftMapper.selectById(item.getShiftId());
+            if (shift != null) {
+                vo.setShiftCode(shift.getShiftCode());
+            }
+        }
+        if (item.getStationId() != null) {
+            // 站点名仅作展示：沿用 arrangements 的精简列表 Map 取值，站点被删也不影响追踪主流程
+            Map<Long, String> stationNameMap = stationService.getSimpleList().stream()
+                    .collect(Collectors.toMap(StationDO::getId, StationDO::getStationName, (a, b) -> a));
+            vo.setTargetStation(stationNameMap.get(item.getStationId()));
+        }
+        vo.setEstimatedArrivalTime(item.getEstimatedArrivalTime());
+        // etaMinutes：仅预计到达时间在未来时给出分钟差，否则为 null
+        LocalDateTime eta = item.getEstimatedArrivalTime();
+        if (eta != null && eta.isAfter(LocalDateTime.now())) {
+            vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
+        }
     }
 
     @GetMapping("/stations")
