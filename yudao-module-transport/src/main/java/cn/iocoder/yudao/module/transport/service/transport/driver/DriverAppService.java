@@ -21,7 +21,7 @@ public interface DriverAppService {
     /** 运营统计（班次/货运订单） */
     AppDriverEarningsRespVO earnings();
 
-    /** 调度任务（算法派单结果，预留） */
+    /** 调度任务（算法派单结果；司机身份从登录态解析，driverId 仅做一致性校验） */
     List<AppDriverTaskRespVO> tasks(Long driverId);
 
     /** 发车：创建/复用当天班次执行记录并置在途，该司机名下已分配货运订单推进为已发车 */

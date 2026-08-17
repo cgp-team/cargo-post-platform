@@ -76,7 +76,12 @@ public class AppSendController {
     @Operation(summary = "按业务订单号查询（包裹追踪）")
     @Parameter(name = "no", description = "业务订单号", required = true)
     public CommonResult<AppSendOrderRespVO> track(@RequestParam("no") String no) {
-        return success(toRespVO(transportOrderService.getByOrderNo(no)));
+        TransportOrderDO order = transportOrderService.getByOrderNo(no);
+        // 归属校验：非下单人/非收件人仅返回进度信息，防遍历单号窃取取件码与收件人 PII
+        if (!transportOrderService.canViewOrderDetail(order, getLoginUserId())) {
+            return success(toProgressVO(order));
+        }
+        return success(toRespVO(order));
     }
 
     @GetMapping("/stations")
@@ -129,6 +134,17 @@ public class AppSendController {
             }
             return vo;
         }).toList());
+    }
+
+    /** 无权查看明细时的进度信息（不含取件码、收件人 PII、货物明细） */
+    private AppSendOrderRespVO toProgressVO(TransportOrderDO order) {
+        AppSendOrderRespVO vo = new AppSendOrderRespVO();
+        vo.setOrderNo(order.getOrderNo());
+        vo.setOrderType(order.getOrderType());
+        vo.setStatus(order.getStatus());
+        vo.setStatusName(TransportOrderStatusEnum.nameOf(order.getStatus()));
+        vo.setCreateTime(order.getCreateTime());
+        return vo;
     }
 
     private AppSendOrderRespVO toRespVO(TransportOrderDO order) {

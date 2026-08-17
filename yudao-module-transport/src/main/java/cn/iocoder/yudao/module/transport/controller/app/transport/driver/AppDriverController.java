@@ -53,7 +53,7 @@ public class AppDriverController {
     }
 
     @GetMapping("/tasks")
-    @Operation(summary = "调度任务（算法派单结果，预留）")
+    @Operation(summary = "调度任务（算法派单结果；按登录会员识别司机，driverId 仅做一致性校验）")
     @Parameter(name = "driverId", description = "司机编号", required = true)
     public CommonResult<List<AppDriverTaskRespVO>> tasks(@RequestParam("driverId") Long driverId) {
         return success(driverAppService.tasks(driverId));

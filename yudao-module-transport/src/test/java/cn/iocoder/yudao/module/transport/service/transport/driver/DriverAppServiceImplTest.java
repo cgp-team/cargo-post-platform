@@ -496,6 +496,31 @@ class DriverAppServiceImplTest {
     }
 
     @Test
+    void pickupVerify_decrements_loaded_count() {
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(3).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(postalOrderMapper.selectOne(any(SFunction.class), any())).thenReturn(
+                PostalOrderDO.builder().id(9L).orderId(1000L).pickupCode("123456").pickupStatus(0).build());
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(2)); // 已装 2 件
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setPickupCode("123456");
+        driverAppService.pickupVerify(reqVO);
+
+        // 核销成功后已装件数 -1（与 deliver 回减口径一致）
+        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
+        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
+        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+    }
+
+    @Test
     void pickupVerify_wrong_code_throws() {
         loginMember();
         stubLoginDriver();
@@ -561,6 +586,23 @@ class DriverAppServiceImplTest {
         ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
         verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
         assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+    }
+
+    @Test
+    void deliver_postal_order_throws() {
+        loginMember();
+        stubLoginDriver();
+        // 邮快件不走妥投：由收件人凭取件码核销（pickup-verify）
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(3).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.deliver(reqVO));
+
+        assertEquals(DRIVER_ORDER_STATUS_ILLEGAL.getCode(), ex.getCode());
+        verify(transportOrderMapper, never()).update(any(), any());
     }
 
     @Test

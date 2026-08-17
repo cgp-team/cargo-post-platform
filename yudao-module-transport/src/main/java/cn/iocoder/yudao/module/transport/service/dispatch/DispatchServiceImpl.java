@@ -118,11 +118,12 @@ public class DispatchServiceImpl implements DispatchService {
         List<TransportOrderDO> orders = reqVO.getOrderIds().stream().map(orderMap::get).collect(Collectors.toList());
         // 按 orderIds 顺序生成闭环经停：DEPART(场站) -> 各订单作业点 -> RETURN(场站)；
         // 客运多人单按乘客数拆成多条算法订单（契约中一张客运单 = 1 人）
+        Map<Long, PassengerOrderDO> passengerMap = preloadPassengerOrders(orders);
         List<AlgorithmRouteStopDTO> stops = new ArrayList<>();
         stops.add(buildStop(depot.getId(), null, AlgorithmRouteStopDTO.ACTION_DEPART));
         for (TransportOrderDO order : orders) {
             if (Objects.equals(order.getOrderType(), 1)) { // 客运：上车 + 下车
-                for (String algorithmOrderId : passengerAlgorithmOrderIds(order)) {
+                for (String algorithmOrderId : passengerAlgorithmOrderIds(order, passengerMap)) {
                     stops.add(buildStop(order.getPickupStationId(), algorithmOrderId, AlgorithmRouteStopDTO.ACTION_BOARD));
                     stops.add(buildStop(order.getDeliveryStationId(), algorithmOrderId, AlgorithmRouteStopDTO.ACTION_ALIGHT));
                 }
@@ -297,8 +298,16 @@ public class DispatchServiceImpl implements DispatchService {
                 .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
         StationDO depot = validateDepotExists(reqVO.getDepotStationId());
         List<VehicleDO> vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
+        // 车辆存在性校验（口径对齐 createManualPlan 的 validateVehicleExists）
+        if (vehicles.size() < reqVO.getVehicleIds().size()) {
+            throw exception(VEHICLE_NOT_EXISTS);
+        }
         Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
                 .collect(Collectors.toMap(StationDO::getId, java.util.function.Function.identity()));
+        // 子表一次加载，内存匹配（消除逐单查询的 N+1）
+        Map<Long, PassengerOrderDO> passengerMap = preloadPassengerOrders(pooledOrders);
+        Map<Long, CargoOrderDO> cargoMap = preloadCargoOrders(pooledOrders);
+        Map<Long, PostalOrderDO> postalMap = preloadPostalOrders(pooledOrders);
 
         // 订单统计 + 站点作业标记 + 客运时序检查
         DispatchValidateRespVO.OrderStats stats = new DispatchValidateRespVO.OrderStats();
@@ -310,7 +319,7 @@ public class DispatchServiceImpl implements DispatchService {
         List<DispatchValidateRespVO.TimeSeqIssue> issues = new ArrayList<>();
         for (TransportOrderDO order : pooledOrders) {
             if (Objects.equals(order.getOrderType(), 1)) { // 客运
-                stats.setPassengerCount(stats.getPassengerCount() + getPassengerCount(order));
+                stats.setPassengerCount(stats.getPassengerCount() + getPassengerCount(order, passengerMap));
                 addMarker(markerMap, order.getPickupStationId(), AlgorithmRouteStopDTO.ACTION_BOARD, stationMap);
                 addMarker(markerMap, order.getDeliveryStationId(), AlgorithmRouteStopDTO.ACTION_ALIGHT, stationMap);
                 if (order.getPickupStationId() == null || order.getDeliveryStationId() == null) {
@@ -327,7 +336,7 @@ public class DispatchServiceImpl implements DispatchService {
                     stats.setDeliveryCount(stats.getDeliveryCount() + 1);
                     addMarker(markerMap, order.getDeliveryStationId(), AlgorithmRouteStopDTO.ACTION_DELIVER, stationMap);
                 }
-                stats.setParcelCount(stats.getParcelCount() + getItemCount(order));
+                stats.setParcelCount(stats.getParcelCount() + getItemCount(order, cargoMap, postalMap));
             }
         }
 
@@ -398,9 +407,14 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
     public DispatchSettlementRespVO settlement(DispatchSettlementReqVO reqVO) {
-        // 已完成方案（返程结算口径：方案状态=3 已完成）
+        if (reqVO.getBatchStart() == null || reqVO.getBatchEnd() == null
+                || !reqVO.getBatchStart().isBefore(reqVO.getBatchEnd())) {
+            throw exception(BAD_REQUEST);
+        }
+        // 执行中/已完成方案（返程结算口径：方案状态 IN (2 执行中, 3 已完成)；方案 COMPLETED 流转留待后续迭代，当前终态为执行中）
         List<DispatchPlanDO> plans = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
-                .eq(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.COMPLETED.getStatus())
+                .in(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.RUNNING.getStatus(),
+                        DispatchPlanStatusEnum.COMPLETED.getStatus())
                 .between(DispatchPlanDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
         DispatchSettlementRespVO respVO = new DispatchSettlementRespVO();
         if (plans.isEmpty()) {
@@ -437,6 +451,11 @@ public class DispatchServiceImpl implements DispatchService {
         if (!orderIds.isEmpty()) {
             orderMapper.selectBatchIds(orderIds).forEach(o -> orderMap.put(o.getId(), o));
         }
+        // 子表一次加载，内存匹配（消除逐单查询的 N+1）
+        List<TransportOrderDO> itemOrders = List.copyOf(orderMap.values());
+        Map<Long, PassengerOrderDO> passengerMap = preloadPassengerOrders(itemOrders);
+        Map<Long, CargoOrderDO> cargoMap = preloadCargoOrders(itemOrders);
+        Map<Long, PostalOrderDO> postalMap = preloadPostalOrders(itemOrders);
 
         // 汇总乘客/包裹与平均等待
         Map<Long, Integer> vehiclePassenger = new HashMap<>();
@@ -453,7 +472,7 @@ public class DispatchServiceImpl implements DispatchService {
         for (TransportOrderDO order : orderMap.values()) {
             Long vehicleId = orderVehicleMap.get(order.getId());
             if (Objects.equals(order.getOrderType(), 1)) { // 客运
-                int count = getPassengerCount(order);
+                int count = getPassengerCount(order, passengerMap);
                 passengerCount += count;
                 vehiclePassenger.merge(vehicleId, count, Integer::sum);
                 // 平均等待：下单 → 方案创建（近似）
@@ -463,17 +482,21 @@ public class DispatchServiceImpl implements DispatchService {
                     waits.add((double) Duration.between(order.getCreateTime(), plan.getCreateTime()).toMinutes());
                 }
             } else { // 货运/邮快件
-                int count = getItemCount(order);
+                int count = getItemCount(order, cargoMap, postalMap);
                 parcelCount += count;
                 vehicleParcel.merge(vehicleId, count, Integer::sum);
             }
         }
-        // 分车汇总
+        // 分车汇总（车辆一次批量加载，消除逐车查询）
+        Map<Long, VehicleDO> vehicleMap = new HashMap<>();
+        if (!vehiclePlans.isEmpty()) {
+            vehicleMapper.selectBatchIds(vehiclePlans.keySet()).forEach(v -> vehicleMap.put(v.getId(), v));
+        }
         List<DispatchSettlementRespVO.VehicleSettlement> perVehicle = vehiclePlans.entrySet().stream()
                 .map(e -> {
                     DispatchSettlementRespVO.VehicleSettlement vs = new DispatchSettlementRespVO.VehicleSettlement();
                     vs.setVehicleId(e.getKey());
-                    VehicleDO vehicle = vehicleMapper.selectById(e.getKey());
+                    VehicleDO vehicle = vehicleMap.get(e.getKey());
                     vs.setPlateNo(vehicle != null ? vehicle.getPlateNo() : null);
                     vs.setRunCount(e.getValue().size());
                     vs.setPassengerCount(vehiclePassenger.getOrDefault(e.getKey(), 0));
@@ -552,8 +575,13 @@ public class DispatchServiceImpl implements DispatchService {
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
                         .build())
                 .collect(Collectors.toList());
+        // 子表一次加载，内存匹配（消除逐单查询的 N+1）
+        Map<Long, PassengerOrderDO> passengerMap = preloadPassengerOrders(orders);
+        Map<Long, CargoOrderDO> cargoMap = preloadCargoOrders(orders);
+        Map<Long, PostalOrderDO> postalMap = preloadPostalOrders(orders);
         List<AlgorithmOrderDTO> orderDTOs = orders.stream()
-                .map(order -> toAlgorithmOrders(order, depot.getId())).flatMap(List::stream).collect(Collectors.toList());
+                .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap))
+                .flatMap(List::stream).collect(Collectors.toList());
 
         LocalDateTime[] batch = currentBatch();
         return AlgorithmPlanReqDTO.builder()
@@ -578,10 +606,13 @@ public class DispatchServiceImpl implements DispatchService {
 
     /** 订单映射为算法订单：客运按乘客数拆单（一张算法客运单 = 1 人）；
      *  货运/邮快件按下车站是否为场站区分：场站→站点为派送(DELIVERY)，站点→场站为揽收(PICKUP)。 */
-    private List<AlgorithmOrderDTO> toAlgorithmOrders(TransportOrderDO order, Long depotStationId) {
+    private List<AlgorithmOrderDTO> toAlgorithmOrders(TransportOrderDO order, Long depotStationId,
+                                                      Map<Long, PassengerOrderDO> passengerMap,
+                                                      Map<Long, CargoOrderDO> cargoMap,
+                                                      Map<Long, PostalOrderDO> postalMap) {
         if (Objects.equals(order.getOrderType(), 1)) { // 客运
             List<AlgorithmOrderDTO> result = new ArrayList<>();
-            for (String algorithmOrderId : passengerAlgorithmOrderIds(order)) {
+            for (String algorithmOrderId : passengerAlgorithmOrderIds(order, passengerMap)) {
                 result.add(AlgorithmOrderDTO.builder()
                         .orderId(algorithmOrderId)
                         .orderType(AlgorithmOrderDTO.TYPE_PASSENGER)
@@ -597,7 +628,7 @@ public class DispatchServiceImpl implements DispatchService {
                     .orderId(String.valueOf(order.getId()))
                     .orderType(AlgorithmOrderDTO.TYPE_PICKUP)
                     .stationId(String.valueOf(order.getPickupStationId()))
-                    .itemCount(getItemCount(order))
+                    .itemCount(getItemCount(order, cargoMap, postalMap))
                     .build());
         }
         // 派送：场站→村
@@ -605,13 +636,13 @@ public class DispatchServiceImpl implements DispatchService {
                 .orderId(String.valueOf(order.getId()))
                 .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
                 .stationId(String.valueOf(order.getDeliveryStationId()))
-                .itemCount(getItemCount(order))
+                .itemCount(getItemCount(order, cargoMap, postalMap))
                 .build());
     }
 
     /** 客运多人单拆分为 "业务订单号#序号" 的算法订单编号 */
-    private List<String> passengerAlgorithmOrderIds(TransportOrderDO order) {
-        int count = getPassengerCount(order);
+    private List<String> passengerAlgorithmOrderIds(TransportOrderDO order, Map<Long, PassengerOrderDO> passengerMap) {
+        int count = getPassengerCount(order, passengerMap);
         List<String> ids = new ArrayList<>(count);
         for (int i = 1; i <= count; i++) {
             ids.add(order.getId() + "#" + i);
@@ -619,11 +650,52 @@ public class DispatchServiceImpl implements DispatchService {
         return ids;
     }
 
-    /** 客运人数取自子表，缺省 1 人 */
-    private int getPassengerCount(TransportOrderDO order) {
-        List<PassengerOrderDO> subs = passengerOrderMapper.selectList(new LambdaQueryWrapperX<PassengerOrderDO>()
-                .eq(PassengerOrderDO::getOrderId, order.getId()));
-        return subs.isEmpty() || subs.get(0).getPassengerCount() == null ? 1 : subs.get(0).getPassengerCount();
+    /** 预加载客运子表（按订单编号索引，消除逐单查询的 N+1） */
+    private Map<Long, PassengerOrderDO> preloadPassengerOrders(List<TransportOrderDO> orders) {
+        List<Long> orderIds = orders.stream()
+                .filter(order -> Objects.equals(order.getOrderType(), 1))
+                .map(TransportOrderDO::getId).toList();
+        if (orderIds.isEmpty()) {
+            return Map.of();
+        }
+        return passengerOrderMapper.selectList(new LambdaQueryWrapperX<PassengerOrderDO>()
+                        .in(PassengerOrderDO::getOrderId, orderIds))
+                .stream().collect(Collectors.toMap(PassengerOrderDO::getOrderId,
+                        java.util.function.Function.identity(), (a, b) -> a));
+    }
+
+    /** 预加载货运子表（按订单编号索引，消除逐单查询的 N+1） */
+    private Map<Long, CargoOrderDO> preloadCargoOrders(List<TransportOrderDO> orders) {
+        List<Long> orderIds = orders.stream()
+                .filter(order -> Objects.equals(order.getOrderType(), 2))
+                .map(TransportOrderDO::getId).toList();
+        if (orderIds.isEmpty()) {
+            return Map.of();
+        }
+        return cargoOrderMapper.selectList(new LambdaQueryWrapperX<CargoOrderDO>()
+                        .in(CargoOrderDO::getOrderId, orderIds))
+                .stream().collect(Collectors.toMap(CargoOrderDO::getOrderId,
+                        java.util.function.Function.identity(), (a, b) -> a));
+    }
+
+    /** 预加载邮快件子表（按订单编号索引，消除逐单查询的 N+1） */
+    private Map<Long, PostalOrderDO> preloadPostalOrders(List<TransportOrderDO> orders) {
+        List<Long> orderIds = orders.stream()
+                .filter(order -> Objects.equals(order.getOrderType(), 3))
+                .map(TransportOrderDO::getId).toList();
+        if (orderIds.isEmpty()) {
+            return Map.of();
+        }
+        return postalOrderMapper.selectList(new LambdaQueryWrapperX<PostalOrderDO>()
+                        .in(PostalOrderDO::getOrderId, orderIds))
+                .stream().collect(Collectors.toMap(PostalOrderDO::getOrderId,
+                        java.util.function.Function.identity(), (a, b) -> a));
+    }
+
+    /** 客运人数取自预加载子表，缺省 1 人 */
+    private int getPassengerCount(TransportOrderDO order, Map<Long, PassengerOrderDO> passengerMap) {
+        PassengerOrderDO sub = passengerMap.get(order.getId());
+        return sub == null || sub.getPassengerCount() == null ? 1 : sub.getPassengerCount();
     }
 
     /** 算法订单编号还原业务订单编号：去掉 "#序号" 拆单后缀 */
@@ -632,15 +704,16 @@ public class DispatchServiceImpl implements DispatchService {
         return Long.valueOf(suffixIndex >= 0 ? algorithmOrderId.substring(0, suffixIndex) : algorithmOrderId);
     }
 
-    /** 货运/邮快件件数取自子表，缺省 1 件 */
-    private int getItemCount(TransportOrderDO order) {
+    /** 货运/邮快件件数取自预加载子表，缺省 1 件 */
+    private int getItemCount(TransportOrderDO order, Map<Long, CargoOrderDO> cargoMap,
+                             Map<Long, PostalOrderDO> postalMap) {
         Integer itemCount = null;
         if (Objects.equals(order.getOrderType(), 2)) { // 货运
-            List<CargoOrderDO> subs = cargoOrderMapper.selectList(CargoOrderDO::getOrderId, order.getId());
-            itemCount = subs.isEmpty() ? null : subs.get(0).getItemCount();
+            CargoOrderDO sub = cargoMap.get(order.getId());
+            itemCount = sub != null ? sub.getItemCount() : null;
         } else if (Objects.equals(order.getOrderType(), 3)) { // 邮快件
-            List<PostalOrderDO> subs = postalOrderMapper.selectList(PostalOrderDO::getOrderId, order.getId());
-            itemCount = subs.isEmpty() ? null : subs.get(0).getItemCount();
+            PostalOrderDO sub = postalMap.get(order.getId());
+            itemCount = sub != null ? sub.getItemCount() : null;
         }
         return itemCount != null ? itemCount : 1;
     }

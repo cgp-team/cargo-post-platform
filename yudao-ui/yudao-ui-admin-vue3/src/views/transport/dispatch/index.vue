@@ -173,12 +173,12 @@
     <div v-show="smartStep === 0" v-loading="smartLoading">
       <el-form :model="smartForm" label-width="100px">
         <el-form-item label="场站">
-          <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%">
+          <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%" @change="validateResult = undefined">
             <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
           </el-select>
         </el-form-item>
         <el-form-item label="可用车辆">
-          <el-select v-model="smartForm.vehicleIds" placeholder="请选择车辆(最多 3 台)" multiple :multiple-limit="3" style="width:100%">
+          <el-select v-model="smartForm.vehicleIds" placeholder="请选择车辆(最多 3 台)" multiple :multiple-limit="3" style="width:100%" @change="validateResult = undefined">
             <el-option v-for="v in vehicleList" :key="v.id!" :label="v.plateNo" :value="v.id!" />
           </el-select>
         </el-form-item>

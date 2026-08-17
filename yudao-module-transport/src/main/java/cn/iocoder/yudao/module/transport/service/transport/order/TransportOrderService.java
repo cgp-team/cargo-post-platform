@@ -21,6 +21,11 @@ public interface TransportOrderService {
     PageResult<TransportOrderDO> getMySendPage(Long userId, PageParam pageParam);
     /** 按业务订单号查询（包裹追踪） */
     TransportOrderDO getByOrderNo(String orderNo);
+    /**
+     * 是否有权查看订单完整明细（取件码、收件人 PII、货物明细）：
+     * 下单人本人，或邮快件收件人（收件手机号与登录会员手机号一致）
+     */
+    boolean canViewOrderDetail(TransportOrderDO order, Long loginUserId);
     /** 货运子表（寄货货物信息） */
     CargoOrderDO getCargoOrder(Long orderId);
     /** 货运物品审核：通过 / 拒绝（危险品/违禁品） */
