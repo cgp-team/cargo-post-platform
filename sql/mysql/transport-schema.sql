@@ -418,6 +418,23 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle_location` (
   UNIQUE KEY `uk_vehicle_location_vehicle` (`vehicle_id`, `tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='车辆最新位置表（每车一行，司机端上报 upsert）';
 
+-- ---------- 平台公告表 ----------
+CREATE TABLE IF NOT EXISTS `transport_notice` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '公告编号',
+  `title` varchar(128) NOT NULL DEFAULT '' COMMENT '公告标题',
+  `content` text COMMENT '公告内容',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态(0下架 1上架)',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序(小的在前)',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_notice_status_sort` (`tenant_id`, `status`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台公告表';
+
 -- 已有库人工执行（CREATE IF NOT EXISTS 不会给已有表加列，升级请执行以下 ALTER）：
 -- ALTER TABLE `transport_order`
 --   ADD COLUMN `member_user_id` bigint NOT NULL DEFAULT 0 COMMENT '下单会员编号(小程序寄货)' AFTER `total_amount`,
