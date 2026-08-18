@@ -10,7 +10,7 @@ import org.apache.ibatis.annotations.Mapper;
 import java.util.List;
 
 @Mapper
-public interface NoticeMapper extends BaseMapperX<NoticeDO> {
+public interface TransportNoticeMapper extends BaseMapperX<NoticeDO> {
 
     default PageResult<NoticeDO> selectPage(NoticePageReqVO reqVO) {
         return selectPage(reqVO, new LambdaQueryWrapperX<NoticeDO>()

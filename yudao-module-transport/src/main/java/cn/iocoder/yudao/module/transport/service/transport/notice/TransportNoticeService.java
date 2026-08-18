@@ -7,7 +7,7 @@ import jakarta.validation.Valid;
 
 import java.util.List;
 
-public interface NoticeService {
+public interface TransportNoticeService {
     Long create(@Valid NoticeCreateReqVO reqVO);
     void update(@Valid NoticeUpdateReqVO reqVO);
     void delete(Long id);
