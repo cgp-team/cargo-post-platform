@@ -37,9 +37,27 @@ CREATE TABLE IF NOT EXISTS `member_user` (
   UNIQUE KEY `uk_mobile` (`mobile`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会员表';
 
+-- ---------- member_address 表（小程序收货地址，上游 yudao 标准表）----------
+CREATE TABLE IF NOT EXISTS `member_address` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '编号',
+  `user_id` bigint NOT NULL COMMENT '用户编号',
+  `name` varchar(30) NOT NULL DEFAULT '' COMMENT '收件人名称',
+  `mobile` varchar(11) NOT NULL DEFAULT '' COMMENT '手机号',
+  `area_id` bigint NOT NULL COMMENT '地区编号',
+  `detail_address` varchar(64) NOT NULL DEFAULT '' COMMENT '收件详细地址',
+  `default_status` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否默认',
+  `creator` varchar(64) NULL DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) NULL DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`) USING BTREE,
+  KEY `idx_user_id` (`user_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会员收件地址表';
+
 -- ---------- 客货邮管理菜单 ----------
-DELETE FROM system_role_menu WHERE menu_id BETWEEN 6800 AND 6899;
-DELETE FROM system_menu WHERE id BETWEEN 6800 AND 6899;
+DELETE FROM system_role_menu WHERE menu_id BETWEEN 6800 AND 6919;
+DELETE FROM system_menu WHERE id BETWEEN 6800 AND 6919;
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 -- Root directory
@@ -115,5 +133,17 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6892, '订单发货', 'transport:product-order:ship', 3, 2, 6891, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6893, '订单完成', 'transport:product-order:complete', 3, 3, 6891, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+-- Operation（运维客服）
+(6900, '运维客服', '', 1, 12, 6800, 'operation', 'ep:service', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6901, '意见反馈', 'transport:feedback:query', 2, 1, 6900, 'feedback', '', 'transport/operation/feedback/index', 'TransportOperationFeedback', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6902, '反馈回复', 'transport:feedback:reply', 3, 2, 6901, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+-- Notice（平台公告）
+(6910, '公告管理', 'transport:notice:query', 2, 13, 6800, 'notice', 'ep:bell', 'transport/notice/index', 'TransportNotice', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6911, '公告新增', 'transport:notice:create', 3, 1, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6912, '公告编辑', 'transport:notice:update', 3, 2, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6913, '公告删除', 'transport:notice:delete', 3, 3, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6900 AND 6919;

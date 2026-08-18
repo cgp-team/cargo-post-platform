@@ -23,6 +23,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
@@ -36,6 +37,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import org.junit.jupiter.api.AfterEach;
@@ -92,6 +94,7 @@ class DriverAppServiceImplTest {
     @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private ShiftExecutionMapper shiftExecutionMapper;
     @Mock private VehicleLocationMapper vehicleLocationMapper;
+    @Mock private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Mock private MemberUserApi memberUserApi;
 
     private DriverAppServiceImpl driverAppService;
@@ -113,6 +116,7 @@ class DriverAppServiceImplTest {
         ReflectionTestUtils.setField(driverAppService, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(driverAppService, "shiftExecutionMapper", shiftExecutionMapper);
         ReflectionTestUtils.setField(driverAppService, "vehicleLocationMapper", vehicleLocationMapper);
+        ReflectionTestUtils.setField(driverAppService, "vehicleLocationTrackMapper", vehicleLocationTrackMapper);
         ReflectionTestUtils.setField(driverAppService, "memberUserApi", memberUserApi);
     }
 
@@ -688,6 +692,28 @@ class DriverAppServiceImplTest {
         verify(vehicleLocationMapper, times(1)).updateById(updateCaptor.capture());
         assertEquals(60L, updateCaptor.getValue().getId());
         assertNotNull(updateCaptor.getValue().getReportTime());
+        // 班次在途（shiftId 非空）：两次上报均落历史轨迹
+        verify(vehicleLocationTrackMapper, times(2)).insert(any(VehicleLocationTrackDO.class));
+    }
+
+    @Test
+    void reportLocation_no_shift_skips_track() {
+        loginMember();
+        stubLoginDriver();
+        when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of(
+                DriverVehicleDO.builder().driverId(DRIVER_ID).vehicleId(7L).status(1).build()));
+        when(vehicleLocationMapper.selectByVehicleId(7L)).thenReturn(null);
+
+        AppDriverLocationReqVO reqVO = new AppDriverLocationReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setShiftId(null); // 未在班次中
+        reqVO.setLongitude(new BigDecimal("120.1234567"));
+        reqVO.setLatitude(new BigDecimal("30.1234567"));
+        driverAppService.reportLocation(reqVO);
+
+        verify(vehicleLocationMapper, times(1)).insert(any(VehicleLocationDO.class));
+        // 无班次：不落历史轨迹
+        verify(vehicleLocationTrackMapper, never()).insert(any(VehicleLocationTrackDO.class));
     }
 
     // ==================== 档案 / 待装车（登录态） ====================

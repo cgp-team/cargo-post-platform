@@ -58,6 +58,13 @@ public class AppProductOrderController {
         return success(true);
     }
 
+    @GetMapping("/trace")
+    @Operation(summary = "订单溯源（承运车辆/班次/线路站点/当天轨迹/最新位置；未发车返回空语义）")
+    @Parameter(name = "id", description = "订单编号", required = true)
+    public CommonResult<AppProductOrderTraceRespVO> trace(@RequestParam("id") Long id) {
+        return success(productOrderService.getTrace(getLoginUserId(), id));
+    }
+
     private AppProductOrderRespVO toAppVO(ProductOrderDO order) {
         AppProductOrderRespVO vo = BeanUtils.toBean(order, AppProductOrderRespVO.class);
         vo.setStatusName(ProductOrderStatusEnum.nameOf(order.getStatus()));

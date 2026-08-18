@@ -20,6 +20,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
@@ -33,6 +34,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import jakarta.annotation.Resource;
@@ -101,6 +103,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
+    @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
 
     @Override
@@ -526,6 +529,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void reportLocation(AppDriverLocationReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         Long vehicleId = resolveVehicleId(driver.getId());
+        LocalDateTime reportTime = LocalDateTime.now();
         // 每车一行，按车辆 upsert
         VehicleLocationDO location = vehicleLocationMapper.selectByVehicleId(vehicleId);
         if (location == null) {
@@ -535,16 +539,27 @@ public class DriverAppServiceImpl implements DriverAppService {
                     .longitude(reqVO.getLongitude())
                     .latitude(reqVO.getLatitude())
                     .speedKmh(reqVO.getSpeedKmh())
-                    .reportTime(LocalDateTime.now())
+                    .reportTime(reportTime)
                     .build());
-            return;
+        } else {
+            location.setShiftId(reqVO.getShiftId());
+            location.setLongitude(reqVO.getLongitude());
+            location.setLatitude(reqVO.getLatitude());
+            location.setSpeedKmh(reqVO.getSpeedKmh());
+            location.setReportTime(reportTime);
+            vehicleLocationMapper.updateById(location);
         }
-        location.setShiftId(reqVO.getShiftId());
-        location.setLongitude(reqVO.getLongitude());
-        location.setLatitude(reqVO.getLatitude());
-        location.setSpeedKmh(reqVO.getSpeedKmh());
-        location.setReportTime(LocalDateTime.now());
-        vehicleLocationMapper.updateById(location);
+        // 仅班次在途（shiftId 非空）才追加历史轨迹，与最新位置同一份上报值
+        if (reqVO.getShiftId() != null) {
+            vehicleLocationTrackMapper.insert(VehicleLocationTrackDO.builder()
+                    .vehicleId(vehicleId)
+                    .shiftId(reqVO.getShiftId())
+                    .longitude(reqVO.getLongitude())
+                    .latitude(reqVO.getLatitude())
+                    .speedKmh(reqVO.getSpeedKmh())
+                    .reportTime(reportTime)
+                    .build());
+        }
     }
 
     /**

@@ -50,10 +50,9 @@ public class ProductOrderController {
 
     @PutMapping("/ship")
     @Operation(summary = "订单发货")
-    @Parameter(name = "id", description = "订单编号", required = true)
     @PreAuthorize("@ss.hasPermission('transport:product-order:ship')")
-    public CommonResult<Boolean> ship(@RequestParam("id") Long id) {
-        productOrderService.ship(id);
+    public CommonResult<Boolean> ship(@Valid @RequestBody ProductOrderShipReqVO reqVO) {
+        productOrderService.ship(reqVO.getId(), reqVO.getVehicleId(), reqVO.getShiftId());
         return success(true);
     }
 
