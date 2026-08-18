@@ -4,7 +4,7 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.notice.vo.*;
-import cn.iocoder.yudao.module.transport.service.transport.notice.NoticeService;
+import cn.iocoder.yudao.module.transport.service.transport.notice.TransportNoticeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,8 +20,8 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 @RestController
 @RequestMapping("/transport/notice")
 @Validated
-public class NoticeController {
-    @Resource private NoticeService noticeService;
+public class TransportNoticeController {
+    @Resource private TransportNoticeService noticeService;
 
     @PostMapping("/create")
     @Operation(summary = "创建平台公告")
