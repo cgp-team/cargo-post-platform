@@ -4,7 +4,7 @@ import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.notice.vo.*;
 import cn.iocoder.yudao.module.transport.convert.transport.notice.NoticeConvert;
 import cn.iocoder.yudao.module.transport.dal.dataobject.notice.NoticeDO;
-import cn.iocoder.yudao.module.transport.dal.mysql.notice.NoticeMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.notice.TransportNoticeMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -15,8 +15,8 @@ import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionU
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.NOTICE_NOT_EXISTS;
 
 @Service @Validated
-public class NoticeServiceImpl implements NoticeService {
-    @Resource private NoticeMapper mapper;
+public class TransportNoticeServiceImpl implements TransportNoticeService {
+    @Resource private TransportNoticeMapper mapper;
 
     @Override public Long create(NoticeCreateReqVO reqVO) {
         NoticeDO o = NoticeConvert.INSTANCE.convert(reqVO);
