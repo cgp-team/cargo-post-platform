@@ -3,7 +3,7 @@ package cn.iocoder.yudao.module.transport.controller.app.transport.notice;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.app.transport.notice.vo.AppNoticeRespVO;
-import cn.iocoder.yudao.module.transport.service.transport.notice.NoticeService;
+import cn.iocoder.yudao.module.transport.service.transport.notice.TransportNoticeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -22,7 +22,7 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 @RequestMapping("/transport/notice")
 @Validated
 public class AppNoticeController {
-    @Resource private NoticeService noticeService;
+    @Resource private TransportNoticeService noticeService;
 
     @GetMapping("/list")
     @Operation(summary = "获得上架公告列表")
