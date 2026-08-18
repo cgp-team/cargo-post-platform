@@ -5,6 +5,12 @@ on:
   push:
     # 目前仓库只有 master；启用 develop 分支后在此追加
     branches: [master]
+    # 纯文档/小程序/CI/mock 算法的改动不部署任何内容，直接跳过整条流水线
+    paths-ignore:
+      - 'docs/**'
+      - 'miniprogram/**'
+      - '.github/**'
+      - 'mock-algorithm/**'
 
 permissions:
   contents: read
@@ -88,18 +94,48 @@ jobs:
           tar -xzf "${tgz}" --strip-components=1
           echo "Checkout (racing tarball) succeeded on round ${round}"
 
+      # 变更范围探测：tarball 检出无 .git，走 compare API 拿文件清单。
+      # 只部署有变更的部分（后端打包/前端构建/对应发布步骤按输出条件执行）。
+      # 兜底：workflow_dispatch、API 失败、空清单 → 全量构建，宁多勿漏。
+      - name: Detect changed areas
+        id: changes
+        env:
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          backend=true
+          frontend=true
+          if [[ -n "${BEFORE}" && "${BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
+            RESP=$(curl -fsS --connect-timeout 20 --max-time 60 \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/compare/${BEFORE}...${AFTER}" || echo '')
+            if [[ -n "${RESP}" ]]; then
+              # 解析脚本以 base64 内嵌，规避 YAML 块标量缩进与引号转义问题
+              echo 'aW1wb3J0IGpzb24sIHN5cwpkID0ganNvbi5sb2FkKHN5cy5zdGRpbikKZmlsZXMgPSBbZi5nZXQoJ2ZpbGVuYW1lJywgJycpIGZvciBmIGluIGQuZ2V0KCdmaWxlcycsIFtdKV0KRlJPTlRFTkQgPSAneXVkYW8tdWkveXVkYW8tdWktYWRtaW4tdnVlMy8nCkJBQ0tFTkRfUFJFRklYRVMgPSAoJ3l1ZGFvLXNlcnZlci8nLCAneXVkYW8tZnJhbWV3b3JrLycsICd5dWRhby1kZXBlbmRlbmNpZXMvJywgJ3l1ZGFvLW1vZHVsZS0nKQpkZWYgaXNfZnJvbnRlbmQocCk6IHJldHVybiBwLnN0YXJ0c3dpdGgoRlJPTlRFTkQpCmRlZiBpc19iYWNrZW5kKHApOiByZXR1cm4gcCA9PSAncG9tLnhtbCcgb3IgcC5zdGFydHN3aXRoKEJBQ0tFTkRfUFJFRklYRVMpCmlmIG5vdCBmaWxlczoKICAgIHByaW50KCd0cnVlIHRydWUnKQplbHNlOgogICAgcHJpbnQoJ3RydWUnIGlmIGFueShpc19iYWNrZW5kKHApIGZvciBwIGluIGZpbGVzKSBlbHNlICdmYWxzZScsCiAgICAgICAgICAndHJ1ZScgaWYgYW55KGlzX2Zyb250ZW5kKHApIGZvciBwIGluIGZpbGVzKSBlbHNlICdmYWxzZScpCg==' | base64 -d > /tmp/parse_compare.py
+              read -r backend frontend <<<"$(printf '%s' "${RESP}" | python3 /tmp/parse_compare.py)"
+            fi
+          fi
+          echo "backend=${backend}" >> "${GITHUB_OUTPUT}"
+          echo "frontend=${frontend}" >> "${GITHUB_OUTPUT}"
+          echo "changed areas: backend=${backend} frontend=${frontend}"
+
       # 测试已在 ci.yml 的 PR 门禁中执行，这里只打包
       # 服务器本机 JDK 21 + Maven，依赖走 ~/.m2/settings.xml 的阿里云镜像
+      # 离线优先（-o）+ 多核并行（-T 1C）；离线失败（如新增依赖未入本地仓库）回退在线
       - name: Package backend
-        run: mvn -B -pl yudao-server -am clean package -DskipTests
+        if: steps.changes.outputs.backend == 'true'
+        run: |
+          mvn -B -T 1C -o -pl yudao-server -am clean package -DskipTests || \
+          mvn -B -T 1C -pl yudao-server -am clean package -DskipTests
 
-      - name: Setup Node
-        uses: actions/setup-node@v5
-        with:
-          node-version: '22'
-
-      # package.json 的 packageManager 字段锁定 pnpm 版本，corepack 自动生效
+      # Node 22 已预装在服务器 /usr/local（见 docs/deployment.md「服务器一次性配置」），
+      # corepack 按 package.json 的 packageManager 字段自动对齐 pnpm 版本
       - name: Build frontend
+        if: steps.changes.outputs.frontend == 'true'
         working-directory: yudao-ui/yudao-ui-admin-vue3
         run: |
           corepack enable
@@ -157,6 +193,7 @@ jobs:
           echo "All migrations applied."
 
       - name: Deploy backend and restart
+        if: steps.changes.outputs.backend == 'true'
         run: |
           set -euo pipefail
           cd "${APP_DIR}"
@@ -169,6 +206,7 @@ jobs:
           sudo /usr/bin/systemctl restart cargo-post
 
       - name: Deploy frontend
+        if: steps.changes.outputs.frontend == 'true'
         run: |
           set -euo pipefail
           rsync -a --delete "${GITHUB_WORKSPACE}/yudao-ui/yudao-ui-admin-vue3/dist-prod/" /opt/cargo-post-web/
