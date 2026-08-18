@@ -44,4 +44,16 @@ public class AppSendOrderRespVO {
     private String receiverAddress;
     @Schema(description = "下单时间")
     private LocalDateTime createTime;
+
+    // ========== 到达预估（仅 track 详情填充，未分配时全为 null） ==========
+    @Schema(description = "承运车牌号")
+    private String vehiclePlate;
+    @Schema(description = "承运班次编码")
+    private String shiftCode;
+    @Schema(description = "目标站点名称（送达方向经停站）")
+    private String targetStation;
+    @Schema(description = "预计到达时间")
+    private LocalDateTime estimatedArrivalTime;
+    @Schema(description = "预计到达剩余分钟数（仅未来时间有值）")
+    private Integer etaMinutes;
 }

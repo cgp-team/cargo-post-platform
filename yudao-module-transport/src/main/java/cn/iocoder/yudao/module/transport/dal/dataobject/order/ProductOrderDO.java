@@ -28,6 +28,10 @@ public class ProductOrderDO extends TenantBaseDO {
     private BigDecimal totalAmount;
     /** 订单状态(0待发货 1已发货 2已完成 3已取消) */
     private Integer status;
+    /** 承运车辆编号(发货时关联,溯源用) */
+    private Long vehicleId;
+    /** 承运班次编号(发货时关联,溯源用) */
+    private Long shiftId;
     /** 收货人 */
     private String receiverName;
     /** 收货电话 */

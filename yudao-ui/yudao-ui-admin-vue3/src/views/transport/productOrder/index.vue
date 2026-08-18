@@ -49,11 +49,13 @@
     </ContentWrap>
   </ContentWrap>
   <ProductOrderDetail ref="detailRef" />
+  <ProductOrderShipForm ref="shipFormRef" @success="getList" />
 </template>
 
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
 import ProductOrderDetail from './ProductOrderDetail.vue'
+import ProductOrderShipForm from './ProductOrderShipForm.vue'
 
 defineOptions({ name: 'TransportProductOrder' })
 
@@ -93,9 +95,8 @@ const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10,
 
 const openDetail = (id: number) => detailRef.value?.open(id)
 
-const handleShip = async (id: number) => {
-  try { await message.confirm('确认发货该订单？'); await ProductOrderApi.shipProductOrder(id); message.success('发货成功'); getList() } catch (e) { /* cancelled */ }
-}
+const shipFormRef = ref()
+const handleShip = (id: number) => shipFormRef.value?.open(id)
 const handleComplete = async (id: number) => {
   try { await message.confirm('确认该订单已完成？'); await ProductOrderApi.completeProductOrder(id); message.success('操作成功'); getList() } catch (e) { /* cancelled */ }
 }

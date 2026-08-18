@@ -67,4 +67,8 @@ public interface ErrorCodeConstants {
     // Cargo Audit（货运物品审核）
     ErrorCode CARGO_AUDIT_ONLY_CARGO = new ErrorCode(1_005_014_000, "仅货运订单需要审核");
     ErrorCode CARGO_AUDIT_STATUS_ILLEGAL = new ErrorCode(1_005_014_001, "订单当前状态不允许审核");
+    // Notice（平台公告）；段内 1_005_013_000/001 已被邮快件取件占用，从 002 起
+    ErrorCode NOTICE_NOT_EXISTS = new ErrorCode(1_005_013_002, "公告不存在");
+    // Feedback（意见反馈）；段内 1_005_014_000/001 已被货运审核占用，从 002 起
+    ErrorCode FEEDBACK_NOT_EXISTS = new ErrorCode(1_005_014_002, "意见反馈不存在");
 }

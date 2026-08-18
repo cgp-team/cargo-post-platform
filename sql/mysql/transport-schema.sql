@@ -343,6 +343,8 @@ CREATE TABLE IF NOT EXISTS `transport_product_order` (
   `user_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '购买会员手机号',
   `total_amount` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '订单总额',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '订单状态(0待发货 1已发货 2已完成 3已取消)',
+  `vehicle_id` bigint DEFAULT NULL COMMENT '承运车辆编号(发货时关联,溯源用)',
+  `shift_id` bigint DEFAULT NULL COMMENT '承运班次编号(发货时关联,溯源用)',
   `receiver_name` varchar(64) NOT NULL DEFAULT '' COMMENT '收货人',
   `receiver_mobile` varchar(32) NOT NULL DEFAULT '' COMMENT '收货电话',
   `receiver_address` varchar(255) NOT NULL DEFAULT '' COMMENT '收货地址',
@@ -417,6 +419,62 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle_location` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_vehicle_location_vehicle` (`vehicle_id`, `tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='车辆最新位置表（每车一行，司机端上报 upsert）';
+
+-- ---------- 车辆位置历史轨迹表 ----------
+CREATE TABLE IF NOT EXISTS `transport_vehicle_location_track` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '轨迹编号',
+  `vehicle_id` bigint NOT NULL COMMENT '车辆编号',
+  `shift_id` bigint DEFAULT NULL COMMENT '班次编号',
+  `longitude` decimal(10,7) NOT NULL COMMENT '经度',
+  `latitude` decimal(10,7) NOT NULL COMMENT '纬度',
+  `speed_kmh` decimal(6,1) DEFAULT NULL COMMENT '速度(km/h)',
+  `report_time` datetime NOT NULL COMMENT '上报时间',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_vehicle_time` (`vehicle_id`, `report_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='车辆位置历史轨迹表（班次在途时按上报落库）';
+
+-- ---------- 平台公告表 ----------
+CREATE TABLE IF NOT EXISTS `transport_notice` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '公告编号',
+  `title` varchar(128) NOT NULL DEFAULT '' COMMENT '公告标题',
+  `content` text COMMENT '公告内容',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态(0下架 1上架)',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序(小的在前)',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_notice_status_sort` (`tenant_id`, `status`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台公告表';
+
+-- ---------- 意见反馈表 ----------
+CREATE TABLE IF NOT EXISTS `transport_feedback` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '反馈编号',
+  `user_id` bigint NOT NULL DEFAULT 0 COMMENT '会员编号',
+  `name` varchar(30) NOT NULL DEFAULT '' COMMENT '联系人姓名',
+  `mobile` varchar(11) NOT NULL DEFAULT '' COMMENT '联系电话',
+  `content` varchar(500) NOT NULL DEFAULT '' COMMENT '反馈内容',
+  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态(0待处理 1已回复)',
+  `reply` varchar(500) DEFAULT NULL COMMENT '回复内容',
+  `reply_time` datetime DEFAULT NULL COMMENT '回复时间',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '' COMMENT '创建者',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updater` varchar(64) DEFAULT '' COMMENT '更新者',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `deleted` bit(1) NOT NULL DEFAULT b'0' COMMENT '是否删除',
+  PRIMARY KEY (`id`),
+  KEY `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='意见反馈表';
 
 -- 已有库人工执行（CREATE IF NOT EXISTS 不会给已有表加列，升级请执行以下 ALTER）：
 -- ALTER TABLE `transport_order`

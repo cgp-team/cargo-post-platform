@@ -12,6 +12,8 @@
       <el-descriptions-item label="收货人">{{ detail.receiverName }}</el-descriptions-item>
       <el-descriptions-item label="收货电话">{{ detail.receiverMobile }}</el-descriptions-item>
       <el-descriptions-item label="收货地址" :span="2">{{ detail.receiverAddress }}</el-descriptions-item>
+      <el-descriptions-item v-if="detail.vehicleId" label="承运车辆">{{ vehicleLabel }}</el-descriptions-item>
+      <el-descriptions-item v-if="detail.shiftId" label="承运班次">{{ shiftLabelText }}</el-descriptions-item>
     </el-descriptions>
     <el-divider content-position="left">商品明细</el-divider>
     <el-table :data="detail.items || []" border stripe size="small">
@@ -34,6 +36,8 @@
 
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
+import * as VehicleApi from '@/api/transport/vehicle'
+import * as ShiftApi from '@/api/transport/shift'
 import { Dialog } from '@/components/Dialog'
 
 const dialogVisible = ref(false)
@@ -48,11 +52,31 @@ const statusMap = {
 }
 const statusTag = (s?: number) => (statusMap as any)[s ?? 0]?.tag || 'info'
 
+const vehicleOptions = ref<VehicleApi.VehicleVO[]>([])
+const shiftOptions = ref<ShiftApi.ShiftVO[]>([])
+const vehicleLabel = computed(() => {
+  const v = vehicleOptions.value.find((item) => item.id === detail.value.vehicleId)
+  return v?.plateNo || `#${detail.value.vehicleId}`
+})
+const shiftLabelText = computed(() => {
+  const s = shiftOptions.value.find((item) => item.id === detail.value.shiftId)
+  if (!s) return `#${detail.value.shiftId}`
+  return s.plannedDepartureTime ? `${s.shiftCode} ${s.plannedDepartureTime}` : s.shiftCode
+})
+
 const open = async (id: number) => {
   dialogVisible.value = true
   loading.value = true
   try {
     detail.value = await ProductOrderApi.getProductOrder(id)
+    if (detail.value.vehicleId || detail.value.shiftId) {
+      try {
+        vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
+      } catch (e) { /* ignore */ }
+      try {
+        shiftOptions.value = await ShiftApi.getSimpleShiftList()
+      } catch (e) { /* ignore */ }
+    }
   } finally { loading.value = false }
 }
 
