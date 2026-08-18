@@ -13,7 +13,7 @@ import lombok.*;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class NoticeDO extends TenantBaseDO {
+public class TransportNoticeDO extends TenantBaseDO {
     @TableId
     private Long id;
     private String title;
