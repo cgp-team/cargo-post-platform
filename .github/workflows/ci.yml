@@ -3,8 +3,17 @@ name: Project validation
 on:
   workflow_dispatch:
   pull_request:
+    # 纯文档/小程序/CI 配置的改动无需校验，直接跳过（master 无分支保护，不卡合并）
+    paths-ignore:
+      - 'docs/**'
+      - 'miniprogram/**'
+      - '.github/**'
   push:
     branches: [master, main, develop]
+    paths-ignore:
+      - 'docs/**'
+      - 'miniprogram/**'
+      - '.github/**'
 
 permissions:
   contents: read
