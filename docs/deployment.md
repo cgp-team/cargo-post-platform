@@ -18,7 +18,7 @@ Compose 只提供 MySQL、Redis、MinIO 和 Mock 算法服务。业务后端与�
 
 部署流水线含两项提速机制（2026-08 起）：
 
-- **路径跳过**：`docs/`、`miniprogram/`、`.github/`、`mock-algorithm/` 的纯变更不触发部署。
+- **路径跳过**：`docs/`、`miniprogram/`、`.github/`、`mock-algorithm/` 的纯变更不触发部署；CI 门禁（`ci.yml`）对 `docs/`、`miniprogram/`、`.github/` 纯变更同样跳过（`mock-algorithm/` 保留，有独立测试 job）。
 - **部分构建**：`Detect changed areas` 步骤用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行（如纯 SQL 变更只跑迁移）；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
 
 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），因此部署 workflow 固定运行在服务器本机的 self-hosted runner（`runs-on: [self-hosted, cargo-post]`）上，构建与部署同机完成，无需 DEPLOY_* Secrets 与 SSH 通道。
