@@ -16,6 +16,11 @@ Compose 只提供 MySQL、Redis、MinIO 和 Mock 算法服务。业务后端与�
 
 `.github/workflows/deploy-dev.yml` 在 push 到 `master`（或在 Actions 页手动 Run workflow）时，在开发云服务器本机的 self-hosted runner 上构建后端 jar、通过 systemd 重启，随后轮询 `/actuator/health` 确认启动成功，失败则本次部署标记失败并输出服务状态。同一时刻只允许一个部署排队执行；旧包保留为 `yudao-server.jar.bak`，回滚时将其改回 `yudao-server.jar` 并重启服务即可。PR 门禁测试由 `.github/workflows/ci.yml` 承担，部署 workflow 不重复跑测试。
 
+部署流水线含两项提速机制（2026-08 起）：
+
+- **路径跳过**：`docs/`、`miniprogram/`、`.github/`、`mock-algorithm/` 的纯变更不触发部署。
+- **部分构建**：`Detect changed areas` 步骤用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行（如纯 SQL 变更只跑迁移）；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
+
 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），因此部署 workflow 固定运行在服务器本机的 self-hosted runner（`runs-on: [self-hosted, cargo-post]`）上，构建与部署同机完成，无需 DEPLOY_* Secrets 与 SSH 通道。
 
 ### 服务器一次性配置
@@ -33,6 +38,10 @@ cd /opt/cargo-post-platform   # 本小节后续命令均在仓库根目录执行
 sudo useradd -m -s /bin/bash deploy
 # self-hosted runner 需要在服务器本机构建后端：安装 JDK（含 javac）与 Maven
 sudo apt install -y openjdk-21-jdk-headless maven
+# 前端构建使用服务器预装的 Node 22（官方 tarball 装到 /usr/local，不再每次从 GitHub 下载）：
+curl -fsSL -o /tmp/node.tgz https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.gz
+sudo tar -xzf /tmp/node.tgz -C /usr/local --strip-components=1 && rm /tmp/node.tgz
+sudo corepack enable   # 激活 pnpm，版本由 package.json 的 packageManager 字段锁定
 sudo mkdir -p /opt/cargo-post/config
 sudo chown -R deploy:deploy /opt/cargo-post
 sudo cp deploy/cargo-post.service /etc/systemd/system/
