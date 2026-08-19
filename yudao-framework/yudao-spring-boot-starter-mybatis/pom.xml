@@ -89,6 +89,15 @@
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-undertow</artifactId>
                 </exclusion>
+                <!-- 项目仅使用 MySQL，排除 4.5.x 起传递引入的 Oracle UCP（约 17MB 无效体积） -->
+                <exclusion>
+                    <groupId>com.oracle.database.spring</groupId>
+                    <artifactId>oracle-spring-boot-starter-ucp</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.oracle.database.jdbc</groupId>
+                    <artifactId>ucp</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
