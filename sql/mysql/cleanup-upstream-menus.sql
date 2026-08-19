@@ -42,3 +42,18 @@ DELETE FROM system_menu WHERE id IN (SELECT id FROM menu_tree);
 
 -- 第三步：隐藏系统管理与基础设施顶级目录（功能保留，可直接通过 URL 访问，如 /system/user、/infra/file-config）
 UPDATE system_menu SET visible = b'0' WHERE id IN (1, 2);
+
+-- 第四步：清理基础设施下的「代码生成案例」演示菜单（infra demo 子域已随后端代码一并删除，见 slimming-plan.md §4.2）
+WITH RECURSIVE menu_tree AS (
+  SELECT id FROM system_menu WHERE deleted = 0 AND id = 1070 -- 代码生成案例（基础设施 2 的子菜单）
+  UNION ALL
+  SELECT m.id FROM system_menu m JOIN menu_tree t ON m.parent_id = t.id
+)
+DELETE FROM system_role_menu WHERE menu_id IN (SELECT id FROM menu_tree);
+
+WITH RECURSIVE menu_tree AS (
+  SELECT id FROM system_menu WHERE deleted = 0 AND id = 1070
+  UNION ALL
+  SELECT m.id FROM system_menu m JOIN menu_tree t ON m.parent_id = t.id
+)
+DELETE FROM system_menu WHERE id IN (SELECT id FROM menu_tree);
