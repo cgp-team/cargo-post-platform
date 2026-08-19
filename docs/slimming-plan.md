@@ -342,6 +342,7 @@ DELETE FROM system_login_log     WHERE create_time < DATE_SUB(NOW(), INTERVAL 30
 - 仓库资产删除 143 文件（`git rm` 已暂存）：`.image/`、`.gitee/`、`script/`、`sql/` 8 个厂商目录 + `tools/`、`sql/mysql/quartz.sql`、4 个空壳前端
 - **wx-java 两个 starter 保留**：验证构建推翻零引用初判（`SocialClientServiceImpl` 真实使用，见 §4.2）
 - 验证：服务器隔离环境 `mvn clean package` **BUILD SUCCESS**，新 jar 隔离启动 18.2s、health UP；依赖 264→261 个、163MB→155MB
+- **后续追加（2026-08-19 第二轮）**：12 个已停用后端模块源码（ai/bpm/crm/erp/im/iot/mall/mes/mp/pay/report/wms，4366 文件）已物理删除，根 pom 与 yudao-server pom 的注释占位一并清理；前端同步摘除 views/api 下 13 个上游模块死目录、4 个仅服务死页面的共享组件（DiyEditor/bpmnProcessDesigner/SimpleProcessDesignerV2/AppLinkInput）、2 个死 store、`remaining.ts` 静态路由 581 行死路由及 main.ts 的 bpm wangEditor 插件注册
 
 ### 提交后服务器协调（一次性）
 
