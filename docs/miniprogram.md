@@ -12,6 +12,7 @@
 - `pages/goods/trace/trace`：商品溯源，商城订单的大巴承运轨迹（地图轨迹线 + 途经站点），从「我的订单」已发货/已完成订单进入。
 - `pages/send/send`：寄件下单，支持从地址簿回填收货信息。
 - `pages/parcel/parcel`：我的包裹。邮快件列表直显取件码（点击复制）；单号查询展示取件码二维码、承运班次与到达预估（已分配/已发车时）。
+- `pages/bus/index`、`pages/bus/detail`：实时公交独立页（车来了式：线路地图 + 车辆列表 + 车辆详情），从首页「附近公交」或快递页进入。
 - `pages/orders/orders`：农产品商城订单列表（状态筛选、取消订单、溯源入口），从"我的"页进入，不在 tab-bar。
 - `pages/mine/mine`、`pages/settings/settings`：我的与设置（含老年人模式、主题颜色，由 `utils/appearance.js` 统一处理）。
 - `pages/mine/profile/profile`：个人资料编辑（昵称/头像/性别）与修改密码（短信验证码 scene=3）。
