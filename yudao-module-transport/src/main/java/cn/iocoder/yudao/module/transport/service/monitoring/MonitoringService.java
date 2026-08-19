@@ -2,8 +2,10 @@ package cn.iocoder.yudao.module.transport.service.monitoring;
 
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -28,4 +30,9 @@ public interface MonitoringService {
      * 获取今日班次执行状态（按班次计划时间窗口模拟）
      */
     List<MonitoringShiftRespVO> getShiftExecution();
+
+    /**
+     * 获取车辆指定日期的历史轨迹（transport_vehicle_location_track，司机端在途上报）
+     */
+    MonitoringTrackRespVO getVehicleTrack(Long vehicleId, LocalDate date);
 }

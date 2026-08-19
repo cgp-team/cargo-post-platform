@@ -72,6 +72,22 @@ export interface MonitoringShiftVO {
   arriveTime?: string
 }
 
+/** 轨迹点 */
+export interface MonitoringTrackPointVO {
+  longitude?: number
+  latitude?: number
+  speedKmh?: number
+  reportTime?: string
+  shiftId?: number
+}
+
+/** 车辆历史轨迹 */
+export interface MonitoringTrackVO {
+  vehicleId: number
+  plateNo?: string
+  points: MonitoringTrackPointVO[]
+}
+
 /** 获取地图图层数据（站点与线路） */
 export const getMonitoringMapData = (): Promise<MonitoringMapDataVO> => {
   return request.get({ url: '/transport/monitoring/map-data' })
@@ -85,4 +101,12 @@ export const getMonitoringVehicles = (): Promise<MonitoringVehicleVO[]> => {
 /** 获取今日班次执行状态 */
 export const getShiftExecution = (): Promise<MonitoringShiftVO[]> => {
   return request.get({ url: '/transport/monitoring/shift-execution' })
+}
+
+/** 获取车辆指定日期的历史轨迹（轨迹回放），date 格式 YYYY-MM-DD */
+export const getMonitoringTrack = (
+  vehicleId: number,
+  date: string
+): Promise<MonitoringTrackVO> => {
+  return request.get({ url: '/transport/monitoring/track', params: { vehicleId, date } })
 }
