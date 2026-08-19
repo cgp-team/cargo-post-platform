@@ -19,7 +19,7 @@ flowchart LR
     Infra --> DB
     Member --> DB
     Backend --> Redis[("Redis")]
-    Infra --> Storage["MinIO / 对象存储"]
+    Infra --> Storage["数据库文件存储（MinIO/对象存储可选恢复）"]
     Transport --> Map["百度地图 GL"]
     CICD["CI/CD"] --> Backend
     CICD --> UI
