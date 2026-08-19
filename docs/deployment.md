@@ -10,7 +10,15 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 deploy/scripts/health-check.sh
 ```
 
-Compose 只提供 MySQL、Redis、MinIO 和 Mock 算法服务。业务后端与完整 Vue 管理端暂按本机进程启动。生产环境不得直接复用开发 Compose；应使用独立密钥、TLS、网络策略、监控、日志采集和经过演练的恢复流程。
+Compose 提供 MySQL、Redis 和 Mock 算法服务（MinIO 自 2026-08 起默认停用，compose 中保留注释可一键恢复；文件存储默认使用数据库）。MySQL/Redis/算法端口仅绑定 `127.0.0.1`，MySQL 已关闭 performance-schema 以适配小内存机器。业务后端与完整 Vue 管理端暂按本机进程启动。生产环境不得直接复用开发 Compose；应使用独立密钥、TLS、网络策略、监控、日志采集和经过演练的恢复流程。
+
+### 服务器加固与精简基线（2026-08 起）
+
+dev 服务器已完成一轮系统性精简（方案与实测数据见 [slimming-plan.md](slimming-plan.md)），基线如下，新增配置时不要回退：
+
+- 后端外部化配置 `/opt/cargo-post/config/application-dev.yaml` 叠加：Quartz 整体禁用（无业务定时任务）、Redisson 线程收缩、Druid stat/监控台关闭、springdoc/knife4j 关闭（`/druid`、`/v3/api-docs` 不对公网开放）、api-encrypt 关闭、actuator 仅暴露 health。
+- 日志表由 deploy 用户 crontab 每周执行 `deploy/scripts/cleanup.sql` 清理（访问日志留 7 天、错误/登录日志留 30 天）。
+- `vm.swappiness=10` 已持久化（`/etc/sysctl.d/99-cargo-post.conf`），保护 mysqld 不被换出。
 
 ## 持续部署（GitHub Actions）
 
@@ -53,7 +61,7 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart cargo-post
 
 服务器专属配置（数据库、Redis 密码等）放 `/opt/cargo-post/config/application-dev.yaml`（Spring Boot 自动读取）或 `/opt/cargo-post/app.env`（systemd EnvironmentFile，权限 600），均不得提交仓库。
 
-Compose 技术栈（MySQL/Redis/MinIO/Mock 算法）与 CI 的数据库迁移步骤统一从持久检出根目录的 `.env` 读取配置：按 `.env.example` 创建 `/opt/cargo-post-platform/.env`（权限 600），并用 `deploy/scripts/deploy.sh` 启动技术栈。注意 `.env` 放在 runner 工作区无效——`actions/checkout` 每次构建都会清理未跟踪文件。
+Compose 技术栈（MySQL/Redis/Mock 算法）与 CI 的数据库迁移步骤统一从持久检出根目录的 `.env` 读取配置：按 `.env.example` 创建 `/opt/cargo-post-platform/.env`（权限 600），并用 `deploy/scripts/deploy.sh` 启动技术栈。注意 `.env` 放在 runner 工作区无效——`actions/checkout` 每次构建都会清理未跟踪文件。
 
 ### Self-hosted runner
 
