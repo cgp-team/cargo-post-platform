@@ -11,8 +11,8 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
       TZ: Asia/Shanghai
     ports:
-      - "${DB_PORT:-3306}:3306"
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+      - "127.0.0.1:${DB_PORT:-3306}:3306" # 仅本机：后端跑在宿主机，无需对公网开放
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--performance-schema=OFF"]
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -28,7 +28,7 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379" # 仅本机：后端跑在宿主机，无需对公网开放
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
     volumes:
       - redis-data:/data
@@ -38,23 +38,25 @@ services:
       timeout: 5s
       retries: 10
 
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    restart: unless-stopped
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-    ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    command: ["server", "/data", "--console-address", ":9001"]
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+  # MinIO 已于 2026-08-19 停用：从未产生任何文件（0 对象），文件存储 master 已切回数据库存储。
+  # 需要对象存储时取消注释本服务与下方 minio-data 卷即可恢复。
+  # minio:
+  #   image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  #   restart: unless-stopped
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+  #   ports:
+  #     - "${MINIO_API_PORT:-9000}:9000"
+  #     - "${MINIO_CONSOLE_PORT:-9001}:9001"
+  #   command: ["server", "/data", "--console-address", ":9001"]
+  #   volumes:
+  #     - minio-data:/data
+  #   healthcheck:
+  #     test: ["CMD", "mc", "ready", "local"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
 
   mock-algorithm:
     build:
@@ -63,7 +65,7 @@ services:
     image: cargo-post/mock-algorithm:0.1.0
     restart: unless-stopped
     ports:
-      - "${MOCK_ALGORITHM_PORT:-18080}:8000"
+      - "127.0.0.1:${MOCK_ALGORITHM_PORT:-18080}:8000" # 仅本机：只允许后端内网访问
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 10s
@@ -73,4 +75,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
-  minio-data:
+  # minio-data:  # MinIO 已停用，卷保留在服务器上未删除，恢复服务时取消注释
