@@ -3,6 +3,7 @@ package cn.iocoder.yudao.module.transport.service.monitoring;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
@@ -13,6 +14,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
@@ -21,6 +23,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -75,6 +78,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private RouteStationMapper routeStationMapper;
     @Resource private StationMapper stationMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
+    @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Override
@@ -234,6 +238,30 @@ public class MonitoringServiceImpl implements MonitoringService {
             }
             return vo;
         }).toList();
+    }
+
+    /** 单次查询返回的轨迹点上限（与 app 溯源一致，防大包） */
+    private static final int TRACK_POINT_LIMIT = 2000;
+
+    @Override
+    public MonitoringTrackRespVO getVehicleTrack(Long vehicleId, LocalDate date) {
+        MonitoringTrackRespVO respVO = new MonitoringTrackRespVO();
+        respVO.setVehicleId(vehicleId);
+        VehicleDO vehicle = vehicleMapper.selectById(vehicleId);
+        respVO.setPlateNo(vehicle != null ? vehicle.getPlateNo() : null);
+        // 当日 [00:00, 次日 00:00) 范围，时间升序
+        List<VehicleLocationTrackDO> tracks = vehicleLocationTrackMapper.selectByVehicleIdAndTimeRange(
+                vehicleId, date.atStartOfDay(), date.plusDays(1).atStartOfDay(), TRACK_POINT_LIMIT);
+        respVO.setPoints(tracks.stream().map(t -> {
+            MonitoringTrackRespVO.TrackPoint point = new MonitoringTrackRespVO.TrackPoint();
+            point.setLongitude(toDouble(t.getLongitude()));
+            point.setLatitude(toDouble(t.getLatitude()));
+            point.setSpeedKmh(toDouble(t.getSpeedKmh()));
+            point.setReportTime(t.getReportTime());
+            point.setShiftId(t.getShiftId());
+            return point;
+        }).toList());
+        return respVO;
     }
 
     /** 从 map 按 id 取对象的指定字段（对象缺失返回 null） */
