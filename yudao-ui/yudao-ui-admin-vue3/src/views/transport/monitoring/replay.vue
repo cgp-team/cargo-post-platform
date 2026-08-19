@@ -88,7 +88,7 @@ const message = useMessage()
 
 const vehicles = ref<MonitoringVehicleVO[]>([])
 const queryVehicleId = ref<number>()
-const queryDate = ref(formatDate(new Date()))
+const queryDate = ref(formatDate(new Date(), 'YYYY-MM-DD'))
 const loading = ref(false)
 const trackLoaded = ref(false)
 const points = ref<MonitoringTrackPointVO[]>([])
