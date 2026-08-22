@@ -17,14 +17,17 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -35,12 +38,16 @@ import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
@@ -60,6 +67,7 @@ public class AppSendController {
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private VehicleMapper vehicleMapper;
     @Resource private ShiftMapper shiftMapper;
+    @Resource private VehicleLocationMapper vehicleLocationMapper;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -72,9 +80,11 @@ public class AppSendController {
     @Operation(summary = "我的寄货记录分页")
     public CommonResult<PageResult<AppSendOrderRespVO>> page(PageParam pageParam) {
         PageResult<TransportOrderDO> pageResult = transportOrderService.getMySendPage(getLoginUserId(), pageParam);
-        List<AppSendOrderRespVO> list = pageResult.getList().stream()
+        List<TransportOrderDO> orders = pageResult.getList();
+        List<AppSendOrderRespVO> list = orders.stream()
                 .map(this::toRespVO)
                 .toList();
+        fillCarrierBatch(list, orders); // 在途订单"车来取货/送货"提醒（批量，避免逐单 N+1）
         return success(new PageResult<>(list, pageResult.getTotal()));
     }
 
@@ -100,7 +110,8 @@ public class AppSendController {
         }
         // 取送达方向（送客 2 / 派送 3）的最新一条；没有送达明细时兜底取最新一条
         DispatchPlanItemDO item = items.stream()
-                .filter(i -> i.getActionType() != null && (i.getActionType() == 2 || i.getActionType() == 3))
+                .filter(i -> i.getActionType() != null
+                        && (i.getActionType() == 2 || i.getActionType() == 3 || i.getActionType() == 4))
                 .max(Comparator.comparing(DispatchPlanItemDO::getId))
                 .orElseGet(() -> items.stream().max(Comparator.comparing(DispatchPlanItemDO::getId)).orElse(null));
         if (item == null) {
@@ -130,6 +141,91 @@ public class AppSendController {
         if (eta != null && eta.isAfter(LocalDateTime.now())) {
             vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
         }
+        // 车来取货/送货提醒：承运车辆实时位置 + 距目标站点距离/分钟（track 详情直查）
+        Map<Long, VehicleLocationDO> carrierLocMap = new HashMap<>();
+        Map<Long, VehicleDO> carrierVehicleMap = new HashMap<>();
+        if (item.getVehicleId() != null) {
+            carrierLocMap.put(item.getVehicleId(), vehicleLocationMapper.selectByVehicleId(item.getVehicleId()));
+            carrierVehicleMap.put(item.getVehicleId(), vehicleMapper.selectById(item.getVehicleId()));
+        }
+        fillCarrierLiveInfo(vo, item, carrierLocMap, carrierVehicleMap,
+                stationService.getSimpleList().stream()
+                        .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a)));
+    }
+
+    /** 我的寄货列表批量填充承运车辆实时位置（在途订单"车来取货/送货"提醒），一次加载避免逐单 N+1 */
+    private void fillCarrierBatch(List<AppSendOrderRespVO> list, List<TransportOrderDO> orders) {
+        if (list.isEmpty()) {
+            return;
+        }
+        List<Long> orderIds = orders.stream().map(TransportOrderDO::getId).toList();
+        // 方向经停明细：送客 2 / 派送 3 / 揽收 4（揽收@上车站，派送@下车站，送客@下车站）
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .in(DispatchPlanItemDO::getOrderId, orderIds)
+                .in(DispatchPlanItemDO::getActionType, 2, 3, 4));
+        if (items.isEmpty()) {
+            return;
+        }
+        // 每订单取方向经停最新一条
+        Map<Long, DispatchPlanItemDO> orderItemMap = items.stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getOrderId, Function.identity(),
+                        (a, b) -> a.getId() > b.getId() ? a : b));
+        Set<Long> vehicleIds = items.stream().map(DispatchPlanItemDO::getVehicleId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (vehicleIds.isEmpty()) {
+            return;
+        }
+        // 一次批量加载：车辆最新位置 + 车辆档案 + 站点
+        Map<Long, VehicleLocationDO> locMap = vehicleLocationMapper
+                .selectList(new LambdaQueryWrapperX<VehicleLocationDO>()
+                        .in(VehicleLocationDO::getVehicleId, vehicleIds))
+                .stream().collect(Collectors.toMap(VehicleLocationDO::getVehicleId, Function.identity(), (a, b) -> a));
+        Map<Long, VehicleDO> vehicleMap = vehicleMapper.selectBatchIds(vehicleIds).stream()
+                .collect(Collectors.toMap(VehicleDO::getId, Function.identity(), (a, b) -> a));
+        Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        for (int i = 0; i < list.size(); i++) {
+            DispatchPlanItemDO item = orderItemMap.get(orders.get(i).getId());
+            if (item != null) {
+                fillCarrierLiveInfo(list.get(i), item, locMap, vehicleMap, stationMap);
+            }
+        }
+    }
+
+    /** 填充承运车辆实时位置 + 距目标站点距离/分钟（车来取货/送货提醒）。
+     *  目标站点 = 该订单方向经停站（揽收→上车站，派送/客运送客→下车站）。
+     *  车辆未发车/未上报位置时字段保持 null，不影响原流程。 */
+    private void fillCarrierLiveInfo(AppSendOrderRespVO vo, DispatchPlanItemDO item,
+                                     Map<Long, VehicleLocationDO> locMap,
+                                     Map<Long, VehicleDO> vehicleMap,
+                                     Map<Long, StationDO> stationMap) {
+        if (item.getVehicleId() == null || item.getStationId() == null) {
+            return;
+        }
+        VehicleLocationDO loc = locMap.get(item.getVehicleId());
+        if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null) {
+            return;
+        }
+        StationDO station = stationMap.get(item.getStationId());
+        if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+            return;
+        }
+        // 列表场景下补车牌/站点名（track 详情已在 fillEta 设置，非 null 不覆盖）
+        VehicleDO vehicle = vehicleMap.get(item.getVehicleId());
+        if (vehicle != null && vo.getVehiclePlate() == null) {
+            vo.setVehiclePlate(vehicle.getPlateNo());
+        }
+        if (vo.getTargetStation() == null) {
+            vo.setTargetStation(station.getStationName());
+        }
+        GeoDistanceUtil.DistanceEta distanceEta = GeoDistanceUtil.computeKmAndMinutes(
+                loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(),
+                station.getLongitude().doubleValue(), station.getLatitude().doubleValue(),
+                GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH);
+        vo.setCarrierLongitude(loc.getLongitude().doubleValue());
+        vo.setCarrierLatitude(loc.getLatitude().doubleValue());
+        vo.setCarrierDistanceKm(BigDecimal.valueOf(Math.round(distanceEta.distKm() * 100) / 100.0));
+        vo.setCarrierEtaMinutes(distanceEta.etaMinutes());
     }
 
     @GetMapping("/stations")
