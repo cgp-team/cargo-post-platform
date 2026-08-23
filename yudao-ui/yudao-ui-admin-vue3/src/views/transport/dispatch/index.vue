@@ -104,7 +104,9 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="总里程" prop="totalDistance" align="center" />
+        <el-table-column label="总里程(km)" prop="totalDistance" align="center">
+          <template #default="scope">{{ totalDistanceText(scope.row.totalDistance) }}</template>
+        </el-table-column>
         <el-table-column label="算法版本" prop="algorithmVersion" align="center" />
         <el-table-column label="审核人" prop="approvedBy" align="center" />
         <el-table-column label="审核时间" prop="approvedTime" align="center" width="180" />
@@ -210,8 +212,8 @@
           type="success"
           :closable="false"
           show-icon
-          title="运力充足"
-          :description="`乘客 ${validateResult.orderStats?.passengerCount ?? 0} 人 / 包裹 ${validateResult.orderStats?.parcelCount ?? 0} 件，当前车辆均可容纳`"
+          title="总容量充足"
+          :description="`乘客 ${validateResult.orderStats?.passengerCount ?? 0} 人 / 包裹 ${validateResult.orderStats?.parcelCount ?? 0} 件，总量在车辆总容量内；单车容量与时序仍由算法最终校验`"
           style="margin-bottom:12px"
         />
 
@@ -287,22 +289,22 @@
       <el-form :model="acoForm" label-width="150px">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="蚂蚁种群数量"><el-input-number v-model="acoForm.ant_count" :min="1" :max="500" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="蚂蚁种群数量"><el-input-number v-model="acoForm.ant_count" :min="1" :max="100" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="最大迭代次数"><el-input-number v-model="acoForm.max_iterations" :min="1" :max="10000" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="最大迭代次数"><el-input-number v-model="acoForm.max_iterations" :min="1" :max="500" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="信息素因子 α"><el-input-number v-model="acoForm.alpha" :min="0" :max="10" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="信息素因子 α"><el-input-number v-model="acoForm.alpha" :min="0" :max="5" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="启发因子 β"><el-input-number v-model="acoForm.beta" :min="0" :max="20" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="启发因子 β"><el-input-number v-model="acoForm.beta" :min="0" :max="10" :step="0.1" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="挥发系数 ρ"><el-input-number v-model="acoForm.rho" :min="0" :max="1" :step="0.01" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="挥发系数 ρ"><el-input-number v-model="acoForm.rho" :min="0" :max="0.5" :step="0.01" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="信息素增量 Q"><el-input-number v-model="acoForm.Q" :min="1" :max="10000" controls-position="right" style="width:100%" /></el-form-item>
+            <el-form-item label="信息素增量 Q"><el-input-number v-model="acoForm.Q" :min="1" :max="1000" controls-position="right" style="width:100%" /></el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="收敛判定阈值"><el-input-number v-model="acoForm.convergence_threshold" :min="1" :max="100" controls-position="right" style="width:100%" /></el-form-item>
@@ -363,6 +365,18 @@
 
   <!-- 方案详情弹窗 -->
   <Dialog :title="`方案详情(方案号:${detail?.id ?? '-'})`" v-model="detailVisible" width="900px">
+    <el-descriptions v-if="detail" :column="4" border size="small" style="margin-bottom:12px">
+      <el-descriptions-item label="总里程">{{ totalDistanceText(detail.totalDistance) }} km</el-descriptions-item>
+      <el-descriptions-item label="预计耗时">
+        {{ detail.estDurationMinutes != null ? detail.estDurationMinutes + ' 分钟' : '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="预计收入">
+        {{ detail.estRevenue != null ? Number(detail.estRevenue).toFixed(2) + ' 元' : '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="预计成本">
+        {{ detail.estCost != null ? Number(detail.estCost).toFixed(2) + ' 元' : '-' }}
+      </el-descriptions-item>
+    </el-descriptions>
     <el-table v-loading="detailLoading" :data="detailItems" stripe border>
       <el-table-column label="经停顺序" prop="visitSequence" align="center" width="80" />
       <el-table-column label="车辆" prop="vehicleId" align="center">
@@ -427,6 +441,8 @@ const actionTag = (type?: number): TagType => (type === undefined ? 'info' : act
 const stationList = ref<StationApi.StationVO[]>([])
 const vehicleList = ref<VehicleApi.VehicleVO[]>([])
 const stationName = (id?: number) => (id === undefined ? '-' : stationList.value.find((s) => s.id === id)?.stationName ?? id)
+/** 总里程展示：后端已按经停坐标换算为公里，保留 1 位小数 */
+const totalDistanceText = (v?: number) => (v == null ? '-' : Number(v).toFixed(1))
 const vehicleName = (id?: number) => (id === undefined ? '-' : vehicleList.value.find((v) => v.id === id)?.plateNo ?? id)
 const loadSimpleLists = async () => {
   try {

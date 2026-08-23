@@ -26,6 +26,12 @@ public class DispatchPlanDO extends TenantBaseDO {
     private String parameterVersion;
     private BigDecimal score;
     private BigDecimal totalDistance;
+    /** 预计耗时(分钟，DispatchEstimationService 估算) */
+    private Integer estDurationMinutes;
+    /** 预计收入(元，按计价规则估算) */
+    private BigDecimal estRevenue;
+    /** 预计成本(元，按计价规则估算) */
+    private BigDecimal estCost;
     private Integer status;
     private Long approvedBy;
     private LocalDateTime approvedTime;

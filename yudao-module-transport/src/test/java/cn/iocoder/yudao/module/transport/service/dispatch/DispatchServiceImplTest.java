@@ -40,6 +40,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -67,6 +68,7 @@ class DispatchServiceImplTest {
     @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
+    @Mock private DispatchEstimationService dispatchEstimationService;
 
     private DispatchServiceImpl dispatchService;
 
@@ -86,6 +88,7 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
+        ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
         // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }
@@ -172,9 +175,12 @@ class DispatchServiceImplTest {
         assertEquals(DispatchPlanModeEnum.SMART.getMode(), planCaptor.getValue().getMode());
         assertEquals(DispatchPlanStatusEnum.PENDING.getStatus(), planCaptor.getValue().getStatus());
         assertEquals("algo-1.0", planCaptor.getValue().getAlgorithmVersion());
-        assertEquals(0, planCaptor.getValue().getTotalDistance().compareTo(new java.math.BigDecimal("12.5")));
+        // 总里程按经停坐标 Haversine 换算为真实公里：1→11(0.01°≈0.963) + 11→12(≈0.963) + 12→1(≈1.926) ≈ 3.852km
+        assertEquals(0, planCaptor.getValue().getTotalDistance().compareTo(new java.math.BigDecimal("3.852")));
         // 经停明细 4 条（DEPART/BOARD/ALIGHT/RETURN），订单置为已分配
         verify(dispatchPlanItemMapper, times(4)).insert(any(DispatchPlanItemDO.class));
+        // 明细落库后估算每站 ETA（出发时刻 = 批次开始）
+        verify(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class));
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), orderCaptor.getValue().getStatus());
@@ -193,10 +199,36 @@ class DispatchServiceImplTest {
                 () -> dispatchService.createSmartPlan(smartReqVO()));
 
         assertEquals(DISPATCH_NO_FEASIBLE.getCode(), ex.getCode());
+        // 原因码转可读中文文案（前端直接展示）
+        assertTrue(ex.getMessage().contains("运力不足"));
         ArgumentCaptor<DispatchTaskDO> taskCaptor = ArgumentCaptor.forClass(DispatchTaskDO.class);
         verify(dispatchTaskMapper).updateById(taskCaptor.capture());
         assertEquals(DispatchTaskStatusEnum.INFEASIBLE.getStatus(), taskCaptor.getValue().getStatus());
         verify(dispatchPlanMapper, never()).insert(any(DispatchPlanDO.class));
+    }
+
+    @Test
+    void createSmartPlan_over_scale_limit_throws() {
+        // 26 张在池订单（每张 1 算法单）超过算法 25 单上限 → 预检直接报错，不再调用算法
+        List<TransportOrderDO> orders = new ArrayList<>();
+        for (long i = 1; i <= 26; i++) {
+            orders.add(TransportOrderDO.builder().id(i).orderType(2)
+                    .pickupStationId(13L).deliveryStationId(1L)
+                    .status(TransportOrderStatusEnum.POOLED.getStatus()).build());
+        }
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(orders);
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(4).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(13L).build()));
+
+        DispatchSmartPlanReqVO reqVO = smartReqVO();
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(reqVO));
+
+        assertEquals(DISPATCH_SCALE_OVER_LIMIT.getCode(), ex.getCode());
+        verify(algorithmAdapter, never()).plan(any());
     }
 
     @Test
@@ -489,11 +521,13 @@ class DispatchServiceImplTest {
                 .pickupStationId(11L).deliveryStationId(12L)
                 .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
         when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(pooled));
-        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L)
+                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000")).build());
         when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
                 VehicleDO.builder().id(7L).passengerCapacity(5).build()));
         when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
-                StationDO.builder().id(11L).build(), StationDO.builder().id(12L).build()));
+                StationDO.builder().id(11L).longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build(),
+                StationDO.builder().id(12L).longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
     }
 
     private DispatchSmartPlanReqVO smartReqVO() {
