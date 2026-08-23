@@ -16,6 +16,9 @@
       <el-form-item label="货仓件数" prop="cargoCapacity">
         <el-input-number v-model="formData.cargoCapacity" :min="1" style="width:100%" placeholder="货仓件数上限" />
       </el-form-item>
+      <el-form-item label="保险到期日" prop="insuranceExpireDate">
+        <el-date-picker v-model="formData.insuranceExpireDate" type="date" value-format="YYYY-MM-DD" style="width:100%" placeholder="请选择保险到期日" />
+      </el-form-item>
       <el-form-item label="车辆状态" prop="status">
         <el-radio-group v-model="formData.status">
           <el-radio :value="0">可用</el-radio>
