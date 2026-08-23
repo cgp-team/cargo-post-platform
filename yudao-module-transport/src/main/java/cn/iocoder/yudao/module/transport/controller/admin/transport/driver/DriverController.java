@@ -55,4 +55,12 @@ public class DriverController {
     public CommonResult<java.util.List<DriverSimpleRespVO>> simpleList() {
         return success(BeanUtils.toBean(driverService.getSimpleList(), DriverSimpleRespVO.class));
     }
+
+    @GetMapping("/expiring-list")
+    @Operation(summary="Get Expiring List")
+    @Parameter(name="days", description="Days to expiry (including expired)")
+    @PreAuthorize("@ss.hasPermission('transport:driver:query')")
+    public CommonResult<java.util.List<DriverRespVO>> expiringList(@RequestParam(value="days", defaultValue="30") Integer days) {
+        return success(BeanUtils.toBean(driverService.getExpiringList(days), DriverRespVO.class));
+    }
 }

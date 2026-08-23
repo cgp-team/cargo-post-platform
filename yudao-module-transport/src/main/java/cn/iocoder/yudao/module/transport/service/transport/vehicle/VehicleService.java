@@ -14,4 +14,7 @@ public interface VehicleService {
     VehicleDO get(Long id);
     PageResult<VehicleDO> getPage(VehiclePageReqVO reqVO);
     List<VehicleDO> getSimpleList();
+
+    /** 查询 days 天内（含已过期）保险到期的车辆，按到期日升序 */
+    List<VehicleDO> getExpiringList(Integer days);
 }

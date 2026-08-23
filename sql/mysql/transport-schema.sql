@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle` (
   `passenger_capacity` int NOT NULL DEFAULT 0 COMMENT '核定载客数',
   `cargo_capacity_kg` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '载货重量上限(kg)',
   `cargo_capacity` int NOT NULL DEFAULT 4 COMMENT '货仓件数上限（算法容量约束按件数）',
+  `insurance_expire_date` date DEFAULT NULL COMMENT '保险到期日',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '车辆状态',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
