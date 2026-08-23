@@ -187,6 +187,27 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_feasible_km_unit_uses_algorithm_distance_directly() {
+        // distanceUnit=km（路网距离）：totalDistance 直接使用，不再 Haversine 换算
+        mockSmartPlanContext();
+        AlgorithmPlanRespDTO kmResult = feasibleResult();
+        kmResult.setDistanceUnit(AlgorithmPlanRespDTO.DISTANCE_UNIT_KM);
+        kmResult.setTotalDistance(88.5);
+        when(algorithmAdapter.plan(any())).thenReturn(kmResult);
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).insert(planCaptor.capture());
+        assertEquals(0, planCaptor.getValue().getTotalDistance().compareTo(new java.math.BigDecimal("88.5")));
+    }
+
+    @Test
     void createSmartPlan_infeasible_throws_and_marks_task() {
         mockSmartPlanContext();
         when(algorithmAdapter.plan(any())).thenReturn(AlgorithmPlanRespDTO.builder()
