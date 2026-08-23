@@ -180,7 +180,7 @@ class DispatchServiceImplTest {
         // 经停明细 4 条（DEPART/BOARD/ALIGHT/RETURN），订单置为已分配
         verify(dispatchPlanItemMapper, times(4)).insert(any(DispatchPlanItemDO.class));
         // 明细落库后估算每站 ETA（出发时刻 = 批次开始）
-        verify(dispatchEstimationService).estimateAndFillPlanEtas(eq(100L), any(LocalDateTime.class));
+        verify(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class));
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), orderCaptor.getValue().getStatus());
