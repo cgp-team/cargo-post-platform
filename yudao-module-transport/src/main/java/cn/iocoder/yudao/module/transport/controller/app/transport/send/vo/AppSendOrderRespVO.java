@@ -56,14 +56,4 @@ public class AppSendOrderRespVO {
     private LocalDateTime estimatedArrivalTime;
     @Schema(description = "预计到达剩余分钟数（仅未来时间有值）")
     private Integer etaMinutes;
-
-    // ========== 车来取货/送货提醒（承运车辆实时位置，未发车/未上报时为 null） ==========
-    @Schema(description = "承运车辆最新经度(GCJ-02)")
-    private Double carrierLongitude;
-    @Schema(description = "承运车辆最新纬度(GCJ-02)")
-    private Double carrierLatitude;
-    @Schema(description = "承运车辆距目标站点公里数（Haversine）")
-    private BigDecimal carrierDistanceKm;
-    @Schema(description = "承运车辆预计到达目标站点分钟数（实时位置估算）")
-    private Integer carrierEtaMinutes;
 }
