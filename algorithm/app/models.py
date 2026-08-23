@@ -99,6 +99,8 @@ class RouteStop(BaseModel):
     orderId: str | None = None
     action: StopAction
     segmentDistance: float = 0.0
+    # 分段路网行驶秒数（仅高德矩阵路径；欧氏路径为 None，后端按直线÷均速兜底）
+    segmentDuration: float | None = None
 
 
 class VehiclePlan(BaseModel):

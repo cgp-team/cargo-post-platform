@@ -80,7 +80,7 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
 7. 保存算法/参数版本、原始请求和响应摘要，人工审核后才生成正式调度方案。
 8. 算法不可用时允许回退手工派单或模拟派单，不自动覆盖已下发方案。
 
-## 编程组自研实现（ortools-1.1.0）
+## 编程组自研实现（ortools-1.2.0）
 
 算法组镜像迟迟未交付，编程组按本契约自研了路线规划算法服务（生产候选），代码在 `algorithm/`，
 镜像 `cargo-post/algorithm:1.0.0`，`algorithmVersion=ortools-1.1.0`。决策依据：契约只约定接口行为
@@ -106,7 +106,13 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
   失败/超时/配额错误（含 results[].info/code 单项错误）即整单降级回欧氏直线，并在 `warnings`
   追加"路网距离不可用，已降级直线距离"，保证单次求解矩阵口径一致（不做部分对降级）。
   判错按官方文档：`status != "1"`（配额类 infocode 如 10003/10004/10044）或任一 result
-  带 info/code（1 无可行车道路 / 2 起终点离道路过远 / 3 不在中国境内）。
+  带 info/code（1 无可行车道路 / 2 起终点离道路过远 / 3 不在中国境内）。**限速**：高德个人
+  key QPS 极低（实测 ~3/s 即报 `CUQPS_HAS_EXCEEDED_THE_LIMIT`），目的地请求间强制 0.35s
+  限速间隔，限流错误按 0.5/1/2s 退避重试（上限 4 次）。
+- 路网时长输出（ortools-1.2.0 新增）：`RouteStop.segmentDuration` 给出每站与上一站点间的
+  分段行驶秒数（高德矩阵路径；欧氏路径为 None）。业务后端估算层（`DispatchEstimationService`）
+  据此把方案 ETA 从"直线÷均速"升级为真实路网时长：distanceUnit=km 且带分段时长的站段按秒数
+  累计，成本里程同步使用路网公里；缺失站段仍回退直线÷均速（手工派单与 degree 路径全量回退）。
 - 遗留问题收敛口径：无解统一 `200 + status=infeasible + reasonCode`——总需求超总容量为
   `OVER_CAPACITY`，其余不可行为 `TIMING_CONFLICT`；不返回部分方案，`PARTIAL_ONLY` 只报状态不给方案
   （本服务亦不产出该原因码）。契约中 422 与 200+infeasible 的矛盾以 Q10 口径（200 + status 字段）为准，

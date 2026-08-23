@@ -232,6 +232,17 @@ def test_solve_with_matrix_uses_km() -> None:
         arcs = len(plan.stops) - 1  # DEPART 之后每站一段弧
         assert plan.totalDistance == 10.0 * arcs
         assert all(stop.segmentDistance == 10.0 for stop in plan.stops[1:])
+        # 高德矩阵路径：分段行驶秒数随矩阵带出（DEPART 无入弧为 None）
+        assert plan.stops[0].segmentDuration is None
+        assert all(stop.segmentDuration == 600.0 for stop in plan.stops[1:])
+
+
+def test_solve_without_matrix_has_no_segment_duration() -> None:
+    """欧氏路径（无矩阵）：segmentDuration 为 None，后端按直线÷均速兜底。"""
+    outcome = solve(make_request())
+    assert outcome.status == "feasible"
+    for plan in outcome.vehicle_plans:
+        assert all(stop.segmentDuration is None for stop in plan.stops)
 
 
 def test_euclidean_provider_matches_builtin() -> None:
@@ -251,7 +262,7 @@ def test_build_result_with_key_returns_km_unit(monkeypatch: pytest.MonkeyPatch) 
     result = main.build_result(make_request())
     assert result.status == "feasible"
     assert result.distanceUnit == "km"
-    assert result.algorithmVersion == "ortools-1.1.0"
+    assert result.algorithmVersion == "ortools-1.2.0"
     assert result.parameterVersion == "params-v2"
     assert not any("降级" in warning for warning in result.warnings)
     for plan in result.vehiclePlans:
@@ -289,7 +300,7 @@ def test_plan_endpoint_with_key_returns_km_unit(monkeypatch: pytest.MonkeyPatch)
     assert response.status_code == 200
     body = response.json()
     assert body["distanceUnit"] == "km"
-    assert body["algorithmVersion"] == "ortools-1.1.0"
+    assert body["algorithmVersion"] == "ortools-1.2.0"
     assert body["parameterVersion"] == "params-v2"
 
 
