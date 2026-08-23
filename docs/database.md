@@ -19,6 +19,8 @@
 - `V007__notice.sql`：平台公告表 `transport_notice`（管理端发布、小程序首页拉取）。
 - `V008__feedback.sql`：意见反馈表 `transport_feedback`（小程序提交与查询、管理端处理）。
 - `V009__vehicle_location_track.sql`：车辆位置历史轨迹表 `transport_vehicle_location_track`（轨迹回放与商品溯源）。
+- `V010__dispatch_estimation.sql`：计价规则表 `transport_pricing_rule`；`transport_dispatch_plan` 新增估算摘要列 `est_duration_minutes` / `est_revenue` / `est_cost`；已有该表时需人工执行文件内注释的 `ALTER`。
+- `V011__vehicle_insurance_expiry.sql`：车辆表新增保险到期日 `insurance_expire_date`；已有 `transport_vehicle` 表时需人工执行文件内注释的 `ALTER`。
 
 另：`sql/mysql/transport-schema-incremental.sql` 为幂等的增量列补齐脚本（给已存在的老表补新列），已纳入 CI 迁移步骤，在 `transport-schema.sql` 之后自动执行。
 

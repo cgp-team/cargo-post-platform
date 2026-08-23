@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![CI](https://github.com/Ferron2333/cargo-post-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ferron2333/cargo-post-platform/actions/workflows/ci.yml)
 
-面向县域**客运、货运、生鲜与邮快件协同运营**的单体管理平台。基于 [RuoYi-Vue-Pro](https://github.com/YunaiV/ruoyi-vue-pro)（`2026.06` / JDK 21 发布线）深度改造：保留登录、权限、菜单、字典、日志、文件等基础能力，新增独立的 `transport` 客货邮业务模块，并配套微信小程序与路线规划算法服务接入层。
+面向县域**客运、货运、生鲜与邮快件协同运营**的单体管理平台。基于 [RuoYi-Vue-Pro](https://github.com/YunaiV/ruoyi-vue-pro)（`2026.06` / JDK 21 发布线）深度改造：保留登录、权限、菜单、字典、日志、文件等基础能力，新增独立的 `transport` 客货邮业务模块，并配套微信小程序与**自研路线规划算法服务**（OR-Tools，契约与算法组书面约定对齐）。
 
 > 🚨 协作人员请务必先阅读：[Git 协作指南](docs/Git%20协作.md)
 
@@ -16,11 +16,12 @@
 - **运营总览**：数据大盘，订单、运力、履约、异常摘要与统计图表
 - **车辆监控**：GIS 实时监控地图（百度地图 GL）、车辆状态管理、位置轨迹落库
 - **运力资源**：车辆/司机注册审核与档案、人车绑定、转运中心/乡镇站/村级站点
-- **班次调度**：线路班次配置、预约订单池、手工派单与智能派单、调度方案审核下发、发车核验
+- **班次调度**：线路班次配置、预约订单池、手工派单与智能派单、调度方案审核下发、发车核验、方案 ETA 与收入/成本估算
 - **订单业务**：客运、货运/生鲜、邮快件三类订单及状态流转
 - **农产品商城**：管理端商品 CRUD + 小程序商城、下单、物流溯源
 - **微信小程序**：登录（短信/微信）、商城下单、寄件与包裹轨迹、实时公交、公告反馈、司机工作台（班次任务/装车核验/发车签收/收益）
-- **算法接入**：路线规划算法契约（OpenAPI v0.2.0）+ 受控适配层（快照、幂等、超时重试、结果校验），附 FastAPI 契约 Mock 服务
+- **到期预警**：司机驾驶证/车辆保险到期查询与定时扫描预警
+- **算法服务**：自研路线规划算法（OR-Tools 求解，FastAPI 交付 Docker 镜像）+ 业务侧受控适配层（快照、幂等、超时重试、结果校验、规模预检）；契约 Mock 保留做混沌测试，附契约验收套件
 
 ## 技术栈
 
@@ -29,7 +30,8 @@
 | 后端 | JDK 21 · Spring Boot 3.5 · Spring Security 6 · MyBatis Plus · MySQL 8.4 · Redis 7 · Maven |
 | 管理端 | Vue 3 · TypeScript · Element Plus · pnpm |
 | 小程序 | 微信原生小程序（仅调用 `/app-api`） |
-| 算法 Mock | Python 3.12 · FastAPI · Pydantic · pytest |
+| 算法服务 | Python 3.11 · FastAPI · OR-Tools（pywrapcp）· Docker |
+| 算法 Mock | Python 3.12 · FastAPI · Pydantic · pytest（契约 Mock / 混沌测试） |
 | 基础设施 | Docker Compose · Nginx · systemd · GitHub Actions（self-hosted） |
 
 ## 项目结构
@@ -43,7 +45,8 @@ yudao-module-member/       会员体系（小程序登录依赖）
 yudao-module-transport/    客货邮业务模块（资源/订单/调度闭环/监控大盘/商品/算法适配层）
 yudao-ui/yudao-ui-admin-vue3/  管理端 Vue3 工程（cargo-post-admin）
 miniprogram/               微信小程序（商城、寄件、包裹、实时公交 + 司机工作台）
-mock-algorithm/            路线规划算法契约 Mock 服务（FastAPI + pytest）
+algorithm/                 自研路线规划算法服务（FastAPI + OR-Tools，生产用）
+mock-algorithm/            路线规划算法契约 Mock 服务（FastAPI + pytest，混沌测试用）
 deploy/                    基础设施 Compose、Nginx 示例、运维脚本、systemd 单元
 docs/                      需求、架构、接口、部署、测试与协作文档（索引见 docs/README.md）
 sql/                       MySQL 初始化脚本、transport 表结构与增量迁移（sql/incremental/）
@@ -64,7 +67,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d
 deploy/scripts/health-check.sh
 ```
 
-默认启动 **MySQL、Redis 和 Mock 算法服务**（MinIO 已停用并保留注释，需要对象存储时取消注释即可；默认文件存储为数据库）。MySQL/Redis/算法端口仅绑定 `127.0.0.1`。
+默认启动 **MySQL、Redis、Mock 算法服务与自研算法服务**（MinIO 已停用并保留注释，需要对象存储时取消注释即可；默认文件存储为数据库）。MySQL/Redis/算法端口仅绑定 `127.0.0.1`。本地开发默认连 Mock（`ALGORITHM_BASE_URL` 见 `.env.example`），指向 `algorithm` 服务即可联调真实求解。
 
 ### 2. 初始化数据库
 
@@ -78,7 +81,7 @@ sql/mysql/transport-menu.sql                 # 业务菜单 + member_user 表
 sql/mysql/transport-demo-data.sql            # 可选：演示数据（禁止用于生产）
 ```
 
-后续结构变更走 `sql/incremental/` 下的人工迁移入口（V001~V009），详见 [docs/database.md](docs/database.md)。
+后续结构变更走 `sql/incremental/` 下的人工迁移入口（V001~V011），详见 [docs/database.md](docs/database.md)。
 
 ### 3. 启动后端
 
@@ -131,13 +134,13 @@ dev 环境由 `.github/workflows/deploy-dev.yml` 持续部署：push 到 `master
 
 ## 当前状态与路线
 
-- **已就绪（P0）**：资源档案与状态、三类订单流转、派单与调度闭环、GIS 监控与数据大盘、农产品商城全链路、算法契约联调（Mock）、CI 与 dev 持续部署、小程序全页面真实接口。
-- **进行中（P1）**：真实算法镜像接入与降级策略（待算法组交付；接入验收基建已就绪：契约验收套件、规模预检、调度估算层）、异常工单、财务统计与对账结算。已完成：轨迹回放管理端页面、证照/保险到期预警、调度方案每站 ETA 与收入/成本估算。
-- **规划（P2）**：工单与客服闭环、财务统计与对账结算、自动滚动调度与多版本算法对比。
+- **已就绪（P0/P1）**：资源档案与状态、三类订单流转、派单与调度闭环（手工/智能派单、审核下发、发车核验）、**自研路线规划算法接入（OR-Tools）与 Mock 降级**、GIS 监控与轨迹回放、数据大盘、农产品商城全链路、小程序全页面真实接口、证照/保险到期预警、调度方案每站 ETA 与收入/成本估算、算法契约验收套件、CI 与 dev 持续部署。
+- **不启动（经 2026-08-23 决策）**：异常工单、财务统计与对账结算（项目用不上）。
+- **规划（P2）**：自动滚动调度（需按"半小时批次锁定"契约重新定位）、多版本算法对比、高德路网距离切换。
 
 ## 贡献
 
-分支 + PR 协作，master 无分支保护但须经评审合并，详见 [Git 协作指南](docs/Git%20协作.md) 与 [团队分工](docs/team-work.md)。不得提交真实密码、令牌、`.env` 或生产数据。
+分支 + PR 协作；master 已开启分支保护（须 PR 且 CI 五项检查全绿合并），详见 [Git 协作指南](docs/Git%20协作.md) 与 [团队分工](docs/team-work.md)。不得提交真实密码、令牌、`.env` 或生产数据。
 
 ## 上游同步
 
