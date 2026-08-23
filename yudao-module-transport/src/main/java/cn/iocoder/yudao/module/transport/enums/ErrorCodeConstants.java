@@ -37,6 +37,7 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_ORDER_NOT_POOLED = new ErrorCode(1_005_008_004, "订单不在订单池中");
     ErrorCode DISPATCH_DEPOT_NOT_EXISTS = new ErrorCode(1_005_008_005, "场站不存在");
     ErrorCode DISPATCH_NO_FEASIBLE = new ErrorCode(1_005_008_006, "算法判定无可行解:{}");
+    ErrorCode DISPATCH_SCALE_OVER_LIMIT = new ErrorCode(1_005_008_007, "智能派单规模超出算法上限（30 站点 / 25 订单 / 3 车），当前 {}，请拆分批次或减少订单");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");
