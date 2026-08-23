@@ -28,7 +28,6 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.*;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmAdapter;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmResultValidator;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.*;
-import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,10 +53,6 @@ public class DispatchServiceImpl implements DispatchService {
     private static final ZoneOffset BATCH_ZONE_OFFSET = ZoneOffset.ofHours(8);
     /** 手工派单场景标记 */
     private static final String SCENARIO_MANUAL = "MANUAL";
-    /** 算法规模上限（与算法服务 app.py 契约一致）：30 站点 / 25 订单 / 3 车 */
-    private static final int MAX_ALGORITHM_STATIONS = 30;
-    private static final int MAX_ALGORITHM_ORDERS = 25;
-    private static final int MAX_ALGORITHM_VEHICLES = 3;
 
     @Resource private TransportOrderMapper orderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
@@ -184,8 +179,6 @@ public class DispatchServiceImpl implements DispatchService {
         // 构建快照并落任务（规划中）
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, vehicles, pooledOrders,
                 reqVO.getAlgorithmConfig(), reqVO.getScenario());
-        // 规模上限预检：客运按人数拆单后可能超 25 单，超限直接报错而非等算法 413
-        validateScaleLimit(algorithmReq);
         LocalDateTime[] batch = currentBatch();
         String taskNo = generateTaskNo();
         DispatchTaskDO task = DispatchTaskDO.builder()
@@ -211,17 +204,16 @@ public class DispatchServiceImpl implements DispatchService {
         if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
             task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
             dispatchTaskMapper.updateById(task);
-            throw exception(DISPATCH_NO_FEASIBLE, reasonCodeText(result.getReasonCode()));
+            throw exception(DISPATCH_NO_FEASIBLE, result.getReasonCode());
         }
 
         // 可行：任务置成功，方案与经停明细落库，订单置为已分配
         task.setStatus(DispatchTaskStatusEnum.SUCCESS.getStatus());
         task.setAlgorithmJobId(result.getRequestId());
         dispatchTaskMapper.updateById(task);
-        // 总里程：算法返回的是经纬度欧氏距离（度），按经停站点坐标 Haversine 换算为真实公里再落库
-        BigDecimal totalDistanceKm = computeTotalDistanceKm(result.getVehiclePlans(), buildCoordMap(algorithmReq));
         DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
-                totalDistanceKm, result.getAlgorithmVersion(), result.getParameterVersion());
+                result.getTotalDistance() != null ? BigDecimal.valueOf(result.getTotalDistance()) : null,
+                result.getAlgorithmVersion(), result.getParameterVersion());
         for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
             insertPlanItems(plan.getId(), vehiclePlan.getVehicleId(), vehiclePlan.getStops());
         }
@@ -522,75 +514,6 @@ public class DispatchServiceImpl implements DispatchService {
     }
 
     // ==================== 私有方法 ====================
-
-    /** 算法规模上限预检（30 站点 / 25 订单 / 3 车）：客运按人数拆单后可能超 25 单，超限直接报错避免等算法 413 */
-    private void validateScaleLimit(AlgorithmPlanReqDTO algorithmReq) {
-        int stationCount = algorithmReq.getStations() != null ? algorithmReq.getStations().size() : 0;
-        int orderCount = algorithmReq.getOrders() != null ? algorithmReq.getOrders().size() : 0;
-        int vehicleCount = algorithmReq.getVehicles() != null ? algorithmReq.getVehicles().size() : 0;
-        if (stationCount > MAX_ALGORITHM_STATIONS
-                || orderCount > MAX_ALGORITHM_ORDERS
-                || vehicleCount > MAX_ALGORITHM_VEHICLES) {
-            throw exception(DISPATCH_SCALE_OVER_LIMIT,
-                    "站点 " + stationCount + " / 订单 " + orderCount + " / 车辆 " + vehicleCount);
-        }
-    }
-
-    /** 从算法快照构建 站点Id -> {lon, lat} 坐标表（含场站），用于把度数里程换算为真实公里 */
-    private static Map<String, double[]> buildCoordMap(AlgorithmPlanReqDTO algorithmReq) {
-        Map<String, double[]> coordMap = new HashMap<>();
-        if (algorithmReq.getDepot() != null && algorithmReq.getDepot().getLongitude() != null
-                && algorithmReq.getDepot().getLatitude() != null) {
-            coordMap.put(algorithmReq.getDepot().getStationId(),
-                    new double[]{algorithmReq.getDepot().getLongitude(), algorithmReq.getDepot().getLatitude()});
-        }
-        if (algorithmReq.getStations() != null) {
-            for (AlgorithmStationDTO station : algorithmReq.getStations()) {
-                if (station.getLongitude() != null && station.getLatitude() != null) {
-                    coordMap.put(station.getStationId(),
-                            new double[]{station.getLongitude(), station.getLatitude()});
-                }
-            }
-        }
-        return coordMap;
-    }
-
-    /** 按各车经停序列用 Haversine 累加真实公里数；坐标缺失的分段跳过（不记里程） */
-    private static BigDecimal computeTotalDistanceKm(List<AlgorithmVehiclePlanDTO> vehiclePlans,
-                                                     Map<String, double[]> coordMap) {
-        if (vehiclePlans == null || vehiclePlans.isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        double total = 0;
-        for (AlgorithmVehiclePlanDTO vehiclePlan : vehiclePlans) {
-            List<AlgorithmRouteStopDTO> stops = vehiclePlan.getStops();
-            if (stops == null || stops.size() < 2) {
-                continue;
-            }
-            for (int i = 1; i < stops.size(); i++) {
-                double[] from = coordMap.get(stops.get(i - 1).getStationId());
-                double[] to = coordMap.get(stops.get(i).getStationId());
-                if (from != null && to != null) {
-                    total += GeoDistanceUtil.haversineKm(from[0], from[1], to[0], to[1]);
-                }
-            }
-        }
-        // 保留 3 位小数公里
-        return BigDecimal.valueOf(Math.round(total * 1000) / 1000.0);
-    }
-
-    /** 无解原因码转可读文案（前端直接展示） */
-    private static String reasonCodeText(String reasonCode) {
-        if (reasonCode == null) {
-            return "未知原因";
-        }
-        return switch (reasonCode) {
-            case AlgorithmPlanRespDTO.REASON_OVER_CAPACITY -> "运力不足（订单总需求超出可用车辆总容量）";
-            case AlgorithmPlanRespDTO.REASON_TIMING_CONFLICT -> "客运上/下车时序冲突，无法排程";
-            case AlgorithmPlanRespDTO.REASON_PARTIAL_ONLY -> "当前订单组合只能部分完成，无法生成完整方案";
-            default -> reasonCode;
-        };
-    }
 
     private StationDO validateDepotExists(Long depotStationId) {
         StationDO depot = stationMapper.selectById(depotStationId);
