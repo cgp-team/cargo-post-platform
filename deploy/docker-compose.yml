@@ -72,6 +72,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # 编程组自研路线规划算法服务（生产候选，ortools-1.0.0）。mock-algorithm 保留做适配层混沌测试。
+  # 上线切换：业务后端 ALGORITHM_BASE_URL 指向 http://algorithm:8000
+  algorithm:
+    build:
+      context: ../algorithm
+      dockerfile: Dockerfile
+    image: cargo-post/algorithm:1.0.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ALGORITHM_PORT:-18081}:8000" # 仅本机：只允许后端内网访问
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   mysql-data:
   redis-data:
