@@ -221,8 +221,8 @@ public class DispatchServiceImpl implements DispatchService {
         task.setStatus(DispatchTaskStatusEnum.SUCCESS.getStatus());
         task.setAlgorithmJobId(result.getRequestId());
         dispatchTaskMapper.updateById(task);
-        // 总里程：算法返回的是经纬度欧氏距离（度），按经停站点坐标 Haversine 换算为真实公里再落库
-        BigDecimal totalDistanceKm = computeTotalDistanceKm(result.getVehiclePlans(), buildCoordMap(algorithmReq));
+        // 总里程：按算法返回的里程单位处理——degree 时按经停站点坐标 Haversine 换算真实公里，km 时直接使用
+        BigDecimal totalDistanceKm = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
         DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
                 totalDistanceKm, result.getAlgorithmVersion(), result.getParameterVersion());
         for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
@@ -558,6 +558,15 @@ public class DispatchServiceImpl implements DispatchService {
             }
         }
         return coordMap;
+    }
+
+    /** 方案总里程解析：算法返回 km（路网距离）时直接使用；degree（或缺省，欧氏直线）时按经停坐标 Haversine 换算 */
+    private static BigDecimal resolveTotalDistanceKm(AlgorithmPlanRespDTO result, Map<String, double[]> coordMap) {
+        if (AlgorithmPlanRespDTO.DISTANCE_UNIT_KM.equals(result.getDistanceUnit())) {
+            double km = result.getTotalDistance() != null ? result.getTotalDistance() : 0;
+            return BigDecimal.valueOf(Math.round(km * 1000) / 1000.0);
+        }
+        return computeTotalDistanceKm(result.getVehiclePlans(), coordMap);
     }
 
     /** 按各车经停序列用 Haversine 累加真实公里数；坐标缺失的分段跳过（不记里程） */
