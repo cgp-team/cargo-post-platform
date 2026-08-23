@@ -20,7 +20,7 @@ from .models import (
 )
 from .solver import solve
 
-ALGORITHM_VERSION = "ortools-1.1.0"
+ALGORITHM_VERSION = "ortools-1.2.0"
 PARAMETER_VERSION = "params-v2"
 
 # 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
