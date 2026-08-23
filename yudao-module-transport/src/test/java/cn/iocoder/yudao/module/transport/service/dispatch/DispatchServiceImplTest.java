@@ -68,6 +68,7 @@ class DispatchServiceImplTest {
     @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
+    @Mock private DispatchEstimationService dispatchEstimationService;
 
     private DispatchServiceImpl dispatchService;
 
@@ -87,6 +88,7 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
+        ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
         // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }
@@ -177,6 +179,8 @@ class DispatchServiceImplTest {
         assertEquals(0, planCaptor.getValue().getTotalDistance().compareTo(new java.math.BigDecimal("3.852")));
         // 经停明细 4 条（DEPART/BOARD/ALIGHT/RETURN），订单置为已分配
         verify(dispatchPlanItemMapper, times(4)).insert(any(DispatchPlanItemDO.class));
+        // 明细落库后估算每站 ETA（出发时刻 = 批次开始）
+        verify(dispatchEstimationService).estimateAndFillPlanEtas(eq(100L), any(LocalDateTime.class));
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), orderCaptor.getValue().getStatus());
