@@ -51,6 +51,15 @@ public class AlgorithmPlanRespDTO {
     /** 全部车辆行驶里程累加值 */
     private Double totalDistance;
 
+    /** 里程单位：degree=经纬度欧氏距离（业务后端需 Haversine 换算），km=路网真实公里（直接使用）。
+     *  缺省（null）按 degree 处理（兼容旧版本算法服务） */
+    private String distanceUnit;
+
+    /** 里程单位：经纬度欧氏距离（度） */
+    public static final String DISTANCE_UNIT_DEGREE = "degree";
+    /** 里程单位：路网真实公里 */
+    public static final String DISTANCE_UNIT_KM = "km";
+
     private List<AlgorithmVehiclePlanDTO> vehiclePlans;
 
     private OffsetDateTime computedAt;
