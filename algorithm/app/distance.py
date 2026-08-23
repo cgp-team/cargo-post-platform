@@ -30,6 +30,12 @@ from .models import Station
 AMAP_DISTANCE_URL = "https://restapi.amap.com/v3/distance"
 AMAP_TIMEOUT_SECONDS = 5.0
 AMAP_MAX_ATTEMPTS = 2  # 首次 + 失败重试 1 次
+# 高德个人开发者 key 的 QPS 限制很低（实测 ~3/s 即报 CUQPS_HAS_EXCEEDED_THE_LIMIT）：
+# 目的地请求之间强制限速间隔；命中限流时按更长的退避序列重试
+AMAP_PACE_SECONDS = 0.35
+AMAP_THROTTLE_MAX_ATTEMPTS = 4
+AMAP_THROTTLE_BACKOFF = (0.5, 1.0, 2.0)
+AMAP_THROTTLE_MARKERS = ("HAS_EXCEEDED_THE_LIMIT", "QPS")
 CACHE_TTL_SECONDS = 24 * 3600
 # 高德 origins 单请求上限 100 个坐标对；本服务上限 31 点，一次调用覆盖全量
 AMAP_MAX_ORIGINS = 100
@@ -98,6 +104,9 @@ class AmapDistanceProvider:
         coords = [self._coord(point) for point in points]
         matrix: DistanceMatrix = {}
         for index, destination in enumerate(coords):
+            if index > 0:
+                # 限速间隔：高德 key QPS 很低（实测 ~3/s），连续请求会触发 10021 限流
+                time.sleep(AMAP_PACE_SECONDS)
             pairs = self._fetch_to_destination(coords, destination)
             for origin_index, (km, seconds) in enumerate(pairs):
                 matrix[(points[origin_index].stationId, points[index].stationId)] = (km, seconds)
@@ -127,14 +136,27 @@ class AmapDistanceProvider:
             "type": "1",
         }
         last_error: Exception | None = None
-        for _ in range(AMAP_MAX_ATTEMPTS):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 response = self._client.get(AMAP_DISTANCE_URL, params=params)
                 response.raise_for_status()
                 return self._parse(response.json(), expected=len(origins))
             except (httpx.HTTPError, AmapUnavailable) as exc:
                 last_error = exc
+                if self._is_throttle(exc):
+                    # 限流（QPS 超限）：按退避序列重试；达到尝试上限按不可用降级
+                    if attempt >= AMAP_THROTTLE_MAX_ATTEMPTS:
+                        break
+                    time.sleep(AMAP_THROTTLE_BACKOFF[min(attempt - 1, len(AMAP_THROTTLE_BACKOFF) - 1)])
+                elif attempt >= AMAP_MAX_ATTEMPTS:
+                    break
         raise AmapUnavailable(f"高德距离接口请求失败（destination={destination}）: {last_error}")
+
+    @staticmethod
+    def _is_throttle(exc: Exception) -> bool:
+        return any(marker in str(exc) for marker in AMAP_THROTTLE_MARKERS)
 
     @staticmethod
     def _parse(payload: dict, expected: int) -> list[tuple[float, float]]:

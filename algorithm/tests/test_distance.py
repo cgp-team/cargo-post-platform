@@ -27,6 +27,12 @@ STATIONS = [
 POINTS = [DEPOT, *STATIONS]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch: pytest.MonkeyPatch):
+    """限速/退避的 time.sleep 在测试中统一置空（需要断言 sleep 的用例自行再 patch）。"""
+    monkeypatch.setattr("app.distance.time.sleep", lambda _seconds: None)
+
+
 class FakeResponse:
     def __init__(self, payload: dict):
         self._payload = payload
@@ -44,7 +50,7 @@ class FakeAmapClient:
     def __init__(self, meters: int = 10000, seconds: int = 600, failure: str | None = None):
         self.meters = meters
         self.seconds = seconds
-        self.failure = failure  # None | transport | status0 | result_error | flaky
+        self.failure = failure  # None | transport | status0 | result_error | flaky | throttle | throttle_forever
         self.calls: list[dict] = []
 
     def get(self, url: str, params: dict | None = None) -> FakeResponse:
@@ -58,6 +64,9 @@ class FakeAmapClient:
             raise httpx.ReadTimeout("read timed out")
         if self.failure == "status0":
             return FakeResponse({"status": "0", "info": "DAILY_QUERY_OVER_LIMIT", "infocode": "10003"})
+        # 高德 QPS 限流（实测 infocode=10021）：throttle 首次限流后恢复，throttle_forever 持续限流
+        if self.failure == "throttle_forever" or (self.failure == "throttle" and len(self.calls) == 1):
+            return FakeResponse({"status": "0", "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT", "infocode": "10021"})
         results = []
         for index, _origin in enumerate(origins):
             if self.failure == "result_error" and index == 0:
@@ -175,6 +184,43 @@ def test_amap_failure_raises_unavailable(failure: str) -> None:
         provider.get_matrix(POINTS)
     # 首个 destination 重试 1 次仍失败即整单放弃（每 destination 最多 2 次尝试）
     assert len(client.calls) == 2
+
+
+def test_throttle_recovers_after_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """高德 QPS 限流（10021）：首次限流按退避重试后成功建矩阵。"""
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.distance.time.sleep", lambda seconds: sleeps.append(seconds))
+    client = FakeAmapClient(failure="throttle")
+    provider = AmapDistanceProvider(key="test-key", client=client)
+    matrix = provider.get_matrix(POINTS)
+    assert matrix[("S0", "S1")] == (10.0, 600.0)
+    # 首个 destination 限流 1 次 + 退避重试成功，其余 destination 各 1 次
+    assert len(client.calls) == len(POINTS) + 1
+    # 退避序列首个档位 0.5s（其余 sleep 为目的地间限速间隔 0.35s）
+    assert 0.5 in sleeps
+
+
+def test_throttle_forever_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """持续限流：按退避重试到上限后抛 AmapUnavailable（整单降级）。"""
+    monkeypatch.setattr("app.distance.time.sleep", lambda _seconds: None)
+    client = FakeAmapClient(failure="throttle_forever")
+    provider = AmapDistanceProvider(key="test-key", client=client)
+    with pytest.raises(AmapUnavailable):
+        provider.get_matrix(POINTS)
+    # 首个 destination 按限流重试上限 4 次后整单放弃
+    assert len(client.calls) == 4
+
+
+def test_pacing_between_destinations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目的地请求之间强制限速间隔（高德 key QPS 很低，防 10021）。"""
+    from app import distance as distance_module
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(distance_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    provider = AmapDistanceProvider(key="test-key", client=FakeAmapClient())
+    provider.get_matrix(POINTS)
+    # 间隔次数 = 目的地数 - 1，且均为限速档 0.35s
+    assert sleeps == [0.35] * (len(POINTS) - 1)
 
 
 def test_solve_with_matrix_uses_km() -> None:
