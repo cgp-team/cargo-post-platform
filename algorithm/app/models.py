@@ -115,6 +115,8 @@ class PlanResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     algorithmVersion: str
     parameterVersion: str
+    # 距离单位：degree=欧氏直线（度，后端按 Haversine 换算）；km=路网真实公里（后端直通）
+    distanceUnit: str = "degree"
     totalDistance: float = 0.0
     vehiclePlans: list[VehiclePlan] = Field(default_factory=list)
     computedAt: datetime
