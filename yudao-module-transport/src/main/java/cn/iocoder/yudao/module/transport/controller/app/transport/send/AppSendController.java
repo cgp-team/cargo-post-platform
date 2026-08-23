@@ -69,6 +69,12 @@ public class AppSendController {
     @Resource private ShiftMapper shiftMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
 
+    /** "车来取货/送货"提醒的订单状态范围：仅在途（已分配/已发车）；已完成/已取消不提醒 */
+    private static final Set<Integer> CARRIER_REMINDER_STATUSES = Set.of(
+            TransportOrderStatusEnum.ASSIGNED.getStatus(), TransportOrderStatusEnum.DEPARTED.getStatus());
+    /** 车辆位置新鲜度阈值（分钟）：超过视为班次已结束的残留上报，不参与提醒 */
+    private static final int CARRIER_LOCATION_FRESH_MINUTES = 30;
+
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
     public CommonResult<AppSendOrderRespVO> create(@Valid @RequestBody AppSendOrderCreateReqVO reqVO) {
@@ -141,16 +147,29 @@ public class AppSendController {
         if (eta != null && eta.isAfter(LocalDateTime.now())) {
             vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
         }
-        // 车来取货/送货提醒：承运车辆实时位置 + 距目标站点距离/分钟（track 详情直查）
-        Map<Long, VehicleLocationDO> carrierLocMap = new HashMap<>();
-        Map<Long, VehicleDO> carrierVehicleMap = new HashMap<>();
-        if (item.getVehicleId() != null) {
-            carrierLocMap.put(item.getVehicleId(), vehicleLocationMapper.selectByVehicleId(item.getVehicleId()));
-            carrierVehicleMap.put(item.getVehicleId(), vehicleMapper.selectById(item.getVehicleId()));
+        // 车来取货/送货提醒：仅在途订单填充（完成/取消的经停明细仍在，不提醒，防误导）
+        if (carrierReminderEligible(order.getStatus())) {
+            Map<Long, VehicleLocationDO> carrierLocMap = new HashMap<>();
+            Map<Long, VehicleDO> carrierVehicleMap = new HashMap<>();
+            if (item.getVehicleId() != null) {
+                carrierLocMap.put(item.getVehicleId(), vehicleLocationMapper.selectByVehicleId(item.getVehicleId()));
+                carrierVehicleMap.put(item.getVehicleId(), vehicleMapper.selectById(item.getVehicleId()));
+            }
+            fillCarrierLiveInfo(vo, item, carrierLocMap, carrierVehicleMap,
+                    stationService.getSimpleList().stream()
+                            .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a)));
         }
-        fillCarrierLiveInfo(vo, item, carrierLocMap, carrierVehicleMap,
-                stationService.getSimpleList().stream()
-                        .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a)));
+    }
+
+    /** 订单是否可展示"车来取货/送货"提醒：仅已分配/已发车的在途订单 */
+    static boolean carrierReminderEligible(Integer status) {
+        return status != null && CARRIER_REMINDER_STATUSES.contains(status);
+    }
+
+    /** 车辆位置是否新鲜：reportTime 超过阈值视为班次已结束的残留上报，不参与提醒 */
+    static boolean isCarrierLocationFresh(LocalDateTime reportTime, LocalDateTime now) {
+        return reportTime != null
+                && reportTime.isAfter(now.minusMinutes(CARRIER_LOCATION_FRESH_MINUTES));
     }
 
     /** 我的寄货列表批量填充承运车辆实时位置（在途订单"车来取货/送货"提醒），一次加载避免逐单 N+1 */
@@ -158,7 +177,13 @@ public class AppSendController {
         if (list.isEmpty()) {
             return;
         }
-        List<Long> orderIds = orders.stream().map(TransportOrderDO::getId).toList();
+        // 仅在途订单（已分配/已发车）展示提醒；完成/取消单的经停明细仍在，预过滤防误显示
+        List<Long> orderIds = orders.stream()
+                .filter(o -> carrierReminderEligible(o.getStatus()))
+                .map(TransportOrderDO::getId).toList();
+        if (orderIds.isEmpty()) {
+            return;
+        }
         // 方向经停明细：送客 2 / 派送 3 / 揽收 4（揽收@上车站，派送@下车站，送客@下车站）
         List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
                 .in(DispatchPlanItemDO::getOrderId, orderIds)
@@ -185,6 +210,10 @@ public class AppSendController {
         Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
                 .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
         for (int i = 0; i < list.size(); i++) {
+            // 状态收口兜底：即使查询结果混入非在途订单也不填充（与 orderIds 预过滤同口径）
+            if (!carrierReminderEligible(orders.get(i).getStatus())) {
+                continue;
+            }
             DispatchPlanItemDO item = orderItemMap.get(orders.get(i).getId());
             if (item != null) {
                 fillCarrierLiveInfo(list.get(i), item, locMap, vehicleMap, stationMap);
@@ -194,7 +223,7 @@ public class AppSendController {
 
     /** 填充承运车辆实时位置 + 距目标站点距离/分钟（车来取货/送货提醒）。
      *  目标站点 = 该订单方向经停站（揽收→上车站，派送/客运送客→下车站）。
-     *  车辆未发车/未上报位置时字段保持 null，不影响原流程。 */
+     *  车辆未发车/未上报位置，或上报已过期（班次结束残留）时字段保持 null，不影响原流程。 */
     private void fillCarrierLiveInfo(AppSendOrderRespVO vo, DispatchPlanItemDO item,
                                      Map<Long, VehicleLocationDO> locMap,
                                      Map<Long, VehicleDO> vehicleMap,
@@ -204,6 +233,10 @@ public class AppSendController {
         }
         VehicleLocationDO loc = locMap.get(item.getVehicleId());
         if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null) {
+            return;
+        }
+        // 位置新鲜度：班次结束后的残留上报不参与提醒（vehicle_location 每车一行，收车后不清理）
+        if (!isCarrierLocationFresh(loc.getReportTime(), LocalDateTime.now())) {
             return;
         }
         StationDO station = stationMap.get(item.getStationId());
