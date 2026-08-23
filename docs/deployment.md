@@ -16,7 +16,7 @@ Compose 提供 MySQL、Redis 和 Mock 算法服务（MinIO 自 2026-08 起默认
 
 dev 服务器已完成一轮系统性精简（方案与实测数据见 [slimming-plan.md](slimming-plan.md)），基线如下，新增配置时不要回退：
 
-- 后端外部化配置 `/opt/cargo-post/config/application-dev.yaml` 叠加：Quartz 整体禁用（无业务定时任务）、Redisson 线程收缩、Druid stat/监控台关闭、springdoc/knife4j 关闭（`/druid`、`/v3/api-docs` 不对公网开放）、api-encrypt 关闭、actuator 仅暴露 health。
+- 后端外部化配置 `/opt/cargo-post/config/application-dev.yaml` 叠加：~~Quartz 整体禁用~~（2026-08-23 起已因首个业务定时任务 `expiryWarningJob` 重新启用 Quartz 自动配置）、Redisson 线程收缩、Druid stat/监控台关闭、springdoc/knife4j 关闭（`/druid`、`/v3/api-docs` 不对公网开放）、api-encrypt 关闭、actuator 仅暴露 health。
 - 日志表由 deploy 用户 crontab 每周执行 `deploy/scripts/cleanup.sql` 清理（访问日志留 7 天、错误/登录日志留 30 天）。
 - `vm.swappiness=10` 已持久化（`/etc/sysctl.d/99-cargo-post.conf`），保护 mysqld 不被换出。
 
