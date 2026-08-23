@@ -35,6 +35,12 @@
             <artifactId>yudao-spring-boot-starter-mybatis</artifactId>
         </dependency>
 
+        <!-- Job 定时任务：证照/保险到期预警等后台扫描任务。 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-job</artifactId>
+        </dependency>
+
         <!-- 会员模块 API：司机端写操作从登录态解析司机身份（member_user.mobile → transport_driver.mobile） -->
         <dependency>
             <groupId>cn.iocoder.boot</groupId>

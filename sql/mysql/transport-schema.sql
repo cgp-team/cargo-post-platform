@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS `transport_vehicle` (
   `passenger_capacity` int NOT NULL DEFAULT 0 COMMENT '核定载客数',
   `cargo_capacity_kg` decimal(12,2) NOT NULL DEFAULT 0 COMMENT '载货重量上限(kg)',
   `cargo_capacity` int NOT NULL DEFAULT 4 COMMENT '货仓件数上限（算法容量约束按件数）',
+  `insurance_expire_date` date DEFAULT NULL COMMENT '保险到期日',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '车辆状态',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
@@ -234,7 +235,10 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan` (
   `algorithm_version` varchar(64) DEFAULT NULL COMMENT '算法版本',
   `parameter_version` varchar(64) DEFAULT NULL COMMENT '参数版本',
   `score` decimal(12,4) DEFAULT NULL COMMENT '方案评分',
-  `total_distance` decimal(12,3) DEFAULT NULL COMMENT '总里程(算法产出)',
+  `total_distance` decimal(12,3) DEFAULT NULL COMMENT '总里程(km，按经停坐标 Haversine 换算)',
+  `est_duration_minutes` int DEFAULT NULL COMMENT '预计耗时(分钟，估算)',
+  `est_revenue` decimal(12,2) DEFAULT NULL COMMENT '预计收入(元，按计价规则估算)',
+  `est_cost` decimal(12,2) DEFAULT NULL COMMENT '预计成本(元，按计价规则估算)',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '审核下发状态',
   `approved_by` bigint DEFAULT NULL COMMENT '审核人',
   `approved_time` datetime DEFAULT NULL COMMENT '审核时间',
@@ -276,6 +280,21 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan_log` (
   `deleted` bit(1) NOT NULL DEFAULT b'0',
   PRIMARY KEY (`id`), KEY `idx_plan_log_plan` (`tenant_id`, `plan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='调度方案状态日志表';
+
+CREATE TABLE IF NOT EXISTS `transport_pricing_rule` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '计价规则编号',
+  `passenger_price_per_km` decimal(10,2) NOT NULL DEFAULT 1.00 COMMENT '客运人公里单价(元)',
+  `cargo_price_per_item` decimal(10,2) NOT NULL DEFAULT 5.00 COMMENT '货运件单价(元)',
+  `postal_price_per_item` decimal(10,2) NOT NULL DEFAULT 3.00 COMMENT '邮快件件单价(元)',
+  `vehicle_cost_per_km` decimal(10,2) NOT NULL DEFAULT 2.50 COMMENT '车辆公里成本(元)',
+  `avg_speed_kmh` decimal(5,1) NOT NULL DEFAULT 25.0 COMMENT '班线平均时速(km/h，ETA 与耗时估算口径)',
+  `stop_service_minutes` int NOT NULL DEFAULT 3 COMMENT '作业站停站分钟（接/送/派/揽）',
+  `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
+  `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updater` varchar(64) DEFAULT '', `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted` bit(1) NOT NULL DEFAULT b'0',
+  PRIMARY KEY (`id`), KEY `idx_pricing_rule_tenant` (`tenant_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='运输计价规则表（单行配置，无记录时后端用默认值兜底）';
 
 CREATE TABLE IF NOT EXISTS `transport_departure_check` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '发车核验编号',

@@ -14,4 +14,7 @@ public interface DriverService {
     DriverDO get(Long id);
     PageResult<DriverDO> getPage(DriverPageReqVO reqVO);
     List<DriverDO> getSimpleList();
+
+    /** 查询 days 天内（含已过期）驾驶证到期的司机，按到期日升序 */
+    List<DriverDO> getExpiringList(Integer days);
 }

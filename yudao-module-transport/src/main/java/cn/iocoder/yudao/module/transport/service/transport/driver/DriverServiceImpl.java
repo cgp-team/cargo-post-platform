@@ -9,6 +9,7 @@ import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -23,5 +24,6 @@ public class DriverServiceImpl implements DriverService {
     @Override public DriverDO get(Long id) { return validateExists(id); }
     @Override public PageResult<DriverDO> getPage(DriverPageReqVO reqVO) { return mapper.selectPage(reqVO); }
     @Override public List<DriverDO> getSimpleList() { return mapper.selectList(); }
+    @Override public List<DriverDO> getExpiringList(Integer days) { return mapper.selectExpiringList(LocalDate.now().plusDays(days)); }
     private DriverDO validateExists(Long id) { DriverDO o = mapper.selectById(id); if (o == null) throw exception(DRIVER_NOT_EXISTS); return o; }
 }

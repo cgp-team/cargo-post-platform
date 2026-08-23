@@ -29,3 +29,8 @@ export const deleteDriver = (id: number) => {
 export const getSimpleDriverList = (): Promise<DriverVO[]> => {
   return request.get({ url: '/transport/driver/simple-list' })
 }
+
+/** 获取 N 天内（含已过期）驾驶证到期的司机列表 */
+export const getDriverExpiringList = (days = 30): Promise<DriverVO[]> => {
+  return request.get({ url: '/transport/driver/expiring-list', params: { days } })
+}

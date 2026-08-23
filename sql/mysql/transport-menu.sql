@@ -145,6 +145,10 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 (6912, '公告编辑', 'transport:notice:update', 3, 2, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6913, '公告删除', 'transport:notice:delete', 3, 3, 6910, '', '', '', NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+-- ---------- 到期预警（司机证照 + 车辆保险，V011 配套）----------
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+(6914, '到期预警', 'transport:driver:query', 2, 14, 6800, 'expiry', 'ep:alarm-clock', 'transport/expiry/index', 'TransportExpiry', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6900 AND 6919;

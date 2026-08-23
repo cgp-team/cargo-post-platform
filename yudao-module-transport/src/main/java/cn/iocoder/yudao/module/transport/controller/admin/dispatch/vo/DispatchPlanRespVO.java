@@ -30,8 +30,17 @@ public class DispatchPlanRespVO {
     @Schema(description = "参数版本")
     private String parameterVersion;
 
-    @Schema(description = "总里程(算法产出)")
+    @Schema(description = "总里程(km，按经停坐标 Haversine 换算)")
     private BigDecimal totalDistance;
+
+    @Schema(description = "预计耗时(分钟，业务后端估算)")
+    private Integer estDurationMinutes;
+
+    @Schema(description = "预计收入(元，按计价规则估算)")
+    private BigDecimal estRevenue;
+
+    @Schema(description = "预计成本(元，按计价规则估算)")
+    private BigDecimal estCost;
 
     @Schema(description = "方案状态：0 待审核 1 已下发 2 执行中 3 已完成 4 已作废", example = "0")
     private Integer status;

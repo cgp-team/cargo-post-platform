@@ -7,6 +7,7 @@ export interface VehicleVO {
   passengerCapacity?: number
   cargoCapacityKg?: number
   cargoCapacity?: number
+  insuranceExpireDate?: string
   status?: number
   createTime?: string
 }
@@ -30,4 +31,9 @@ export const deleteVehicle = (id: number) => {
 /** 获取车辆精简列表 */
 export const getSimpleVehicleList = (): Promise<VehicleVO[]> => {
   return request.get({ url: '/transport/vehicle/simple-list' })
+}
+
+/** 获取 N 天内（含已过期）保险到期的车辆列表 */
+export const getVehicleExpiringList = (days = 30): Promise<VehicleVO[]> => {
+  return request.get({ url: '/transport/vehicle/expiring-list', params: { days } })
 }
