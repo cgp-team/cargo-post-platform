@@ -323,7 +323,11 @@ components:
         totalDistance:
           type: number
           format: double
-          description: 全部车辆行驶里程累加值（算法唯一直接产出的指标）
+          description: 全部车辆行驶里程累加值（算法唯一直接产出的指标）；单位见 distanceUnit
+        distanceUnit:
+          type: string
+          enum: [degree, km]
+          description: 里程单位——degree=经纬度欧氏距离（业务后端 Haversine 换算公里）；km=路网真实公里（直接使用）。自研服务 v1.1.0 起输出
         vehiclePlans:
           type: array
           items:
@@ -363,7 +367,11 @@ components:
         segmentDistance:
           type: number
           format: double
-          description: 与上一站点间的分段里程
+          description: 与上一站点间的分段里程（单位随 distanceUnit）
+        segmentDuration:
+          type: number
+          format: double
+          description: 与上一站点间的分段路网行驶秒数；仅 distanceUnit=km（路网路径）时给出，业务后端据此估算每站到达时刻，缺省时按直线÷均速兜底
     ErrorResponse:
       type: object
       required: [code, message]

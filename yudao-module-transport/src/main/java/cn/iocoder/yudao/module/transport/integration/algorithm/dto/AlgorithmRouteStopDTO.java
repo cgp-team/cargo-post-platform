@@ -32,4 +32,7 @@ public class AlgorithmRouteStopDTO {
     /** 与上一站点间的分段里程 */
     private Double segmentDistance;
 
+    /** 与上一站点间的分段路网行驶秒数（仅路网路径；为 null 时 ETA 按直线÷均速兜底） */
+    private Long segmentDuration;
+
 }

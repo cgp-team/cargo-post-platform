@@ -97,6 +97,12 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             return _scaled_distance(from_station, to_station)
         return int(round(matrix[(from_station.stationId, to_station.stationId)][0] * DISTANCE_SCALE))
 
+    def segment_seconds(from_station, to_station) -> float | None:
+        """分段路网行驶秒数（仅高德矩阵路径；欧氏路径为 None）。"""
+        if matrix is None:
+            return None
+        return matrix[(from_station.stationId, to_station.stationId)][1]
+
     def distance_callback(from_index: int, to_index: int) -> int:
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
@@ -190,6 +196,7 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
                         stationId=request.depot.stationId,
                         action=StopAction.RETURN,
                         segmentDistance=segment / DISTANCE_SCALE,
+                        segmentDuration=segment_seconds(from_station, to_station),
                     )
                 )
                 break
@@ -200,6 +207,7 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
                     orderId=node.order_id,
                     action=node.action,
                     segmentDistance=segment / DISTANCE_SCALE,
+                    segmentDuration=segment_seconds(from_station, to_station),
                 )
             )
             index = next_index

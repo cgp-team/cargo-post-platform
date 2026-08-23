@@ -228,8 +228,23 @@ public class DispatchServiceImpl implements DispatchService {
         for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
             insertPlanItems(plan.getId(), vehiclePlan.getVehicleId(), vehiclePlan.getStops());
         }
-        // 估算每站预计到达时间（算法不产出耗时，业务后端按经停坐标与均速自估）
-        dispatchEstimationService.estimatePlan(plan.getId(), batch[0]);
+        // 估算每站预计到达时间（算法不产出耗时，业务后端按经停坐标与均速自估；
+        // distanceUnit=km 时携带算法返回的路网分段时长/里程，按真实路网时长累计）
+        Map<String, DispatchEstimationService.RoadSegment> roadSegments = new HashMap<>();
+        if (AlgorithmPlanRespDTO.DISTANCE_UNIT_KM.equals(result.getDistanceUnit())) {
+            for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+                List<AlgorithmRouteStopDTO> stops = vehiclePlan.getStops();
+                for (int i = 0; i < stops.size(); i++) {
+                    AlgorithmRouteStopDTO stop = stops.get(i);
+                    if (stop.getSegmentDuration() != null) {
+                        roadSegments.put(vehiclePlan.getVehicleId() + ":" + (i + 1),
+                                new DispatchEstimationService.RoadSegment(
+                                        stop.getSegmentDuration(), stop.getSegmentDistance()));
+                    }
+                }
+            }
+        }
+        dispatchEstimationService.estimatePlan(plan.getId(), batch[0], roadSegments);
         updateOrdersStatus(pooledOrders.stream().map(TransportOrderDO::getId).collect(Collectors.toList()),
                 TransportOrderStatusEnum.ASSIGNED);
         return plan.getId();

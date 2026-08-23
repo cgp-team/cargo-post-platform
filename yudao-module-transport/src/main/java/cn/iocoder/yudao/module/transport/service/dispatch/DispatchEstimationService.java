@@ -59,6 +59,10 @@ public class DispatchEstimationService {
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private PricingRuleService pricingRuleService;
 
+    /** 路网分段（行驶秒数与真实公里，仅算法 distanceUnit=km 时给出；key = vehicleId:visitSequence） */
+    public record RoadSegment(Long durationSeconds, Double distanceKm) {
+    }
+
     /**
      * 估算并回写方案全部经停明细的预计到达时间，以及方案预计耗时/收入/成本。
      * 坐标缺失的站段按 0 里程处理（不中断后续估算）；无经停明细或出发时刻为 null 时不处理。
@@ -67,6 +71,15 @@ public class DispatchEstimationService {
      * @param departTime 计划出发时刻（当前口径 = 批次开始时刻）
      */
     public void estimatePlan(Long planId, LocalDateTime departTime) {
+        estimatePlan(planId, departTime, Map.of());
+    }
+
+    /**
+     * 同 {@link #estimatePlan(Long, LocalDateTime)}，但站间行驶优先使用算法返回的路网分段：
+     * 有 {@link RoadSegment} 的站段按路网行驶秒数累计 ETA、按路网真实公里累计成本里程；
+     * 缺失的站段回退直线÷均速（手工派单与 distanceUnit=degree 路径全量回退）。
+     */
+    public void estimatePlan(Long planId, LocalDateTime departTime, Map<String, RoadSegment> roadSegments) {
         if (planId == null || departTime == null) {
             return;
         }
@@ -100,16 +113,26 @@ public class DispatchEstimationService {
             for (DispatchPlanItemDO item : vehicleItems) {
                 StationDO station = item.getStationId() != null ? stationMap.get(item.getStationId()) : null;
                 if (prevStation != null) {
-                    // 上一站作业分钟 + 站间行驶分钟（坐标缺失按 0 里程）
+                    // 上一站作业分钟
                     if (SERVICE_ACTIONS.contains(prevAction)) {
                         eta = eta.plusMinutes(serviceMinutes);
                     }
-                    if (hasCoords(prevStation) && hasCoords(station)) {
+                    // 站间行驶：优先算法返回的路网分段时长/里程，缺省回退直线÷均速（坐标缺失按 0 里程）
+                    RoadSegment roadSegment = roadSegments.get(item.getVehicleId() + ":" + item.getVisitSequence());
+                    if (roadSegment != null && roadSegment.durationSeconds() != null) {
+                        eta = eta.plusSeconds(roadSegment.durationSeconds());
+                    } else if (hasCoords(prevStation) && hasCoords(station)) {
                         double km = GeoDistanceUtil.haversineKm(
                                 prevStation.getLongitude().doubleValue(), prevStation.getLatitude().doubleValue(),
                                 station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
                         eta = eta.plusMinutes(travelMinutes(km, speedKmh));
-                        totalKm += km;
+                    }
+                    if (roadSegment != null && roadSegment.distanceKm() != null) {
+                        totalKm += roadSegment.distanceKm();
+                    } else if (hasCoords(prevStation) && hasCoords(station)) {
+                        totalKm += GeoDistanceUtil.haversineKm(
+                                prevStation.getLongitude().doubleValue(), prevStation.getLatitude().doubleValue(),
+                                station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
                     }
                 }
                 DispatchPlanItemDO update = new DispatchPlanItemDO();
