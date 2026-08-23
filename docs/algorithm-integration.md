@@ -77,6 +77,29 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
 7. 保存算法/参数版本、原始请求和响应摘要，人工审核后才生成正式调度方案。
 8. 算法不可用时允许回退手工派单或模拟派单，不自动覆盖已下发方案。
 
+## 编程组自研实现（ortools-1.0.0）
+
+算法组镜像迟迟未交付，编程组按本契约自研了路线规划算法服务（生产候选），代码在 `algorithm/`，
+镜像 `cargo-post/algorithm:1.0.0`，`algorithmVersion=ortools-1.0.0`。决策依据：契约只约定接口行为
+与输出字段，未限定求解器（见 `docs/algorithm-doc-review.md` 差异表"求解算法：契约不限定，只要求
+返回算法/参数版本"），因此求解器选用 Google OR-Tools（pywrapcp 路由模型），与算法组 ACO 方案互不阻塞——
+算法组镜像交付后可按同一契约验收套件对比、择优切换。
+
+实现要点：
+
+- 求解器：订单三类（PASSENGER 强制同车、先上后下；DELIVERY 场站→站点；PICKUP 站点→场站）；
+  容量双维度累计约束（载客 BOARD +1、载货 DELIVER/PICKUP +itemCount，批次内座位/仓位不复用）；
+  每启用一车计大额固定成本，目标等价于"先最少用车、再最短里程"（Q7 优先单车）；
+  距离为 GCJ-02 两点欧氏直线（当前阶段，后续切高德路网）；确定性首解策略，同输入同输出。
+- 遗留问题收敛口径：无解统一 `200 + status=infeasible + reasonCode`——总需求超总容量为
+  `OVER_CAPACITY`，其余不可行为 `TIMING_CONFLICT`；不返回部分方案，`PARTIAL_ONLY` 只报状态不给方案
+  （本服务亦不产出该原因码）。契约中 422 与 200+infeasible 的矛盾以 Q10 口径（200 + status 字段）为准，
+  适配层对 422 的兼容兜底保留。
+- ACO 超参数（`algorithmConfig`）：全部接受但不参与求解（求解器为 OR-Tools），超出建议范围时响应
+  带 `warnings` 不拒绝（Q8 口径不变）；默认值与参数变更记录于 `algorithm/CHANGELOG.md`。
+- 切换方式：业务后端 `ALGORITHM_BASE_URL=http://algorithm:8000` 即指向本服务（compose 已内置
+  `algorithm` 服务，端口仅绑 127.0.0.1）；`mock-algorithm` 服务保留，继续用于适配层混沌测试。
+
 ## 待算法组澄清
 
 - ~~无解时的 HTTP 状态码矛盾~~（已收敛，不再阻塞）：适配层对两种返回做了双向兼容并归一——`200 + status=infeasible` 原样通过；`422` 归一为无解结果，`reasonCode` 优先取 `details.reasonCode`，缺省回退为标准错误码，保证归一结果必带 `reasonCode`。算法组最终确认唯一形式后，可删除 `AlgorithmClient.toInfeasible` 兜底分支。

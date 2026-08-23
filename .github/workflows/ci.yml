@@ -100,6 +100,8 @@ jobs:
         run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
       - name: Build Mock image
         run: docker compose --env-file .env -f deploy/docker-compose.yml build mock-algorithm
+      - name: Build Algorithm image
+        run: docker compose --env-file .env -f deploy/docker-compose.yml build algorithm
 
   drift-check:
     runs-on: ubuntu-latest

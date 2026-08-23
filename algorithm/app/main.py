@@ -1,0 +1,184 @@
+"""客货邮路线规划算法服务（编程组自研，OR-Tools 求解器）。
+
+契约见 docs/api/algorithm-api.yaml；与 mock-algorithm 的关系见 README.md。
+"""
+
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+from .models import (
+    AlgorithmConfig,
+    ErrorResponse,
+    OrderType,
+    PlanRequest,
+    PlanResult,
+)
+from .solver import solve
+
+ALGORITHM_VERSION = "ortools-1.0.0"
+PARAMETER_VERSION = "params-v1"
+
+# 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
+MAX_STATIONS = 30
+MAX_ORDERS = 25
+MAX_VEHICLES = 3
+
+# requestId 幂等保留期（契约：24 小时；进程内存储，与 mock 同语义）
+IDEMPOTENCY_TTL_SECONDS = 24 * 3600
+
+
+class JobRecord(BaseModel):
+    request: PlanRequest
+    result: PlanResult | None = None
+    pending: bool = False
+    created_at: datetime
+
+
+app = FastAPI(
+    title="客货邮路线规划算法服务",
+    version=ALGORITHM_VERSION,
+    description="编程组自研路线规划算法服务（OR-Tools 求解器）。接口契约见 docs/api/algorithm-api.yaml。",
+)
+jobs: dict[str, JobRecord] = {}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    if isinstance(exc.detail, dict) and "code" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return error_response(exc.status_code, "ALGORITHM_INTERNAL_ERROR", str(exc.detail))
+
+
+def now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def error_response(status_code: int, code: str, message: str, request_id: str | None = None) -> JSONResponse:
+    payload = ErrorResponse(code=code, message=message, requestId=request_id)
+    return JSONResponse(status_code=status_code, content=payload.model_dump(exclude_none=True))
+
+
+def config_warnings(config: AlgorithmConfig) -> list[str]:
+    """ACO 超参数不参与 OR-Tools 求解；超出建议范围仅告警不拒绝（契约 Q8）。"""
+    warnings = []
+    if config.ant_count > 100:
+        warnings.append("ant_count 超出建议范围（建议 <= 100）")
+    if config.max_iterations > 500:
+        warnings.append("max_iterations 超出建议范围（建议 <= 500）")
+    return warnings
+
+
+def evict_expired_jobs() -> None:
+    """惰性清理超过 24 小时幂等保留期的任务记录。"""
+    cutoff = now().timestamp() - IDEMPOTENCY_TTL_SECONDS
+    expired = [key for key, record in jobs.items() if record.created_at.timestamp() < cutoff]
+    for key in expired:
+        del jobs[key]
+
+
+def build_result(request: PlanRequest) -> PlanResult:
+    outcome = solve(request)
+    if outcome.status == "infeasible":
+        return PlanResult(
+            requestId=request.requestId,
+            status="infeasible",
+            reasonCode=outcome.reason_code,
+            warnings=config_warnings(request.algorithmConfig),
+            algorithmVersion=ALGORITHM_VERSION,
+            parameterVersion=PARAMETER_VERSION,
+            computedAt=now(),
+        )
+    return PlanResult(
+        requestId=request.requestId,
+        status="feasible",
+        warnings=config_warnings(request.algorithmConfig),
+        algorithmVersion=ALGORITHM_VERSION,
+        parameterVersion=PARAMETER_VERSION,
+        totalDistance=outcome.total_distance,
+        vehiclePlans=outcome.vehicle_plans,
+        computedAt=now(),
+    )
+
+
+def validate_request(request: PlanRequest) -> JSONResponse | None:
+    if len(request.stations) > MAX_STATIONS or len(request.orders) > MAX_ORDERS or len(request.vehicles) > MAX_VEHICLES:
+        return error_response(413, "OVER_LIMIT", "超出规模上限（30 站点 / 25 订单 / 3 车）", request.requestId)
+    if not request.vehicles:
+        return error_response(400, "INVALID_INPUT", "至少需要一台可用车辆", request.requestId)
+
+    known_stations = {station.stationId for station in request.stations} | {request.depot.stationId}
+    for order in request.orders:
+        if order.orderType == OrderType.PASSENGER:
+            if not order.boardingStationId or not order.alightingStationId:
+                return error_response(400, "INVALID_INPUT", f"客运订单 {order.orderId} 缺少上车站或下车站", request.requestId)
+            refs = [order.boardingStationId, order.alightingStationId]
+        else:
+            if not order.stationId:
+                return error_response(400, "INVALID_INPUT", f"订单 {order.orderId} 缺少作业站点", request.requestId)
+            refs = [order.stationId]
+        unknown = [station_id for station_id in refs if station_id not in known_stations]
+        if unknown:
+            return error_response(400, "INVALID_INPUT", f"订单 {order.orderId} 引用了未知站点 {unknown}", request.requestId)
+    return None
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "UP", "algorithmVersion": ALGORITHM_VERSION}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    return {"status": "READY", "algorithmVersion": ALGORITHM_VERSION}
+
+
+@app.post(
+    "/api/v1/plan",
+    response_model=PlanResult,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse},
+        408: {"model": ErrorResponse},
+        413: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def create_plan(request: PlanRequest):
+    evict_expired_jobs()
+    record = jobs.get(request.requestId)
+    if record is not None:
+        if record.pending:
+            return error_response(408, "TIMEOUT", "任务仍在计算中，请轮询 /api/v1/result/{requestId}", request.requestId)
+        return record.result.model_copy(update={"cached": True})
+
+    validation_error = validate_request(request)
+    if validation_error is not None:
+        return validation_error
+
+    # scenario 为 Mock 专属混沌字段，真实算法接受但忽略（契约标注"真实算法可忽略"）。
+    # 本规模求解远低于契约 10 秒时限，同步返回；若未来出现超时，按契约先落 pending
+    # 记录并返回 408，业务侧凭 requestId 轮询 /api/v1/result/{requestId}。
+    result = build_result(request)
+    jobs[request.requestId] = JobRecord(request=request, result=result, created_at=now())
+    return result
+
+
+@app.get(
+    "/api/v1/result/{request_id}",
+    response_model=PlanResult,
+    response_model_exclude_none=True,
+    responses={202: {"description": "仍在计算中"}, 404: {"model": ErrorResponse}},
+)
+def get_plan_result(request_id: str):
+    evict_expired_jobs()
+    record = jobs.get(request_id)
+    if record is None:
+        return error_response(404, "REQUEST_NOT_FOUND", "requestId 不存在或已超过 24 小时幂等保留期", request_id)
+    if record.pending:
+        return JSONResponse(status_code=202, content={"requestId": request_id, "status": "computing"})
+    return record.result
