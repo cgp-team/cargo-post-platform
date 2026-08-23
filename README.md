@@ -21,9 +21,9 @@
   <img src="docs/images/admin-dispatch.jpg" width="32%" alt="调度工作台">
 </p>
 
-**微信小程序**：包裹追踪 · 我的寄件 · 实时公交（设计原型，[HTML Demo](docs/images/demo/miniprogram.html)）
+**微信小程序**：首页 · 客户功能 · 司机界面
 
-<img src="docs/images/miniprogram.png" width="86%" alt="小程序：包裹追踪 / 我的寄件 / 实时公交">
+<img src="docs/images/miniprogram.png" width="86%" alt="小程序：首页 / 客户功能 / 司机界面">
 
 ## 功能特性
 
