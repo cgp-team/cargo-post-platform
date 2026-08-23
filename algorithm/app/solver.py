@@ -7,8 +7,9 @@
   DELIVER / PICKUP 均 +itemCount（派送件占仓位整个车次），单车次累计量
   分别 ≤ passengerCapacity / cargoCapacity，与 OVER_CAPACITY 预检口径一致。
 - 优先单车（契约 Q7）：每台启用车辆计大额固定成本，目标函数先最小化用车数、再最小化总里程。
-- 距离：GCJ-02 坐标两点欧氏直线（单位：度），乘以 DISTANCE_SCALE 取整后作为求解成本，
-  输出里程换算回度，保留 3 位小数，与 mock 口径一致。
+- 距离：默认 GCJ-02 坐标两点欧氏直线（单位：度）；调用方注入距离矩阵（如高德路网，
+  单位：公里）时按矩阵查表。距离乘以 DISTANCE_SCALE 取整后作为求解成本，输出里程
+  换算回原单位，保留 3 位小数，与 mock 口径一致。
 - 确定性：仅用确定性的首解构造策略（PARALLEL_CHEAPEST_INSERTION），不引入任何
   随机元启发式或 wall-clock 依赖，同输入必然同输出。
 """
@@ -18,9 +19,10 @@ from math import hypot
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
+from .distance import DistanceMatrix
 from .models import OrderType, PlanRequest, RouteStop, StopAction, VehiclePlan
 
-# 欧氏距离（度）× 1000 取整作为整数成本，对应输出保留 3 位小数
+# 距离（度或公里，随距离提供方）× 1000 取整作为整数成本，对应输出保留 3 位小数
 DISTANCE_SCALE = 1000
 # 远大于任何可行路线的里程成本（30 节点 × 单段最大约几十度的千倍），
 # 使目标函数等价于"先最小化用车数，再最小化总里程"
@@ -54,10 +56,12 @@ def _total_demand(request: PlanRequest) -> tuple[int, int]:
     return passengers, cargo
 
 
-def solve(request: PlanRequest) -> SolveOutcome:
+def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:
     """求解一个批次的路线规划。契约口径：总需求超总容量 → OVER_CAPACITY；
 
     其余无解（时序矛盾等）→ TIMING_CONFLICT；不返回部分方案。
+    matrix 为 None 时用两点欧氏直线（度）；注入矩阵（如高德路网，公里）时按站点对查表，
+    成本缩放与输出换算逻辑不变，segmentDistance/totalDistance 跟随矩阵单位。
     """
     passengers, cargo = _total_demand(request)
     if not request.orders:
@@ -88,10 +92,15 @@ def solve(request: PlanRequest) -> SolveOutcome:
     manager = pywrapcp.RoutingIndexManager(len(nodes), num_vehicles, 0)
     routing = pywrapcp.RoutingModel(manager)
 
+    def scaled_distance(from_station, to_station) -> int:
+        if matrix is None:
+            return _scaled_distance(from_station, to_station)
+        return int(round(matrix[(from_station.stationId, to_station.stationId)][0] * DISTANCE_SCALE))
+
     def distance_callback(from_index: int, to_index: int) -> int:
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return _scaled_distance(station_map[nodes[from_node].station_id], station_map[nodes[to_node].station_id])
+        return scaled_distance(station_map[nodes[from_node].station_id], station_map[nodes[to_node].station_id])
 
     distance_callback_index = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(distance_callback_index)
@@ -167,13 +176,13 @@ def solve(request: PlanRequest) -> SolveOutcome:
         scaled_total = 0
         while True:
             next_index = solution.Value(routing.NextVar(index))
-            # 不用 GetArcCostForVehicle：车辆固定成本会摊入首段弧成本，里程必须纯按欧氏距离
+            # 不用 GetArcCostForVehicle：车辆固定成本会摊入首段弧成本，里程必须纯按距离矩阵
             from_station = station_map[nodes[manager.IndexToNode(index)].station_id]
             if routing.IsEnd(next_index):
                 to_station = request.depot
             else:
                 to_station = station_map[nodes[manager.IndexToNode(next_index)].station_id]
-            segment = _scaled_distance(from_station, to_station)
+            segment = scaled_distance(from_station, to_station)
             scaled_total += segment
             if routing.IsEnd(next_index):
                 stops.append(

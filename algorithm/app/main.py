@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .distance import AmapDistanceProvider, AmapUnavailable
 from .models import (
     AlgorithmConfig,
     ErrorResponse,
@@ -19,8 +20,8 @@ from .models import (
 )
 from .solver import solve
 
-ALGORITHM_VERSION = "ortools-1.0.0"
-PARAMETER_VERSION = "params-v1"
+ALGORITHM_VERSION = "ortools-1.1.0"
+PARAMETER_VERSION = "params-v2"
 
 # 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
 MAX_STATIONS = 30
@@ -44,6 +45,9 @@ app = FastAPI(
     description="编程组自研路线规划算法服务（OR-Tools 求解器）。接口契约见 docs/api/algorithm-api.yaml。",
 )
 jobs: dict[str, JobRecord] = {}
+
+# 高德路网距离：配置 AMAP_KEY 即启用（进程内站点级缓存随实例存活）；未配置走欧氏直线
+amap_provider = AmapDistanceProvider.from_env()
 
 
 @app.exception_handler(HTTPException)
@@ -81,23 +85,34 @@ def evict_expired_jobs() -> None:
 
 
 def build_result(request: PlanRequest) -> PlanResult:
-    outcome = solve(request)
+    warnings = config_warnings(request.algorithmConfig)
+    matrix = None
+    if amap_provider is not None and request.orders:
+        try:
+            matrix = amap_provider.get_matrix([request.depot, *request.stations])
+        except AmapUnavailable:
+            # 整单降级回欧氏直线，保证单次求解矩阵口径一致
+            warnings.append("路网距离不可用，已降级直线距离")
+    outcome = solve(request, matrix)
+    distance_unit = "km" if matrix is not None else "degree"
     if outcome.status == "infeasible":
         return PlanResult(
             requestId=request.requestId,
             status="infeasible",
             reasonCode=outcome.reason_code,
-            warnings=config_warnings(request.algorithmConfig),
+            warnings=warnings,
             algorithmVersion=ALGORITHM_VERSION,
             parameterVersion=PARAMETER_VERSION,
+            distanceUnit=distance_unit,
             computedAt=now(),
         )
     return PlanResult(
         requestId=request.requestId,
         status="feasible",
-        warnings=config_warnings(request.algorithmConfig),
+        warnings=warnings,
         algorithmVersion=ALGORITHM_VERSION,
         parameterVersion=PARAMETER_VERSION,
+        distanceUnit=distance_unit,
         totalDistance=outcome.total_distance,
         vehiclePlans=outcome.vehicle_plans,
         computedAt=now(),
