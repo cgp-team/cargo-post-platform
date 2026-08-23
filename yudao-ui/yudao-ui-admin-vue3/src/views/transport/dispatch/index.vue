@@ -365,6 +365,18 @@
 
   <!-- 方案详情弹窗 -->
   <Dialog :title="`方案详情(方案号:${detail?.id ?? '-'})`" v-model="detailVisible" width="900px">
+    <el-descriptions v-if="detail" :column="4" border size="small" style="margin-bottom:12px">
+      <el-descriptions-item label="总里程">{{ totalDistanceText(detail.totalDistance) }} km</el-descriptions-item>
+      <el-descriptions-item label="预计耗时">
+        {{ detail.estDurationMinutes != null ? detail.estDurationMinutes + ' 分钟' : '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="预计收入">
+        {{ detail.estRevenue != null ? Number(detail.estRevenue).toFixed(2) + ' 元' : '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="预计成本">
+        {{ detail.estCost != null ? Number(detail.estCost).toFixed(2) + ' 元' : '-' }}
+      </el-descriptions-item>
+    </el-descriptions>
     <el-table v-loading="detailLoading" :data="detailItems" stripe border>
       <el-table-column label="经停顺序" prop="visitSequence" align="center" width="80" />
       <el-table-column label="车辆" prop="vehicleId" align="center">

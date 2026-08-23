@@ -164,7 +164,7 @@ public class DispatchServiceImpl implements DispatchService {
         DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.MANUAL, null, null, null);
         insertPlanItems(plan.getId(), vehicle.getId(), stops);
         // 估算每站预计到达时间（口径同智能派单：批次开始时刻出发，逐站累计行驶 + 停站作业分钟）
-        dispatchEstimationService.estimateAndFillPlanEtas(plan.getId(), batch[0]);
+        dispatchEstimationService.estimatePlan(plan.getId(), batch[0]);
         updateOrdersStatus(reqVO.getOrderIds(), TransportOrderStatusEnum.ASSIGNED);
         return plan.getId();
     }
@@ -229,7 +229,7 @@ public class DispatchServiceImpl implements DispatchService {
             insertPlanItems(plan.getId(), vehiclePlan.getVehicleId(), vehiclePlan.getStops());
         }
         // 估算每站预计到达时间（算法不产出耗时，业务后端按经停坐标与均速自估）
-        dispatchEstimationService.estimateAndFillPlanEtas(plan.getId(), batch[0]);
+        dispatchEstimationService.estimatePlan(plan.getId(), batch[0]);
         updateOrdersStatus(pooledOrders.stream().map(TransportOrderDO::getId).collect(Collectors.toList()),
                 TransportOrderStatusEnum.ASSIGNED);
         return plan.getId();
@@ -824,7 +824,7 @@ public class DispatchServiceImpl implements DispatchService {
     }
 
     /** 经停明细落库：visit_sequence 从 1 递增；补填司机归属（按车辆当前有效人车绑定）。
-     *  预计到达时间由 {@link DispatchEstimationService#estimateAndFillPlanEtas} 在明细落库后统一估算回写 */
+     *  预计到达时间由 {@link DispatchEstimationService#estimatePlan} 在明细落库后统一估算回写 */
     private void insertPlanItems(Long planId, Long vehicleId, List<AlgorithmRouteStopDTO> stops) {
         Long driverId = resolveDriverId(vehicleId);
         for (int i = 0; i < stops.size(); i++) {
