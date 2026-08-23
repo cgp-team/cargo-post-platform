@@ -3,23 +3,53 @@ name: Project validation
 on:
   workflow_dispatch:
   pull_request:
-    # 纯文档/小程序/CI 配置的改动无需校验，直接跳过（master 无分支保护，不卡合并）
-    paths-ignore:
-      - 'docs/**'
-      - 'miniprogram/**'
-      - '.github/**'
   push:
     branches: [master, main, develop]
-    paths-ignore:
-      - 'docs/**'
-      - 'miniprogram/**'
-      - '.github/**'
 
 permissions:
   contents: read
 
 jobs:
+  # 变更范围探测：始终运行，输出各区域是否有变更，下游 job 按需跳过。
+  # 这样 docs-only PR 也会产生（skipped 的）必需检查，配合 master 分支保护可正常合并。
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.detect.outputs.backend }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      mock: ${{ steps.detect.outputs.mock }}
+      container: ${{ steps.detect.outputs.container }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Detect changed areas
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            RANGE="origin/${{ github.base_ref }}...HEAD"
+          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="${{ github.event.before }}..${{ github.event.after }}"
+          else
+            RANGE="HEAD~1..HEAD"
+          fi
+          echo "diff range: ${RANGE}"
+          CHANGED=$(git diff --name-only ${RANGE} || echo '')
+          echo "${CHANGED}"
+          has() { printf '%s\n' "${CHANGED}" | grep -qE "$1" && echo true || echo false; }
+          # 后端：任意 java 模块、构建文件、SQL
+          echo "backend=$(has '^(yudao-[^/]+/|pom\.xml|sql/)')" >> "${GITHUB_OUTPUT}"
+          echo "frontend=$(has '^yudao-ui/')" >> "${GITHUB_OUTPUT}"
+          echo "mock=$(has '^mock-algorithm/')" >> "${GITHUB_OUTPUT}"
+          # 容器校验：compose/部署配置/算法与 mock 镜像
+          echo "container=$(has '^(deploy/|algorithm/|mock-algorithm/|\.env\.example)')" >> "${GITHUB_OUTPUT}"
+
   backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -34,6 +64,8 @@ jobs:
         run: mvn -B -pl yudao-server -am package -DskipTests
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -72,6 +104,8 @@ jobs:
         run: pnpm ts:check
 
   mock-algorithm:
+    needs: changes
+    if: needs.changes.outputs.mock == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -91,6 +125,8 @@ jobs:
         run: python -c "from app.main import app; assert app.title"
 
   container-validation:
+    needs: changes
+    if: needs.changes.outputs.container == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -103,6 +139,7 @@ jobs:
       - name: Build Algorithm image
         run: docker compose --env-file .env -f deploy/docker-compose.yml build algorithm
 
+  # 始终运行：必需文件与生成物漂移检查（低成本），保证分支保护至少有一项必报检查
   drift-check:
     runs-on: ubuntu-latest
     steps:

@@ -109,6 +109,16 @@ jobs:
           backend=true
           frontend=true
           if [[ -n "${BEFORE}" && "${BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
+            # 修正对比基准：若上次成功部署晚于 BEFORE（前序部署被取消、本次仅间隔文档 push），
+            # 以"最近一次成功部署的 commit"为基准，避免被挤压的构建永远丢失（2026-08-23 实战踩坑）
+            LAST_OK=$(curl -fsS --connect-timeout 20 --max-time 60 \
+              -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/actions/workflows/deploy-dev.yml/runs?branch=${{ github.ref_name }}&status=success&per_page=1" \
+              | python3 -c 'import json,sys; r=json.load(sys.stdin).get("workflow_runs",[]); print(r[0]["head_sha"] if r else "")' || echo '')
+            if [[ -n "${LAST_OK}" && "${LAST_OK}" != "${AFTER}" ]]; then
+              echo "compare base overridden to last successful deploy: ${LAST_OK}"
+              BEFORE="${LAST_OK}"
+            fi
             RESP=$(curl -fsS --connect-timeout 20 --max-time 60 \
               -H "Authorization: token ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
