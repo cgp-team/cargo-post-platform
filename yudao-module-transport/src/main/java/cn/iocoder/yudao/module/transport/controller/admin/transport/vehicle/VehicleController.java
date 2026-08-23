@@ -55,4 +55,12 @@ public class VehicleController {
     public CommonResult<java.util.List<VehicleSimpleRespVO>> simpleList() {
         return success(BeanUtils.toBean(vehicleService.getSimpleList(), VehicleSimpleRespVO.class));
     }
+
+    @GetMapping("/expiring-list")
+    @Operation(summary="Get Expiring List")
+    @Parameter(name="days", description="Days to expiry (including expired)")
+    @PreAuthorize("@ss.hasPermission('transport:vehicle:query')")
+    public CommonResult<java.util.List<VehicleRespVO>> expiringList(@RequestParam(value="days", defaultValue="30") Integer days) {
+        return success(BeanUtils.toBean(vehicleService.getExpiringList(days), VehicleRespVO.class));
+    }
 }

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.*;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 @TableName("transport_vehicle")
 @KeySequence("transport_vehicle_seq")
@@ -27,6 +28,9 @@ public class VehicleDO extends TenantBaseDO {
 
     /** 货仓件数上限（算法容量约束按件数） */
     private Integer cargoCapacity;
+
+    /** 保险到期日 */
+    private LocalDate insuranceExpireDate;
 
     /** 车辆状态：0 空闲可用，1 停用维修 */
     private Integer status;
