@@ -127,6 +127,56 @@ class DispatchEstimationServiceTest {
     }
 
     @Test
+    void estimatePlan_road_segments_used_for_eta_and_cost() {
+        // 路网分段时长/里程优先于直线÷均速：ETA 按秒数累计、成本按路网真实公里
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(
+                item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, 1001L),
+                item(3L, 7L, 12L, 3, 2, 1001L), item(4L, 7L, 10L, 4, 5, null));
+        when(orderMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1001L).orderType(2)
+                        .pickupStationId(11L).deliveryStationId(12L).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().itemCount(2).build());
+        Map<String, DispatchEstimationService.RoadSegment> roadSegments = Map.of(
+                "7:2", new DispatchEstimationService.RoadSegment(120L, 2.5),
+                "7:3", new DispatchEstimationService.RoadSegment(180L, 3.0),
+                "7:4", new DispatchEstimationService.RoadSegment(300L, 4.5));
+
+        estimationService.estimatePlan(100L, T0, roadSegments);
+
+        Map<Long, LocalDateTime> etaById = captureItemEtas(4);
+        assertEquals(T0, etaById.get(1L));                                // DEPART
+        assertEquals(T0.plusSeconds(120), etaById.get(2L));               // BOARD：+120s
+        assertEquals(T0.plusMinutes(2 + 3 + 3), etaById.get(3L));         // ALIGHT：作业 3 分钟 +180s
+        assertEquals(T0.plusMinutes(2 + 3 + 3 + 3 + 5), etaById.get(4L)); // RETURN：作业 3 分钟 +300s
+        ArgumentCaptor<DispatchPlanDO> captor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(captor.capture());
+        // 耗时 16 分钟；成本按路网公里 2.5+3.0+4.5=10.0 × 2.50 = 25.00（非直线 3.852km）
+        assertEquals(16, captor.getValue().getEstDurationMinutes());
+        assertEquals(0, captor.getValue().getEstCost().compareTo(new BigDecimal("25.00")));
+    }
+
+    @Test
+    void estimatePlan_road_segments_missing_falls_back_to_haversine() {
+        // 路网分段缺失的站段回退直线÷均速：seq2 无分段（直线 2 分钟），seq3 有分段（+180s）
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, null),
+                item(3L, 7L, 12L, 3, 2, null));
+        Map<String, DispatchEstimationService.RoadSegment> roadSegments = Map.of(
+                "7:3", new DispatchEstimationService.RoadSegment(180L, 3.0));
+
+        estimationService.estimatePlan(100L, T0, roadSegments);
+
+        Map<Long, LocalDateTime> etaById = captureItemEtas(3);
+        assertEquals(T0, etaById.get(1L));
+        assertEquals(T0.plusMinutes(2), etaById.get(2L));          // seq2 回退直线 2 分钟
+        assertEquals(T0.plusMinutes(2 + 3 + 3), etaById.get(3L));  // seq3：作业 3 分钟 +180s
+    }
+
+    @Test
     void estimatePlan_empty_or_null_skips() {
         estimationService.estimatePlan(null, T0);
         estimationService.estimatePlan(100L, null);

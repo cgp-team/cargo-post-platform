@@ -43,6 +43,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -180,7 +181,7 @@ class DispatchServiceImplTest {
         // 经停明细 4 条（DEPART/BOARD/ALIGHT/RETURN），订单置为已分配
         verify(dispatchPlanItemMapper, times(4)).insert(any(DispatchPlanItemDO.class));
         // 明细落库后估算每站 ETA（出发时刻 = 批次开始）
-        verify(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class));
+        verify(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class), anyMap());
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), orderCaptor.getValue().getStatus());
@@ -193,6 +194,8 @@ class DispatchServiceImplTest {
         AlgorithmPlanRespDTO kmResult = feasibleResult();
         kmResult.setDistanceUnit(AlgorithmPlanRespDTO.DISTANCE_UNIT_KM);
         kmResult.setTotalDistance(88.5);
+        // 路网路径的分段时长：估算 ETA 应按秒数累计（经 DispatchEstimationService 的路网分段表传入）
+        kmResult.getVehiclePlans().get(0).getStops().get(2).setSegmentDuration(180L);
         when(algorithmAdapter.plan(any())).thenReturn(kmResult);
         doAnswer(invocation -> {
             DispatchPlanDO plan = invocation.getArgument(0);
@@ -205,6 +208,12 @@ class DispatchServiceImplTest {
         ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
         verify(dispatchPlanMapper).insert(planCaptor.capture());
         assertEquals(0, planCaptor.getValue().getTotalDistance().compareTo(new java.math.BigDecimal("88.5")));
+        // 路网分段表只含带 segmentDuration 的经停（key = vehicleId:visitSequence）
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, DispatchEstimationService.RoadSegment>> segmentCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class), segmentCaptor.capture());
+        assertEquals(1, segmentCaptor.getValue().size());
+        assertEquals(180L, segmentCaptor.getValue().get("7:3").durationSeconds());
     }
 
     @Test

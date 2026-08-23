@@ -40,8 +40,8 @@ CACHE_TTL_SECONDS = 24 * 3600
 # 高德 origins 单请求上限 100 个坐标对；本服务上限 31 点，一次调用覆盖全量
 AMAP_MAX_ORIGINS = 100
 
-# (from_station_id, to_station_id) -> (km, seconds)
-DistanceMatrix = dict[tuple[str, str], tuple[float, float]]
+# (from_station_id, to_station_id) -> (km, seconds)；seconds 为 None 表示无时长数据（欧氏路径）
+DistanceMatrix = dict[tuple[str, str], tuple[float, float | None]]
 
 
 class AmapUnavailable(Exception):
@@ -55,13 +55,13 @@ class DistanceProvider(Protocol):
 
 
 class EuclideanDistanceProvider:
-    """现状欧氏直线口径（单位：度）；seconds 恒为 0，行程时间由后端均速口径自估。"""
+    """现状欧氏直线口径（单位：度）；行驶秒数未知返回 None，由后端按直线÷均速兜底。"""
 
     def get_matrix(self, points: list[Station]) -> DistanceMatrix:
         return {
             (a.stationId, b.stationId): (
                 hypot(a.longitude - b.longitude, a.latitude - b.latitude),
-                0.0,
+                None,
             )
             for a in points
             for b in points

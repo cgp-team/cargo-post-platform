@@ -2,6 +2,15 @@
 
 本服务镜像版本与参数版本变更记录（契约 Q8：默认值随镜像版本管理，CHANGELOG 记录参数变更）。
 
+## [ortools-1.2.0] - 2026-08-23
+
+输出分段路网行驶时长（`segmentDuration`），支持业务后端 ETA 从"直线÷均速"升级为真实路网时长。
+
+- `RouteStop.segmentDuration`：高德矩阵路径下每站给出与上一站点间的分段行驶秒数
+  （DEPART 无入弧为 None）；欧氏路径为 None，后端按原直线÷均速兜底，完全向后兼容。
+- 契约文档 `docs/api/algorithm-api.yaml` 增补 `segmentDuration` 与此前漏记的 `distanceUnit`。
+- `algorithmVersion=ortools-1.2.0`，`parameterVersion=params-v2`（参数无变更）。
+
 ## [ortools-1.1.0] - 2026-08-23
 
 接入高德路网距离（可降级直线）。
