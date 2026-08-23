@@ -2,6 +2,28 @@
 
 本服务镜像版本与参数版本变更记录（契约 Q8：默认值随镜像版本管理，CHANGELOG 记录参数变更）。
 
+## [ortools-1.1.0] - 2026-08-23
+
+接入高德路网距离（可降级直线）。
+
+- 距离提供方抽象（`app/distance.py`）：`DistanceProvider` 协议 + 欧氏 / 高德两个实现，
+  求解器 `solve(request, matrix=None)` 支持矩阵注入，成本缩放与输出换算逻辑不变。
+- 高德「距离测量」API（`v3/distance`，type=1 驾车导航距离）：配置 `AMAP_KEY` 环境变量即启用；
+  未配置时行为与 ortools-1.0.0 完全一致（欧氏直线，单位：度）。
+- 单位语义：`PlanResult.distanceUnit` 始终输出——`"degree"`（欧氏路径，后端按 Haversine
+  换算公里）或 `"km"`（高德路径，真实公里，后端直通，不二次换算）；
+  `segmentDistance` / `totalDistance` 跟随同一单位。
+- 调用与缓存：每个 destination 一次请求（origins 全量 ≤100，本服务上限 31 点）；
+  httpx 超时 5s、失败重试 1 次；进程内站点级缓存（key=站点集合坐标哈希，TTL 24h），
+  站点坐标不变时命中缓存 0 次外部调用；duration（秒）随矩阵缓存，留作后续 ETA 改进。
+- 降级：任一 destination 失败/超时/配额错误（含 results[].info/code 单项错误）→
+  整单降级回欧氏直线，响应 `warnings` 追加"路网距离不可用，已降级直线距离"，
+  保证单次求解矩阵口径一致（不做部分对降级）。
+- `algorithmVersion=ortools-1.1.0`，`parameterVersion=params-v2`。
+- 参数版本 params-v2 变更：新增距离口径开关（`AMAP_KEY` 配置 = 高德路网公里 /
+  未配置 = 欧氏直线度）；其余默认参数同 params-v1（缩放 ×1000、固定成本 10^9、
+  求解护栏 5 秒、默认容量 5 人 / 4 件不变）。
+
 ## [ortools-1.0.0] - 2026-08-23
 
 首版。编程组自研实现，替换算法组未交付的镜像。
