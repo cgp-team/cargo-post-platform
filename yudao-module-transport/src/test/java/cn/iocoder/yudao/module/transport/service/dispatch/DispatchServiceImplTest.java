@@ -602,4 +602,87 @@ class DispatchServiceImplTest {
                 .build();
     }
 
+    // ==================== 按勾选订单归集（orderIds） ====================
+
+    @Test
+    void collectByOrderIds_all_created_pooled() {
+        // 全部待调度（CREATED），货运已审核 → 全部入池
+        when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(3).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
+                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(1).build());
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setOrderIds(List.of(1L, 2L));
+        int count = dispatchService.collectOrders(reqVO);
+
+        assertEquals(2, count);
+        ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).update(captor.capture(), any());
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(), captor.getValue().getStatus());
+    }
+
+    @Test
+    void collectByOrderIds_mixed_status_throws() {
+        // 一个待调度 + 一个已入池 → 明确报错，不悄悄跳过
+        when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.POOLED.getStatus()).build()));
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setOrderIds(List.of(1L, 2L));
+        ServiceException ex = assertThrows(ServiceException.class, () -> dispatchService.collectOrders(reqVO));
+
+        assertEquals(DISPATCH_ORDER_NOT_COLLECTABLE.getCode(), ex.getCode());
+        verify(orderMapper, never()).update(any(TransportOrderDO.class), any());
+    }
+
+    @Test
+    void collectByOrderIds_unaudited_cargo_throws() {
+        // 货运未审核通过 → 明确报错
+        when(orderMapper.selectBatchIds(List.of(1L))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
+                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(0).build());
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setOrderIds(List.of(1L));
+        ServiceException ex = assertThrows(ServiceException.class, () -> dispatchService.collectOrders(reqVO));
+
+        assertEquals(CARGO_AUDIT_PENDING.getCode(), ex.getCode());
+    }
+
+    @Test
+    void collectByOrderIds_missing_order_throws() {
+        // orderIds 有订单查不到 → 报不存在
+        when(orderMapper.selectBatchIds(List.of(1L, 99L))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).build()));
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setOrderIds(List.of(1L, 99L));
+        ServiceException ex = assertThrows(ServiceException.class, () -> dispatchService.collectOrders(reqVO));
+
+        assertEquals(ORDER_NOT_EXISTS.getCode(), ex.getCode());
+    }
+
+    @Test
+    void collectByOrderIds_batch_multiple_cargo() {
+        // 批量：2 货运已审核 + 1 邮快件 → 全部入池
+        when(orderMapper.selectBatchIds(List.of(1L, 2L, 3L))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(3L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(3).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().auditStatus(1).build());
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(3);
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setOrderIds(List.of(1L, 2L, 3L));
+        int count = dispatchService.collectOrders(reqVO);
+
+        assertEquals(3, count);
+    }
+
 }

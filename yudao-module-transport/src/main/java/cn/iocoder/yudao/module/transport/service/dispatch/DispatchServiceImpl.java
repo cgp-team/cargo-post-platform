@@ -88,11 +88,43 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     @Transactional
     public int collectOrders(DispatchCollectReqVO reqVO) {
-        // 查区间内待归集订单
+        // 推荐：按勾选订单归集（orderIds 优先，前端勾选后按 ID 入池）
+        if (reqVO.getOrderIds() != null && !reqVO.getOrderIds().isEmpty()) {
+            return collectByOrderIds(reqVO.getOrderIds());
+        }
+        // 兼容：按时间范围归集（批次区间内待调度订单，货运需审核通过）
+        return collectByTimeRange(reqVO);
+    }
+
+    /** 按勾选订单归集：校验全部存在 / 待调度 / 货运已审核；任一非法明确报错（不悄悄跳过） */
+    private int collectByOrderIds(List<Long> orderIds) {
+        List<TransportOrderDO> orders = orderMapper.selectBatchIds(orderIds);
+        if (orders.size() != orderIds.size()) {
+            throw exception(ORDER_NOT_EXISTS);
+        }
+        for (TransportOrderDO order : orders) {
+            if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.CREATED.getStatus())) {
+                throw exception(DISPATCH_ORDER_NOT_COLLECTABLE);
+            }
+            if (Objects.equals(order.getOrderType(), 2) && !isCargoAudited(order.getId())) {
+                throw exception(CARGO_AUDIT_PENDING);
+            }
+        }
+        TransportOrderDO updateObj = new TransportOrderDO();
+        updateObj.setStatus(TransportOrderStatusEnum.POOLED.getStatus());
+        return orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getId, orderIds)
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus()));
+    }
+
+    /** 兼容：按时间范围归集（批次区间内待调度订单，货运需审核通过；未提供区间返回 0） */
+    private int collectByTimeRange(DispatchCollectReqVO reqVO) {
+        if (reqVO.getBatchStart() == null || reqVO.getBatchEnd() == null) {
+            return 0;
+        }
         List<TransportOrderDO> orders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
                 .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus())
                 .between(TransportOrderDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
-        // 过滤：货运需管理端审核通过（危险品/违禁品拒绝运输）；客运/邮快件直接可归集
         List<Long> ids = orders.stream()
                 .filter(o -> !Objects.equals(o.getOrderType(), 2) || isCargoAudited(o.getId()))
                 .map(TransportOrderDO::getId)
