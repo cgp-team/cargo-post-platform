@@ -1,11 +1,11 @@
 package cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import org.springframework.format.annotation.DateTimeFormat;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static cn.iocoder.yudao.framework.common.util.date.DateUtils.FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND;
 
@@ -13,13 +13,14 @@ import static cn.iocoder.yudao.framework.common.util.date.DateUtils.FORMAT_YEAR_
 @Data
 public class DispatchCollectReqVO {
 
-    @Schema(description = "批次区间开始", requiredMode = Schema.RequiredMode.REQUIRED)
-    @NotNull(message = "批次区间开始不能为空")
+    @Schema(description = "待归集订单编号列表（推荐：前端勾选订单后按 ID 归集）")
+    private List<Long> orderIds;
+
+    @Schema(description = "批次区间开始（兼容按时间范围归集，可选；LocalDateTime 按项目全局时间戳序列化）")
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     private LocalDateTime batchStart;
 
-    @Schema(description = "批次区间结束", requiredMode = Schema.RequiredMode.REQUIRED)
-    @NotNull(message = "批次区间结束不能为空")
+    @Schema(description = "批次区间结束（兼容按时间范围归集，可选）")
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     private LocalDateTime batchEnd;
 
