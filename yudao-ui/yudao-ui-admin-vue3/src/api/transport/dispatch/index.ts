@@ -52,10 +52,11 @@ export interface DispatchPlanRespVO extends DispatchPlanVO {
   items?: DispatchPlanItemVO[]
 }
 
-/** 订单归集请求 */
+/** 订单归集请求（orderIds 优先；batchStart/batchEnd 兼容按时间范围，毫秒时间戳） */
 export interface DispatchCollectReqVO {
-  batchStart: string
-  batchEnd: string
+  orderIds?: number[]
+  batchStart?: number
+  batchEnd?: number
 }
 
 /** 手工派单请求 */

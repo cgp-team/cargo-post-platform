@@ -25,8 +25,10 @@
           <el-button @click="resetPoolQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
-      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" @click="openCollect"><Icon icon="ep:download" />归集入池</el-button>
-      <el-button type="primary" v-hasPermi="['transport:dispatch:manual-plan']" :disabled="selectedOrders.length === 0" @click="openManual">
+      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :disabled="collectDisabled" @click="submitCollectBySelection">
+        <Icon icon="ep:download" />归集入池
+      </el-button>
+      <el-button type="primary" v-hasPermi="['transport:dispatch:manual-plan']" :disabled="manualSelected.length === 0" @click="openManual">
         <Icon icon="ep:pointer" />手工派单
       </el-button>
       <el-button type="primary" v-hasPermi="['transport:dispatch:smart-plan']" @click="openSmart"><Icon icon="ep:magic-stick" />智能派单</el-button>
@@ -125,27 +127,11 @@
     </ContentWrap>
   </ContentWrap>
 
-  <!-- 归集入池弹窗 -->
-  <Dialog title="归集入池" v-model="collectVisible" width="500px">
-    <el-form ref="collectFormRef" :model="collectForm" :rules="collectRules" label-width="120px" v-loading="collectLoading">
-      <el-form-item label="批次开始时间" prop="batchStart">
-        <el-date-picker v-model="collectForm.batchStart" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" />
-      </el-form-item>
-      <el-form-item label="批次结束时间" prop="batchEnd">
-        <el-date-picker v-model="collectForm.batchEnd" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="collectVisible = false">取 消</el-button>
-      <el-button type="primary" :loading="collectLoading" @click="submitCollect">确 定</el-button>
-    </template>
-  </Dialog>
-
   <!-- 手工派单弹窗 -->
   <Dialog title="手工派单" v-model="manualVisible" width="500px">
     <el-form ref="manualFormRef" :model="manualForm" :rules="manualRules" label-width="120px" v-loading="manualLoading">
       <el-form-item label="已选订单">
-        <span>{{ selectedOrders.length }} 条</span>
+        <span>{{ manualSelected.length }} 条</span>
       </el-form-item>
       <el-form-item label="场站" prop="depotStationId">
         <el-select v-model="manualForm.depotStationId" placeholder="请选择场站" style="width:100%">
@@ -401,7 +387,6 @@ import * as DispatchApi from '@/api/transport/dispatch'
 import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
 import { Dialog } from '@/components/Dialog'
-import { formatDate } from '@/utils/formatTime'
 
 defineOptions({ name: 'TransportDispatch' })
 
@@ -482,11 +467,13 @@ const resetPoolQuery = () => {
   Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: 1, orderType: undefined })
   getPoolList()
 }
-// 仅已入池订单可勾选参与手工派单
-const poolSelectable = (row: DispatchApi.DispatchOrderVO) => row.status === 1
+// 待调度(status=0)可勾选归集入池；已入池(status=1)可勾选手工/智能派单
+const poolSelectable = (row: DispatchApi.DispatchOrderVO) => row.status === 0 || row.status === 1
 const handleSelectionChange = (rows: DispatchApi.DispatchOrderVO[]) => {
   selectedOrders.value = rows
 }
+/** 可手工派单订单（已入池 status=1） */
+const manualSelected = computed(() => selectedOrders.value.filter((o) => o.status === 1))
 
 /** 调度方案 */
 const planLoading = ref(true)
@@ -516,31 +503,21 @@ const resetPlanQuery = () => {
   getPlanList()
 }
 
-/** 归集入池 */
-const collectVisible = ref(false)
+/** 归集入池：勾选待调度订单后按 orderIds 归集（不再用时间弹窗，语义与勾选一致） */
 const collectLoading = ref(false)
-const collectFormRef = ref()
-const collectForm = ref({ batchStart: '', batchEnd: '' })
-const collectRules = reactive({
-  batchStart: [{ required: true, message: '请选择批次开始时间', trigger: 'change' }],
-  batchEnd: [{ required: true, message: '请选择批次结束时间', trigger: 'change' }],
-})
-const openCollect = () => {
-  // 默认当前半小时批次:分 < 30 取 :00-:30,否则取 :30-下一小时 :00
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes() < 30 ? 0 : 30, 0)
-  const end = new Date(start.getTime() + 30 * 60 * 1000)
-  collectForm.value = { batchStart: formatDate(start), batchEnd: formatDate(end) }
-  collectVisible.value = true
-}
-const submitCollect = async () => {
-  const valid = await collectFormRef.value?.validate()
-  if (!valid) return
+/** 可归集订单（待调度 status=0） */
+const collectableSelected = computed(() => selectedOrders.value.filter((o) => o.status === 0))
+/** 归集按钮禁用：当前筛选已入池(status=1) 或 无待调度勾选 */
+const collectDisabled = computed(() => poolQuery.status === 1 || collectableSelected.value.length === 0)
+const submitCollectBySelection = async () => {
+  if (!collectableSelected.value.length) {
+    message.warning('请先选择待调度的订单')
+    return
+  }
   collectLoading.value = true
   try {
-    const count = await DispatchApi.collectOrders(collectForm.value)
+    const count = await DispatchApi.collectOrders({ orderIds: collectableSelected.value.map((o) => o.id!) })
     message.success(`归集完成,共入池 ${count} 条订单`)
-    collectVisible.value = false
     getPoolList()
   } finally {
     collectLoading.value = false
@@ -560,6 +537,10 @@ const manualRules = reactive({
   vehicleId: [{ required: true, message: '请选择车辆', trigger: 'change' }],
 })
 const openManual = () => {
+  if (!manualSelected.value.length) {
+    message.warning('请选择已入池的订单')
+    return
+  }
   manualForm.value = { depotStationId: undefined, vehicleId: undefined }
   manualVisible.value = true
 }
@@ -571,7 +552,7 @@ const submitManual = async () => {
     const planId = await DispatchApi.createManualPlan({
       depotStationId: manualForm.value.depotStationId!,
       vehicleId: manualForm.value.vehicleId!,
-      orderIds: selectedOrders.value.map((o) => o.id!),
+      orderIds: manualSelected.value.map((o) => o.id!),
     })
     message.success(`手工派单成功,方案号:${planId}`)
     manualVisible.value = false
