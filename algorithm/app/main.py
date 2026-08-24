@@ -26,6 +26,9 @@ from .models import (
     OrderType,
     PlanRequest,
     PlanResult,
+    RoutePoint,
+    RouteRequest,
+    RouteResponse,
     Station,
 )
 from .solver import solve
@@ -229,6 +232,38 @@ def get_distance(request: DistanceRequest):
         available=route.available,
     )
     return DistanceResponse(requestId=request.requestId, distanceUnit="km", pairs=[pair], computedAt=now())
+
+
+@app.post(
+    "/api/v1/route",
+    response_model=RouteResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def get_route(request: RouteRequest):
+    """坐标 → 坐标单路线查询（实时公交 ETA：车辆位置 → 下一站）。
+
+    复用 AmapDistanceProvider.get_route（与派单/寄货同一套高德路网实现，不重复实现 HTTP）。
+    未配置 AMAP_KEY / 高德失败 → euclidean 直线估算（provider 明确标注）；明确不可达 → available=false。
+    """
+    origin = Station(stationId="origin", longitude=request.origin.longitude, latitude=request.origin.latitude)
+    destination = Station(stationId="destination",
+                          longitude=request.destination.longitude, latitude=request.destination.latitude)
+    if amap_provider is not None:
+        result = amap_provider.get_route(origin, destination)
+    else:
+        km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
+        seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
+        result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean")
+    if not result.available:
+        return RouteResponse(available=False, provider="amap", reasonCode="ROUTE_UNAVAILABLE")
+    return RouteResponse(available=True, distanceKm=result.distanceKm,
+                         durationSeconds=result.durationSeconds, provider=result.provider)
 
 
 @app.get(

@@ -5,6 +5,8 @@ import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmErrorRespDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanRespDTO;
 import lombok.extern.slf4j.Slf4j;
@@ -114,6 +116,36 @@ public class AlgorithmClient {
                 throw exception(ALGORITHM_CALL_FAILED, status, errorMessage(ex));
             } catch (ResourceAccessException ex) {
                 log.warn("[distance][requestId={} 第 {} 次请求网络错误：{}]", request.getRequestId(), attempt + 1, ex.getMessage());
+            }
+        }
+        throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+    }
+
+    /**
+     * 坐标→坐标单路线查询（实时公交 ETA：车辆位置 → 下一站）。轻量即时查询；
+     * 失败抛 {@link ServiceException}，调用方按"本次不返回 ETA"降级（不疯狂重试）。
+     */
+    public AlgorithmRouteRespDTO route(AlgorithmRouteReqDTO request) {
+        for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
+            if (attempt > 0) {
+                sleep(properties.getRetryBackoff().toMillis());
+            }
+            try {
+                ResponseEntity<AlgorithmRouteRespDTO> response =
+                        restTemplate.postForEntity("/api/v1/route", request, AlgorithmRouteRespDTO.class);
+                return response.getBody();
+            } catch (HttpStatusCodeException ex) {
+                int status = ex.getStatusCode().value();
+                if (status == 400) {
+                    throw exception(ALGORITHM_INVALID_INPUT, errorMessage(ex));
+                }
+                if (isRetryable(status)) {
+                    log.warn("[route][第 {} 次请求返回可重试状态 {}]", attempt + 1, status);
+                    continue;
+                }
+                throw exception(ALGORITHM_CALL_FAILED, status, errorMessage(ex));
+            } catch (ResourceAccessException ex) {
+                log.warn("[route][第 {} 次请求网络错误：{}]", attempt + 1, ex.getMessage());
             }
         }
         throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
