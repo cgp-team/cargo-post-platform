@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.service.transport.product;
 
+import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.product.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.product.ProductDO;
@@ -16,4 +17,6 @@ public interface ProductService {
     List<ProductDO> getSimpleList();
     /** 全部上架商品（小程序商城列表） */
     List<ProductDO> getOnShelfList();
+    /** 上架商品分页（小程序商城列表） */
+    PageResult<ProductDO> getOnShelfPage(PageParam pageParam);
 }

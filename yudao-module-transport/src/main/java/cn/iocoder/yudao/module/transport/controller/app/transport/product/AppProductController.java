@@ -1,8 +1,11 @@
 package cn.iocoder.yudao.module.transport.controller.app.transport.product;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.framework.common.pojo.PageParam;
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.app.transport.product.vo.AppProductRespVO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.product.ProductDO;
 import cn.iocoder.yudao.module.transport.service.transport.product.ProductService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -31,6 +34,14 @@ public class AppProductController {
     @PermitAll
     public CommonResult<List<AppProductRespVO>> list() {
         return success(BeanUtils.toBean(productService.getOnShelfList(), AppProductRespVO.class));
+    }
+
+    @GetMapping("/page")
+    @Operation(summary = "获得上架商品分页")
+    @PermitAll
+    public CommonResult<PageResult<AppProductRespVO>> page(PageParam pageParam) {
+        PageResult<ProductDO> pageResult = productService.getOnShelfPage(pageParam);
+        return success(BeanUtils.toBean(pageResult, AppProductRespVO.class));
     }
 
     @GetMapping("/get")
