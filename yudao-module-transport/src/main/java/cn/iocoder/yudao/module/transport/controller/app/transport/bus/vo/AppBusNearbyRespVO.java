@@ -34,6 +34,9 @@ public class AppBusNearbyRespVO {
     @Schema(description = "最近站点")
     private NearbyStation nearestStation;
 
+    @Schema(description = "附近站点关联线路（无运营车辆也返回，供前端展示\"该区域有哪些线路/不在运营\"）")
+    private List<NearbyLine> lines;
+
     @Schema(description = "整体数据来源：REAL（含真实车辆）/ MIXED / SIMULATED / NONE")
     private String dataSource;
 
@@ -103,6 +106,21 @@ public class AppBusNearbyRespVO {
 
         @Schema(description = "距用户直线距离(km)")
         private Double distanceKm;
+
+    }
+
+    @Schema(description = "附近站点关联线路")
+    @Data
+    public static class NearbyLine {
+
+        @Schema(description = "线路名称")
+        private String routeName;
+
+        @Schema(description = "起点站")
+        private String startStation;
+
+        @Schema(description = "终点站")
+        private String endStation;
 
     }
 

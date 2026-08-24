@@ -259,10 +259,29 @@ public class AppBusServiceImpl implements AppBusService {
         buses.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyBus::getDistanceKm,
                 Comparator.nullsLast(Comparator.naturalOrder())));
         resp.setBuses(buses);
+        // 附近站点关联线路：无运营车辆也返回（前端展示"该区域有哪些线路 / 当前不在运营"）
+        resp.setLines(buildLines(mapData, nearbyRouteNames));
         resp.setDataSource(buses.isEmpty() ? AppBusNearbyRespVO.SOURCE_NONE
                 : (hasReal && hasSimulated ? "MIXED" : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL
                         : AppBusNearbyRespVO.SOURCE_SIMULATED)));
         return resp;
+    }
+
+    /** 附近站点关联线路（按线路名去重，取起点/终点站名） */
+    private List<AppBusNearbyRespVO.NearbyLine> buildLines(MonitoringMapDataRespVO mapData, Set<String> nearbyRouteNames) {
+        if (mapData.getRoutes() == null || nearbyRouteNames.isEmpty()) {
+            return List.of();
+        }
+        return mapData.getRoutes().stream()
+                .filter(r -> nearbyRouteNames.contains(r.getRouteName()))
+                .map(r -> {
+                    AppBusNearbyRespVO.NearbyLine line = new AppBusNearbyRespVO.NearbyLine();
+                    line.setRouteName(r.getRouteName());
+                    List<MonitoringMapDataRespVO.Point> pts = r.getPoints() == null ? List.of() : r.getPoints();
+                    line.setStartStation(pts.isEmpty() ? null : pts.get(0).getStationName());
+                    line.setEndStation(pts.isEmpty() ? null : pts.get(pts.size() - 1).getStationName());
+                    return line;
+                }).toList();
     }
 
     /** 位置新鲜度：REAL(5min 内真实上报)→REAL_FRESH；SIMULATED→SIMULATED；无坐标→NO_LOCATION */
