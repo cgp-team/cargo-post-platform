@@ -533,12 +533,17 @@ const openCollect = () => {
   collectForm.value = { batchStart: formatDate(start), batchEnd: formatDate(end) }
   collectVisible.value = true
 }
+/** 'YYYY-MM-DD HH:mm:ss' → 毫秒时间戳（后端 LocalDateTime 全局按时间戳序列化，@RequestBody 不认空格日期字符串） */
+const toTimestamp = (s: string) => (s ? new Date(s.replace(' ', 'T')).getTime() : undefined)
 const submitCollect = async () => {
   const valid = await collectFormRef.value?.validate()
   if (!valid) return
   collectLoading.value = true
   try {
-    const count = await DispatchApi.collectOrders(collectForm.value)
+    const count = await DispatchApi.collectOrders({
+      batchStart: toTimestamp(collectForm.value.batchStart),
+      batchEnd: toTimestamp(collectForm.value.batchEnd)
+    })
     message.success(`归集完成,共入池 ${count} 条订单`)
     collectVisible.value = false
     getPoolList()
