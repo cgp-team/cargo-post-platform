@@ -116,12 +116,16 @@ class AppSendRouteInfoServiceTest {
     }
 
     @Test
-    void routePreview_algorithm_service_unavailable_returns_unavailable() {
+    void routePreview_algorithm_unavailable_falls_back_euclidean() {
+        // 算法服务未部署/不可达：过渡期降级为后端直线估算（provider=euclidean + 标注），不报"暂不可用"
         stubBothStations();
         when(algorithmClient.distance(any())).thenThrow(new RuntimeException("algorithm down"));
         RoutePreviewRespVO vo = service.routePreview(1L, 2L);
-        assertEquals(Boolean.FALSE, vo.getAvailable());
-        assertNull(vo.getDistanceKm());
+        assertTrue(vo.getAvailable());
+        assertEquals("euclidean", vo.getProvider());
+        assertTrue(vo.getWarning() != null && vo.getWarning().contains("直线估算"));
+        assertTrue(vo.getDistanceKm().signum() > 0);
+        assertTrue(vo.getDurationMinutes() != null && vo.getDurationMinutes() > 0);
     }
 
     @Test
