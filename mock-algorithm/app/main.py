@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from math import hypot
+from math import asin, cos, hypot, radians, sin, sqrt
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -126,6 +126,33 @@ class ErrorResponse(BaseModel):
     details: dict[str, Any] | None = None
 
 
+class DistancePoint(BaseModel):
+    stationId: str
+    longitude: float
+    latitude: float
+
+
+class DistanceRequest(BaseModel):
+    requestId: str
+    stations: list[DistancePoint]
+
+
+class DistancePair(BaseModel):
+    fromStationId: str
+    toStationId: str
+    distanceKm: float | None = None
+    durationSeconds: float | None = None
+    provider: str = "amap"
+    available: bool = True
+
+
+class DistanceResponse(BaseModel):
+    requestId: str
+    distanceUnit: str = "km"
+    pairs: list[DistancePair] = Field(default_factory=list)
+    computedAt: datetime
+
+
 class JobRecord(BaseModel):
     request: PlanRequest
     result: PlanResult | None = None
@@ -168,6 +195,14 @@ def config_warnings(config: AlgorithmConfig) -> list[str]:
 
 def euclidean(a: Station, b: Station) -> float:
     return round(hypot(a.longitude - b.longitude, a.latitude - b.latitude), 3)
+
+
+def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Haversine 大圆距离（km），直线估算口径与真实服务一致。"""
+    d_lat = radians(lat2 - lat1)
+    d_lon = radians(lon2 - lon1)
+    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(a))
 
 
 def demand(request: PlanRequest) -> tuple[int, int]:
@@ -332,6 +367,33 @@ def create_plan(request: PlanRequest):
 
     jobs[request.requestId] = JobRecord(request=request, result=result)
     return result
+
+
+@app.post(
+    "/api/v1/distance",
+    response_model=DistanceResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def get_distance(request: DistanceRequest):
+    """两站点间距离查询（Mock：返回欧氏直线度数，无行驶秒，与未配 AMAP_KEY 的真实服务同语义）。"""
+    if len(request.stations) != 2:
+        return error_response(400, "INVALID_INPUT", "距离查询需要且仅需要 2 个站点", request.requestId)
+    a, b = request.stations[0], request.stations[1]
+    km = haversine_km(a.longitude, a.latitude, b.longitude, b.latitude)
+    seconds = round(km / 25.0 * 3600)
+    pair = DistancePair(
+        fromStationId=a.stationId,
+        toStationId=b.stationId,
+        distanceKm=round(km, 2),
+        durationSeconds=seconds,
+        provider="euclidean",
+    )
+    return DistanceResponse(requestId=request.requestId, distanceUnit="km", pairs=[pair], computedAt=now())
 
 
 @app.get(

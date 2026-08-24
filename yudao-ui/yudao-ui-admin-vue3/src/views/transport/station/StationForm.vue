@@ -19,6 +19,12 @@
       <el-form-item label="站点地址" prop="address">
         <el-input v-model="formData.address" placeholder="请输入站点地址" />
       </el-form-item>
+      <el-form-item label="站点状态" prop="status">
+        <el-radio-group v-model="formData.status">
+          <el-radio :label="0">启用</el-radio>
+          <el-radio :label="1">停用</el-radio>
+        </el-radio-group>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取 消</el-button>
@@ -46,6 +52,7 @@ const formData = ref<StationApi.StationVO>({
   longitude: undefined,
   latitude: undefined,
   address: '',
+  status: 0,
 })
 
 const formRules = reactive({
@@ -61,6 +68,7 @@ const resetForm = () => {
     longitude: undefined,
     latitude: undefined,
     address: '',
+    status: 0,
   }
   formRef.value?.resetFields()
 }
