@@ -153,6 +153,24 @@ class DistanceResponse(BaseModel):
     computedAt: datetime
 
 
+class RoutePoint(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class RouteRequest(BaseModel):
+    origin: RoutePoint
+    destination: RoutePoint
+
+
+class RouteResponse(BaseModel):
+    available: bool
+    distanceKm: float | None = None
+    durationSeconds: float | None = None
+    provider: str = "amap"
+    reasonCode: str | None = None
+
+
 class JobRecord(BaseModel):
     request: PlanRequest
     result: PlanResult | None = None
@@ -394,6 +412,25 @@ def get_distance(request: DistanceRequest):
         provider="euclidean",
     )
     return DistanceResponse(requestId=request.requestId, distanceUnit="km", pairs=[pair], computedAt=now())
+
+
+@app.post(
+    "/api/v1/route",
+    response_model=RouteResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def get_route(request: RouteRequest):
+    """坐标 → 坐标单路线（Mock：返回直线估算，provider=euclidean，与未配 AMAP_KEY 真实服务同语义）。"""
+    km = haversine_km(request.origin.longitude, request.origin.latitude,
+                      request.destination.longitude, request.destination.latitude)
+    seconds = round(km / 25.0 * 3600)
+    return RouteResponse(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean")
 
 
 @app.get(

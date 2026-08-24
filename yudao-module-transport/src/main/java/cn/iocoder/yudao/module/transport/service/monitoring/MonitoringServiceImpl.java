@@ -25,6 +25,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -130,6 +131,9 @@ public class MonitoringServiceImpl implements MonitoringService {
                 .collect(Collectors.toMap(StationDO::getId, Function.identity()));
         Map<Long, List<RouteStationDO>> routeStationMap = loadRouteStationMap(
                 routeMap.values().stream().map(RouteDO::getId).toList());
+        // 全量班次（真实上报车辆按 location.shiftId 关联班次/线路用）
+        Map<Long, ShiftDO> shiftMap = shiftMapper.selectList().stream()
+                .collect(Collectors.toMap(ShiftDO::getId, Function.identity(), (a, b) -> a));
         // 司机上报的实时位置（5 分钟内有效）：存在时优先于插值模拟
         Map<Long, VehicleLocationDO> realLocationMap = vehicleLocationMapper
                 .selectRecent(LocalDateTime.now().minusMinutes(5)).stream()
@@ -165,13 +169,25 @@ public class MonitoringServiceImpl implements MonitoringService {
                 vo.setStatus(STATUS_DISABLED);
                 return vo;
             }
-            // 真实位置优先：5 分钟内有司机上报位置时直接采用（状态置在途）
+            // 真实位置优先：5 分钟内有司机上报位置时直接采用（状态置在途），并补班次/线路/下一站
             VehicleLocationDO realLocation = realLocationMap.get(vehicle.getId());
             if (realLocation != null) {
                 vo.setStatus(STATUS_IN_TRANSIT);
                 vo.setLongitude(toDouble(realLocation.getLongitude()));
                 vo.setLatitude(toDouble(realLocation.getLatitude()));
                 vo.setSpeedKmh(toDouble(realLocation.getSpeedKmh()));
+                vo.setDataSource("REAL");
+                vo.setLastLocationTime(realLocation.getReportTime());
+                if (realLocation.getShiftId() != null) {
+                    ShiftDO shift = shiftMap.get(realLocation.getShiftId());
+                    if (shift != null) {
+                        vo.setShiftCode(shift.getShiftCode());
+                        RouteDO route = routeMap.get(shift.getRouteId());
+                        vo.setRouteName(route != null ? route.getRouteName() : null);
+                        vo.setNextStationName(computeNextStation(
+                                routeStationMap.get(shift.getRouteId()), stationMap, realLocation));
+                    }
+                }
                 return vo;
             }
             // 选取当前班次：优先窗口内（在途），其次下一班待发，否则当天最后一班
@@ -190,6 +206,7 @@ public class MonitoringServiceImpl implements MonitoringService {
                 return vo;
             }
             fillPosition(vo, shift, route, points, now);
+            vo.setDataSource("SIMULATED");
             return vo;
         }).toList();
     }
@@ -348,6 +365,39 @@ public class MonitoringServiceImpl implements MonitoringService {
         MonitoringMapDataRespVO.Point last = points.get(points.size() - 1);
         vo.setLongitude(last.getLongitude());
         vo.setLatitude(last.getLatitude());
+    }
+
+    /** 车辆位置 → 下一站：按线路经停顺序取"车辆最接近站点的下一站"（前方站）；已到终点无下一站返回 null */
+    private String computeNextStation(List<RouteStationDO> routeStations, Map<Long, StationDO> stationMap,
+                                      VehicleLocationDO location) {
+        if (routeStations == null || routeStations.isEmpty()
+                || location.getLongitude() == null || location.getLatitude() == null) {
+            return null;
+        }
+        List<RouteStationDO> sorted = new ArrayList<>(routeStations);
+        sorted.sort(Comparator.comparing(RouteStationDO::getSequenceNo));
+        double lon = location.getLongitude().doubleValue();
+        double lat = location.getLatitude().doubleValue();
+        int nearestIdx = 0;
+        double nearestDist = Double.MAX_VALUE;
+        for (int i = 0; i < sorted.size(); i++) {
+            StationDO station = stationMap.get(sorted.get(i).getStationId());
+            if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+                continue;
+            }
+            double dist = GeoDistanceUtil.haversineKm(lon, lat,
+                    station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearestIdx = i;
+            }
+        }
+        int nextIdx = nearestIdx + 1;
+        if (nextIdx >= sorted.size()) {
+            return null; // 已到/越过终点站，无下一站
+        }
+        StationDO next = stationMap.get(sorted.get(nextIdx).getStationId());
+        return next != null ? next.getStationName() : null;
     }
 
     /** 选取车辆当前班次：优先在途窗口，其次下一班待发，否则当天最后一班 */

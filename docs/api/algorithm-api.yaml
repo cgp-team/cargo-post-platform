@@ -149,6 +149,31 @@ paths:
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
+  /api/v1/route:
+    post:
+      operationId: getRoute
+      summary: 坐标→坐标单路线查询（实时公交 ETA：车辆位置 → 下一站）
+      description: 复用高德路网单路线能力（与派单/寄货同一套 AmapDistanceProvider）。未配置 AMAP_KEY / 高德失败降级直线估算（provider=euclidean，明确标注）；明确不可达返回 available=false + reasonCode=ROUTE_UNAVAILABLE。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteRequest'
+            example:
+              origin: { latitude: 30.5723, longitude: 104.0657 }
+              destination: { latitude: 30.6012, longitude: 104.1234 }
+      responses:
+        '200':
+          description: 单路线结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /health:
     get:
       operationId: health
@@ -475,6 +500,53 @@ components:
         computedAt:
           type: string
           format: date-time
+    RouteRequest:
+      type: object
+      required: [origin, destination]
+      properties:
+        origin:
+          $ref: '#/components/schemas/RoutePoint'
+        destination:
+          $ref: '#/components/schemas/RoutePoint'
+    RoutePoint:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: GCJ-02 纬度
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: GCJ-02 经度
+    RouteResponse:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: 是否可用（false=明确不可达）
+        distanceKm:
+          type: number
+          format: double
+          description: 距离（恒为公里 km；高德真实 / 直线估算 Haversine）
+        durationSeconds:
+          type: number
+          format: double
+          description: 行驶秒数（高德真实秒 / 直线估算按均速换算秒）
+        provider:
+          type: string
+          enum: [amap, euclidean]
+          description: 数据来源
+        reasonCode:
+          type: string
+          enum: [ROUTE_UNAVAILABLE]
+          description: 不可用时原因码
     ErrorResponse:
       type: object
       required: [code, message]

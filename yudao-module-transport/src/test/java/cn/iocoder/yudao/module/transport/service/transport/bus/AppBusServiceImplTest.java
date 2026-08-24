@@ -3,9 +3,14 @@ package cn.iocoder.yudao.module.transport.service.transport.bus;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusLineRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusNearbyRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,9 +19,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
 import static org.mockito.Mockito.when;
 
 /**
@@ -27,6 +36,8 @@ class AppBusServiceImplTest {
 
     @Mock private MonitoringService monitoringService;
     @Mock private ShiftMapper shiftMapper;
+    @Mock private StationMapper stationMapper;
+    @Mock private AlgorithmClient algorithmClient;
 
     private AppBusServiceImpl appBusService;
 
@@ -35,6 +46,8 @@ class AppBusServiceImplTest {
         appBusService = new AppBusServiceImpl();
         ReflectionTestUtils.setField(appBusService, "monitoringService", monitoringService);
         ReflectionTestUtils.setField(appBusService, "shiftMapper", shiftMapper);
+        ReflectionTestUtils.setField(appBusService, "stationMapper", stationMapper);
+        ReflectionTestUtils.setField(appBusService, "algorithmClient", algorithmClient);
     }
 
     @Test
@@ -166,6 +179,249 @@ class AppBusServiceImplTest {
         // 该线车辆聚合
         assertEquals(1, line.getBuses().size());
         assertEquals("川A·5201", line.getBuses().get(0).getPlateNo());
+    }
+
+    // ==================== 附近实时公交（getNearbyBuses） ====================
+
+    private static final double USER_LAT = 30.0;
+    private static final double USER_LON = 104.0;
+
+    private StationDO station(long id, String name, double lon, double lat) {
+        return StationDO.builder().id(id).stationName(name)
+                .longitude(new BigDecimal(String.valueOf(lon))).latitude(new BigDecimal(String.valueOf(lat))).build();
+    }
+
+    private MonitoringVehicleRespVO vehicle(long id, Integer status, Double lon, Double lat,
+                                            String shiftCode, String routeName, String nextStation, String dataSource) {
+        MonitoringVehicleRespVO v = new MonitoringVehicleRespVO();
+        v.setVehicleId(id);
+        v.setStatus(status);
+        v.setLongitude(lon);
+        v.setLatitude(lat);
+        v.setShiftCode(shiftCode);
+        v.setRouteName(routeName);
+        v.setNextStationName(nextStation);
+        v.setDataSource(dataSource);
+        return v;
+    }
+
+    private MonitoringMapDataRespVO.Route route(String name, List<MonitoringMapDataRespVO.Point> points) {
+        MonitoringMapDataRespVO.Route r = new MonitoringMapDataRespVO.Route();
+        r.setRouteName(name);
+        r.setPoints(points);
+        return r;
+    }
+
+    private MonitoringMapDataRespVO.Point point(Long stationId, String name, double lon, double lat) {
+        MonitoringMapDataRespVO.Point p = new MonitoringMapDataRespVO.Point();
+        p.setStationId(stationId);
+        p.setStationName(name);
+        p.setLongitude(lon);
+        p.setLatitude(lat);
+        return p;
+    }
+
+    private MonitoringMapDataRespVO mapData(MonitoringMapDataRespVO.Route... routes) {
+        MonitoringMapDataRespVO m = new MonitoringMapDataRespVO();
+        m.setRoutes(List.of(routes));
+        return m;
+    }
+
+    @Test
+    void nearby_filters_by_radius_and_prefers_real() {
+        when(stationMapper.selectList()).thenReturn(List.of(
+                station(1L, "红花村站", 104.005, 30.0),   // 近站 ~0.48km
+                station(2L, "远山站", 104.5, 30.4)));       // 远站 > 5km
+        when(monitoringService.getMapData()).thenReturn(mapData(
+                route("R001", List.of(point(1L, "红花村站", 104.005, 30.0), point(2L, "远山站", 104.5, 30.4)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL"),    // 近车，真实
+                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "SIMULATED")));   // 远车，模拟
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertTrue(resp.getLocated());
+        assertEquals(1, resp.getBuses().size());
+        assertEquals(10L, resp.getBuses().get(0).getBusId());
+        assertEquals(AppBusNearbyRespVO.SOURCE_REAL, resp.getBuses().get(0).getDataSource());
+        assertEquals(AppBusNearbyRespVO.STATUS_RUNNING, resp.getBuses().get(0).getStatus());
+        assertEquals(1, resp.getNearbyStations().size());
+        assertNotNull(resp.getNearestStation());
+        assertEquals("红花村站", resp.getNearestStation().getName());
+        assertEquals(AppBusNearbyRespVO.SOURCE_REAL, resp.getDataSource());
+    }
+
+    @Test
+    void nearby_no_vehicle_in_radius_returns_empty() {
+        when(stationMapper.selectList()).thenReturn(List.of(station(1L, "红花村站", 104.005, 30.0)));
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "SIMULATED"))); // 远车被过滤
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertTrue(resp.getBuses().isEmpty());
+        assertEquals(AppBusNearbyRespVO.SOURCE_NONE, resp.getDataSource());
+        assertEquals(1, resp.getNearbyStations().size());
+    }
+
+    @Test
+    void nearby_no_stations_returns_empty_stations() {
+        when(stationMapper.selectList()).thenReturn(List.of());
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL")));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertTrue(resp.getNearbyStations().isEmpty());
+        assertNull(resp.getNearestStation());
+        assertEquals(1, resp.getBuses().size());
+    }
+
+    @Test
+    void nearby_disabled_vehicle_excluded() {
+        when(stationMapper.selectList()).thenReturn(List.of(station(1L, "红花村站", 104.005, 30.0)));
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 2, 104.006, 30.0, "SH001", "R001", null, "REAL"))); // status=2 停用
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertTrue(resp.getBuses().isEmpty());
+    }
+
+    @Test
+    void nearby_status_mapping() {
+        when(stationMapper.selectList()).thenReturn(List.of(station(1L, "红花村站", 104.005, 30.0)));
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(1L, 1, 104.006, 30.0, "SH1", "R001", "下一站", "REAL"),
+                vehicle(2L, 1, 104.006, 30.0, "SH2", "R001", null, "REAL"),
+                vehicle(3L, 0, 104.006, 30.0, "SH3", "R001", null, "SIMULATED")));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertEquals(AppBusNearbyRespVO.STATUS_RUNNING, resp.getBuses().get(0).getStatus());
+        assertEquals(AppBusNearbyRespVO.STATUS_ARRIVED, resp.getBuses().get(1).getStatus());
+        assertEquals(AppBusNearbyRespVO.STATUS_IDLE, resp.getBuses().get(2).getStatus());
+    }
+
+    @Test
+    void nearby_invalid_coordinates_uses_district_fallback() {
+        when(stationMapper.selectList()).thenReturn(List.of(
+                station(1L, "红花村站", 104.005, 30.0),
+                station(3L, "青山镇站", 104.3, 30.3)));
+        when(monitoringService.getMapData()).thenReturn(mapData(
+                route("R001", List.of(point(1L, "红花村站", 104.005, 30.0))),
+                route("R002", List.of(point(3L, "青山镇站", 104.3, 30.3)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL"),
+                vehicle(20L, 1, 104.3, 30.3, "SH002", "R002", null, "SIMULATED")));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(null, null, null, "红花");
+
+        assertEquals(Boolean.FALSE, resp.getLocated());
+        assertEquals("DISTRICT", resp.getLocationLevel());
+        assertEquals(1, resp.getNearbyStations().size());
+        assertEquals("红花村站", resp.getNearbyStations().get(0).getName());
+        assertEquals(1, resp.getBuses().size());
+        assertEquals(10L, resp.getBuses().get(0).getBusId());
+    }
+
+    @Test
+    void nearby_simulated_only_data_source() {
+        when(stationMapper.selectList()).thenReturn(List.of(station(1L, "红花村站", 104.005, 30.0)));
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0)))));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "SIMULATED")));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertEquals(1, resp.getBuses().size());
+        assertEquals(AppBusNearbyRespVO.SOURCE_SIMULATED, resp.getBuses().get(0).getDataSource());
+        assertEquals(AppBusNearbyRespVO.SOURCE_SIMULATED, resp.getDataSource());
+    }
+
+    // ==================== 车辆→下一站 ETA（高德路网） ====================
+
+    private void stubNearbyWithNextStation(String nextStation, String dataSource) {
+        when(stationMapper.selectList()).thenReturn(List.of(
+                station(1L, "红花村站", 104.005, 30.0),
+                station(2L, "青山镇站", 104.1234, 30.6012)));
+        when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0), point(2L, "青山镇站", 104.1234, 30.6012)))));
+        MonitoringVehicleRespVO v = vehicle(10L, 1, 104.005, 30.01, "SH001", "R001", nextStation, dataSource);
+        v.setLastLocationTime(java.time.LocalDateTime.of(2026, 8, 24, 12, 0));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(v));
+    }
+
+    @Test
+    void nearby_eta_from_route_success() {
+        stubNearbyWithNextStation("青山镇站", "REAL");
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(true).distanceKm(2.8).durationSeconds(360.0).provider("amap").build());
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        AppBusNearbyRespVO.NearbyBus bus = resp.getBuses().get(0);
+        assertEquals("REAL_FRESH", bus.getLocationSource());
+        assertEquals(2.8, bus.getDistanceToNextStationKm());
+        assertEquals(6, bus.getEtaMinutes()); // ceil(360/60)=6
+        assertEquals("AMAP", bus.getRouteProvider());
+        assertNotNull(bus.getLastLocationTime());
+        assertNotNull(bus.getUpdatedAt());
+    }
+
+    @Test
+    void nearby_eta_route_unavailable_keeps_null() {
+        stubNearbyWithNextStation("青山镇站", "REAL");
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(false).reasonCode("ROUTE_UNAVAILABLE").build());
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertNull(resp.getBuses().get(0).getEtaMinutes());
+        assertNull(resp.getBuses().get(0).getDistanceToNextStationKm());
+    }
+
+    @Test
+    void nearby_eta_simulated_location_source() {
+        stubNearbyWithNextStation("青山镇站", "SIMULATED");
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(true).distanceKm(2.8).durationSeconds(360.0).provider("amap").build());
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertEquals("SIMULATED", resp.getBuses().get(0).getLocationSource());
+        // 模拟位置也给出路网 ETA（dataSource 仍标注 SIMULATED，前端不伪装成真实）
+        assertEquals(6, resp.getBuses().get(0).getEtaMinutes());
+    }
+
+    @Test
+    void nearby_eta_cache_reused_across_calls() {
+        stubNearbyWithNextStation("青山镇站", "REAL");
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(true).distanceKm(2.8).durationSeconds(360.0).provider("amap").build());
+
+        appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+        appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null); // 同坐标同站 → 缓存命中
+
+        verify(algorithmClient, times(1)).route(any());
+    }
+
+    @Test
+    void nearby_eta_missing_next_station_skips_route() {
+        stubNearbyWithNextStation(null, "REAL");
+
+        appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        verify(algorithmClient, never()).route(any());
     }
 
 }
