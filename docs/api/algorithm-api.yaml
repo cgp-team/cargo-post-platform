@@ -118,6 +118,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/distance:
+    post:
+      operationId: getDistance
+      summary: 两站点间距离/耗时查询（寄货页取货→送达）
+      description: 复用高德路网矩阵。未配置 AMAP_KEY 或高德不可用时返回欧氏直线（distanceUnit=degree，durationSeconds 为 null，由业务侧换算/兜底）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DistanceRequest'
+            example:
+              requestId: req-dist-20260824-0001
+              stations:
+                - stationId: S1
+                  longitude: 104.1234
+                  latitude: 30.6012
+                - stationId: S2
+                  longitude: 104.0657
+                  latitude: 30.5723
+      responses:
+        '200':
+          description: 距离查询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DistanceResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /health:
     get:
       operationId: health
@@ -372,6 +403,78 @@ components:
           type: number
           format: double
           description: 与上一站点间的分段路网行驶秒数；仅 distanceUnit=km（路网路径）时给出，业务后端据此估算每站到达时刻，缺省时按直线÷均速兜底
+    DistanceRequest:
+      type: object
+      required: [requestId, stations]
+      properties:
+        requestId:
+          type: string
+          description: 全局唯一请求标识，幂等键
+        stations:
+          type: array
+          minItems: 2
+          maxItems: 2
+          description: 恰好两个站点，顺序为 [取货站, 送达站]，GCJ-02 坐标
+          items:
+            $ref: '#/components/schemas/DistancePoint'
+    DistancePoint:
+      type: object
+      required: [stationId, longitude, latitude]
+      properties:
+        stationId:
+          type: string
+        longitude:
+          type: number
+          format: double
+          description: GCJ-02 经度
+        latitude:
+          type: number
+          format: double
+          description: GCJ-02 纬度
+    DistancePair:
+      type: object
+      required: [fromStationId, toStationId]
+      properties:
+        fromStationId:
+          type: string
+          description: 起点（取货站）站点标识
+        toStationId:
+          type: string
+          description: 终点（送达站）站点标识
+        distanceKm:
+          type: number
+          format: double
+          description: 里程（恒为公里 km）；高德路网真实公里 / 直线估算 Haversine 公里，均不重复换算
+        durationSeconds:
+          type: number
+          format: double
+          description: 行驶秒数；高德路网真实秒，直线估算按均速换算的秒；不可达时省略
+        provider:
+          type: string
+          enum: [amap, euclidean]
+          description: 数据来源——amap=高德路网真实距离；euclidean=直线估算降级（高德失败/未配置 key）
+        available:
+          type: boolean
+          default: true
+          description: 是否可用——false 表示该点对明确不可达（高德无可行车道路），无 distanceKm/durationSeconds
+    DistanceResponse:
+      type: object
+      required: [requestId, distanceUnit, pairs]
+      properties:
+        requestId:
+          type: string
+        distanceUnit:
+          type: string
+          enum: [km]
+          description: 恒为 km（高德路网公里 / 直线估算 Haversine 公里），不做 degree 换算
+        pairs:
+          type: array
+          description: 查询的站点对结果（本接口固定 1 对）
+          items:
+            $ref: '#/components/schemas/DistancePair'
+        computedAt:
+          type: string
+          format: date-time
     ErrorResponse:
       type: object
       required: [code, message]

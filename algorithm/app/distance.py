@@ -20,7 +20,7 @@ import hashlib
 import os
 import time
 from dataclasses import dataclass
-from math import hypot
+from math import asin, cos, hypot, radians, sin, sqrt
 from typing import Protocol
 
 import httpx
@@ -39,13 +39,45 @@ AMAP_THROTTLE_MARKERS = ("HAS_EXCEEDED_THE_LIMIT", "QPS")
 CACHE_TTL_SECONDS = 24 * 3600
 # 高德 origins 单请求上限 100 个坐标对；本服务上限 31 点，一次调用覆盖全量
 AMAP_MAX_ORIGINS = 100
+# 直线估算默认均速（km/h），与业务后端 PricingRule 默认一致；直线降级时估算秒
+EUCLIDEAN_AVG_SPEED_KMH = 25.0
 
 # (from_station_id, to_station_id) -> (km, seconds)；seconds 为 None 表示无时长数据（欧氏路径）
 DistanceMatrix = dict[tuple[str, str], tuple[float, float | None]]
 
 
+@dataclass
+class RouteResult:
+    """单路线结果（Route Preview 用）。
+
+    - available=True：有距离/时长；provider 标识来源（amap=高德路网 / euclidean=直线估算 fallback）。
+    - available=False：该点对明确不可达（高德无可行车道路），无估算值。
+    - 距离恒为公里（km），不做 degree 换算。
+    """
+
+    available: bool
+    distanceKm: float | None
+    durationSeconds: float | None
+    provider: str
+
+
+def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Haversine 大圆距离（km），欧氏直线降级时换算真实公里用。"""
+    d_lat = radians(lat2 - lat1)
+    d_lon = radians(lon2 - lon1)
+    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lon / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(a))
+
+
 class AmapUnavailable(Exception):
-    """高德路网距离不可用（失败/超时/配额错误）；调用方整单降级回欧氏直线。"""
+    """高德路网距离不可用（失败/超时/配额错误）；调用方整单降级回欧氏直线。
+
+    unreachable=True 表示该点对明确无可行车道路（不可达，非降级可覆盖的失败）。
+    """
+
+    def __init__(self, message: str, unreachable: bool = False):
+        super().__init__(message)
+        self.unreachable = unreachable
 
 
 class DistanceProvider(Protocol):
@@ -113,6 +145,30 @@ class AmapDistanceProvider:
         self._cache[cache_key] = _CacheEntry(matrix=matrix, created_at=time.time())
         return matrix
 
+    def get_route(self, origin: Station, destination: Station) -> RouteResult:
+        """单点对路网距离/时长（Route Preview 用），薄封装 get_matrix，恒返回 km。
+
+        高德成功 → available=True, provider=amap（真实路网公里+秒）；
+        明确不可达（高德无可行车道路）→ available=False；
+        高德失败/超时/配额 → 直线估算，available=True, provider=euclidean。
+        """
+        try:
+            matrix = self.get_matrix([origin, destination])
+        except AmapUnavailable as exc:
+            if exc.unreachable:
+                return RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
+            return self._euclidean_route(origin, destination)
+        km, seconds = matrix.get((origin.stationId, destination.stationId), (None, None))
+        if km is None:
+            return RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
+        return RouteResult(available=True, distanceKm=km, durationSeconds=seconds, provider="amap")
+
+    def _euclidean_route(self, origin: Station, destination: Station) -> RouteResult:
+        """直线估算降级：Haversine 真实公里 + 按均速估算秒（provider=euclidean）。"""
+        km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
+        seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
+        return RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean")
+
     @staticmethod
     def _coord(point: Station) -> str:
         return f"{point.longitude},{point.latitude}"
@@ -152,7 +208,11 @@ class AmapDistanceProvider:
                     time.sleep(AMAP_THROTTLE_BACKOFF[min(attempt - 1, len(AMAP_THROTTLE_BACKOFF) - 1)])
                 elif attempt >= AMAP_MAX_ATTEMPTS:
                     break
-        raise AmapUnavailable(f"高德距离接口请求失败（destination={destination}）: {last_error}")
+        # 重试后最终失败：保留底层的"不可达"标记（单点测距失败=该点对无道路），供 get_route 区分
+        raise AmapUnavailable(
+            f"高德距离接口请求失败（destination={destination}）: {last_error}",
+            unreachable=getattr(last_error, "unreachable", False),
+        )
 
     @staticmethod
     def _is_throttle(exc: Exception) -> bool:
@@ -169,11 +229,13 @@ class AmapDistanceProvider:
             raise AmapUnavailable(f"结果数 {len(results)} 与 origins 数 {expected} 不一致")
         pairs: list[tuple[float, float]] = []
         for result in results:
-            # 官方文档：批量与否都应按单项 info/code 判错（仅出错时返回这两个字段）
+            # 官方文档：批量与否都应按单项 info/code 判错（仅出错时返回这两个字段）。
+            # 单点错误（1 无道路 / 2 离道路过远 / 3 不在中国境内）视为该点对"不可达"，非降级可覆盖的失败。
             if "info" in result or "code" in result:
                 raise AmapUnavailable(
                     f"单点测距失败: origin_id={result.get('origin_id')} "
-                    f"code={result.get('code')} info={result.get('info')}"
+                    f"code={result.get('code')} info={result.get('info')}",
+                    unreachable=True,
                 )
             try:
                 pairs.append((float(result["distance"]) / 1000.0, float(result["duration"])))

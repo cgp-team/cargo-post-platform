@@ -28,4 +28,7 @@ public class StationDO extends TenantBaseDO {
     private BigDecimal latitude;
 
     private String address;
+
+    /** 站点状态：0=启用 1=停用（与车辆状态口径一致；默认 0） */
+    private Integer status;
 }

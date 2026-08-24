@@ -4,13 +4,16 @@ import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.OrderAuditReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,8 +23,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
+
 import static cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants.BAD_REQUEST;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_STATUS_ILLEGAL;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_STATIONS_SAME;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_DISABLED;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_EXISTS;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -37,6 +45,7 @@ class TransportOrderServiceImplTest {
     @Mock private CargoOrderMapper cargoOrderMapper;
     @Mock private PostalOrderMapper postalOrderMapper;
     @Mock private MemberUserApi memberUserApi;
+    @Mock private StationMapper stationMapper;
 
     private TransportOrderServiceImpl orderService;
 
@@ -48,6 +57,54 @@ class TransportOrderServiceImplTest {
         ReflectionTestUtils.setField(orderService, "cargoOrderMapper", cargoOrderMapper);
         ReflectionTestUtils.setField(orderService, "postalOrderMapper", postalOrderMapper);
         ReflectionTestUtils.setField(orderService, "memberUserApi", memberUserApi);
+        ReflectionTestUtils.setField(orderService, "stationMapper", stationMapper);
+    }
+
+    private AppSendOrderCreateReqVO sendReqVO(Long pickup, Long delivery) {
+        AppSendOrderCreateReqVO reqVO = new AppSendOrderCreateReqVO();
+        reqVO.setPickupStationId(pickup);
+        reqVO.setDeliveryStationId(delivery);
+        reqVO.setGoodsName("土鸡蛋");
+        reqVO.setGoodsWeight(new BigDecimal("2.5"));
+        return reqVO;
+    }
+
+    // ==================== 寄货订单站点二次校验（不信任前端） ====================
+
+    @Test
+    void createSendOrder_same_station_blocked() {
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> orderService.createSendOrder(100L, sendReqVO(1L, 1L)));
+        assertEquals(SEND_STATIONS_SAME.getCode(), ex.getCode());
+        verify(orderMapper, never()).insert(any(TransportOrderDO.class));
+    }
+
+    @Test
+    void createSendOrder_missing_station_blocked() {
+        when(stationMapper.selectById(1L)).thenReturn(null);
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> orderService.createSendOrder(100L, sendReqVO(1L, 2L)));
+        assertEquals(STATION_NOT_EXISTS.getCode(), ex.getCode());
+        verify(orderMapper, never()).insert(any(TransportOrderDO.class));
+    }
+
+    @Test
+    void createSendOrder_disabled_station_blocked() {
+        // 取货站停用 → 校验即抛，无需再查询送达站
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).status(1).build());
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> orderService.createSendOrder(100L, sendReqVO(1L, 2L)));
+        assertEquals(STATION_DISABLED.getCode(), ex.getCode());
+        verify(orderMapper, never()).insert(any(TransportOrderDO.class));
+    }
+
+    @Test
+    void createSendOrder_valid_stations_inserts_order() {
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).status(0).build());
+        when(stationMapper.selectById(2L)).thenReturn(StationDO.builder().id(2L).status(0).build());
+        orderService.createSendOrder(100L, sendReqVO(1L, 2L));
+        verify(orderMapper).insert(any(TransportOrderDO.class));
+        verify(cargoOrderMapper).insert(any(CargoOrderDO.class));
     }
 
     // ==================== 货运审核 ====================

@@ -144,10 +144,11 @@ public class DispatchEstimationService {
             }
             maxDurationMinutes = Math.max(maxDurationMinutes, Duration.between(departTime, eta).toMinutes());
         }
-        // 方案摘要：预计耗时/收入/成本
+        // 方案摘要：预计耗时/收入/成本 + ETA 路网来源（明确记录，避免把直线估算伪装成高德真实时长）
         DispatchPlanDO planUpdate = new DispatchPlanDO();
         planUpdate.setId(planId);
         planUpdate.setEstDurationMinutes((int) maxDurationMinutes);
+        planUpdate.setRouteProvider(roadSegments.isEmpty() ? "EUCLIDEAN_FALLBACK" : "AMAP");
         planUpdate.setEstRevenue(computeRevenue(items, stationMap, rule));
         planUpdate.setEstCost(rule.getVehicleCostPerKm() != null
                 ? rule.getVehicleCostPerKm().multiply(BigDecimal.valueOf(totalKm)).setScale(2, RoundingMode.HALF_UP)
