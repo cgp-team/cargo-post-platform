@@ -52,10 +52,10 @@ export interface DispatchPlanRespVO extends DispatchPlanVO {
   items?: DispatchPlanItemVO[]
 }
 
-/** 订单归集请求 */
+/** 订单归集请求（后端 LocalDateTime 全局按毫秒时间戳序列化） */
 export interface DispatchCollectReqVO {
-  batchStart: string
-  batchEnd: string
+  batchStart: number
+  batchEnd: number
 }
 
 /** 手工派单请求 */
