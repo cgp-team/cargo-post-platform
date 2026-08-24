@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.service.transport.product;
 
+import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.product.vo.*;
 import cn.iocoder.yudao.module.transport.convert.transport.product.ProductConvert;
@@ -35,6 +36,7 @@ public class ProductServiceImpl implements ProductService {
     @Override public PageResult<ProductDO> getPage(ProductPageReqVO reqVO) { return mapper.selectPage(reqVO); }
     @Override public List<ProductDO> getSimpleList() { return mapper.selectList(); }
     @Override public List<ProductDO> getOnShelfList() { return mapper.selectOnShelfList(); }
+    @Override public PageResult<ProductDO> getOnShelfPage(PageParam pageParam) { return mapper.selectOnShelfPage(pageParam); }
 
     private ProductDO validateExists(Long id) {
         ProductDO o = mapper.selectById(id);
