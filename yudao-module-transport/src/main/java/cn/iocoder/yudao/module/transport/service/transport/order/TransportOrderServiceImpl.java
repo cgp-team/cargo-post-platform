@@ -11,7 +11,9 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.convert.transport.order.TransportOrderConvert;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.*;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.*;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,9 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_A
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_STATUS_ILLEGAL;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ORDER_NOT_EXISTS;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_USER_NOT_LOGIN;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_STATIONS_SAME;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_DISABLED;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_EXISTS;
 
 @Service
 @Validated
@@ -38,6 +43,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     @Resource private CargoOrderMapper cargoOrderMapper;
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private MemberUserApi memberUserApi;
+    @Resource private StationMapper stationMapper;
 
     @Override
     @Transactional
@@ -106,6 +112,8 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         if (userId == null) {
             throw exception(SEND_ORDER_USER_NOT_LOGIN);
         }
+        // 二次校验站点（不信任小程序前端）：非空 / 不相同 / 存在 / 未删除 / 已启用
+        validateSendStations(reqVO.getPickupStationId(), reqVO.getDeliveryStationId());
         // 主表：货运订单，status=0 待调度，天然可被调度员归集入池
         TransportOrderDO order = TransportOrderDO.builder()
                 .orderNo(generateOrderNo())
@@ -133,6 +141,28 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .build();
         cargoOrderMapper.insert(sub);
         return order.getId();
+    }
+
+    /** 寄货订单落库前二次校验站点：非空 / 不相同 / 存在（未删除）/ 已启用（status=0） */
+    private void validateSendStations(Long pickupStationId, Long deliveryStationId) {
+        if (pickupStationId == null || deliveryStationId == null) {
+            throw exception(STATION_NOT_EXISTS);
+        }
+        if (Objects.equals(pickupStationId, deliveryStationId)) {
+            throw exception(SEND_STATIONS_SAME);
+        }
+        requireEnabledStation(pickupStationId);
+        requireEnabledStation(deliveryStationId);
+    }
+
+    private void requireEnabledStation(Long stationId) {
+        StationDO station = stationMapper.selectById(stationId);
+        if (station == null) {
+            throw exception(STATION_NOT_EXISTS);
+        }
+        if (station.getStatus() != null && station.getStatus() != 0) {
+            throw exception(STATION_DISABLED);
+        }
     }
 
     @Override

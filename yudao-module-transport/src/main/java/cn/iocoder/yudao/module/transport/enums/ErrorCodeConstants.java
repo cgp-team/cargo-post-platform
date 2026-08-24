@@ -6,6 +6,7 @@ public interface ErrorCodeConstants {
     // Station
     ErrorCode STATION_NOT_EXISTS = new ErrorCode(1_005_001_000, "站点不存在");
     ErrorCode STATION_CODE_DUPLICATE = new ErrorCode(1_005_001_001, "站点编码已存在");
+    ErrorCode STATION_DISABLED = new ErrorCode(1_005_001_002, "所选站点已停用，请重新选择");
     // Vehicle
     ErrorCode VEHICLE_NOT_EXISTS = new ErrorCode(1_005_002_000, "车辆不存在");
     ErrorCode VEHICLE_PLATE_DUPLICATE = new ErrorCode(1_005_002_001, "车牌号已存在");
@@ -50,6 +51,7 @@ public interface ErrorCodeConstants {
     ErrorCode PRODUCT_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_005, "请先登录");
     // Send（小程序寄货）
     ErrorCode SEND_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_006, "请先登录");
+    ErrorCode SEND_STATIONS_SAME = new ErrorCode(1_005_010_007, "取货站点和送达站点不能相同");
     // Driver App（司机端）
     ErrorCode DRIVER_NOT_FOUND = new ErrorCode(1_005_011_000, "未找到司机档案");
     ErrorCode DRIVER_VEHICLE_NOT_BOUND = new ErrorCode(1_005_011_001, "司机未绑定车辆");

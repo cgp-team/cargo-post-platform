@@ -1,6 +1,9 @@
 package cn.iocoder.yudao.module.transport.integration.algorithm;
 
+import cn.hutool.core.util.IdUtil;
 import cn.iocoder.yudao.framework.common.exception.ServiceException;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceReqDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmErrorRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanRespDTO;
@@ -75,6 +78,42 @@ public class AlgorithmClient {
                 throw exception(ALGORITHM_CALL_FAILED, status, errorMessage(ex));
             } catch (ResourceAccessException ex) {
                 log.warn("[plan][requestId={} 第 {} 次请求网络错误：{}]", request.getRequestId(), attempt + 1, ex.getMessage());
+            }
+        }
+        throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+    }
+
+    /**
+     * 两站点间路网距离/耗时查询（寄货页取货→送达）。轻量即时查询，不落幂等留痕；
+     * 失败抛 {@link ServiceException}，调用方捕获后降级直线距离。
+     */
+    public AlgorithmDistanceRespDTO distance(AlgorithmDistanceReqDTO request) {
+        if (request.getRequestId() == null) {
+            request.setRequestId("req-" + IdUtil.fastSimpleUUID());
+        }
+        for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
+            if (attempt > 0) {
+                sleep(properties.getRetryBackoff().toMillis());
+            }
+            try {
+                ResponseEntity<AlgorithmDistanceRespDTO> response =
+                        restTemplate.postForEntity("/api/v1/distance", request, AlgorithmDistanceRespDTO.class);
+                return response.getBody();
+            } catch (HttpStatusCodeException ex) {
+                int status = ex.getStatusCode().value();
+                if (status == 400) {
+                    throw exception(ALGORITHM_INVALID_INPUT, errorMessage(ex));
+                }
+                if (status == 413) {
+                    throw exception(ALGORITHM_OVER_LIMIT);
+                }
+                if (isRetryable(status)) {
+                    log.warn("[distance][requestId={} 第 {} 次请求返回可重试状态 {}]", request.getRequestId(), attempt + 1, status);
+                    continue;
+                }
+                throw exception(ALGORITHM_CALL_FAILED, status, errorMessage(ex));
+            } catch (ResourceAccessException ex) {
+                log.warn("[distance][requestId={} 第 {} 次请求网络错误：{}]", request.getRequestId(), attempt + 1, ex.getMessage());
             }
         }
         throw exception(ALGORITHM_SERVICE_UNAVAILABLE);

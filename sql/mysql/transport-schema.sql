@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan` (
   `est_duration_minutes` int DEFAULT NULL COMMENT '预计耗时(分钟，估算)',
   `est_revenue` decimal(12,2) DEFAULT NULL COMMENT '预计收入(元，按计价规则估算)',
   `est_cost` decimal(12,2) DEFAULT NULL COMMENT '预计成本(元，按计价规则估算)',
+  `route_provider` varchar(32) DEFAULT NULL COMMENT 'ETA路网来源:AMAP=高德真实时长 EUCLIDEAN_FALLBACK=直线估算',
   `status` tinyint NOT NULL DEFAULT 0 COMMENT '审核下发状态',
   `approved_by` bigint DEFAULT NULL COMMENT '审核人',
   `approved_time` datetime DEFAULT NULL COMMENT '审核时间',

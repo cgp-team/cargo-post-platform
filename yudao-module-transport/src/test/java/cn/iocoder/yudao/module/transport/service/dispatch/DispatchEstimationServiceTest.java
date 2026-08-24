@@ -156,6 +156,22 @@ class DispatchEstimationServiceTest {
         // 耗时 16 分钟；成本按路网公里 2.5+3.0+4.5=10.0 × 2.50 = 25.00（非直线 3.852km）
         assertEquals(16, captor.getValue().getEstDurationMinutes());
         assertEquals(0, captor.getValue().getEstCost().compareTo(new BigDecimal("25.00")));
+        // 有路网分段 → 明确记录 AMAP（高德真实时长）
+        assertEquals("AMAP", captor.getValue().getRouteProvider());
+    }
+
+    @Test
+    void estimatePlan_route_provider_fallback_when_no_road_segments() {
+        // 手工派单/无路网段（estimatePlan 无参重载 = 空 roadSegments）→ 全量直线，记录 EUCLIDEAN_FALLBACK
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, null), item(3L, 7L, 12L, 3, 2, null));
+
+        estimationService.estimatePlan(100L, T0);
+
+        ArgumentCaptor<DispatchPlanDO> captor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(captor.capture());
+        assertEquals("EUCLIDEAN_FALLBACK", captor.getValue().getRouteProvider());
     }
 
     @Test

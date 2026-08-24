@@ -9,6 +9,8 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.S
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendArrangementRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendRoutePreviewReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.RoutePreviewRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
@@ -27,6 +29,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
+import cn.iocoder.yudao.module.transport.service.transport.send.AppSendRouteInfoService;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -61,6 +64,7 @@ public class AppSendController {
 
     @Resource private TransportOrderService transportOrderService;
     @Resource private StationService stationService;
+    @Resource private AppSendRouteInfoService sendRouteInfoService;
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
@@ -266,6 +270,13 @@ public class AppSendController {
     @PermitAll
     public CommonResult<List<StationSimpleRespVO>> stations() {
         return success(BeanUtils.toBean(stationService.getSimpleList(), StationSimpleRespVO.class));
+    }
+
+    @PostMapping("/route-preview")
+    @Operation(summary = "寄货页取货/送达站点路线预览（真实道路距离 + 预计时间，后端校验站点有效性）")
+    @PermitAll
+    public CommonResult<RoutePreviewRespVO> routePreview(@Valid @RequestBody AppSendRoutePreviewReqVO reqVO) {
+        return success(sendRouteInfoService.routePreview(reqVO.getPickupStationId(), reqVO.getDeliveryStationId()));
     }
 
     @GetMapping("/arrangements")
