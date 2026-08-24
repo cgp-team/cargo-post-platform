@@ -8,6 +8,7 @@ export interface StationVO {
   longitude?: number
   latitude?: number
   address?: string
+  status?: number // 0=启用 1=停用
   createTime?: string
 }
 

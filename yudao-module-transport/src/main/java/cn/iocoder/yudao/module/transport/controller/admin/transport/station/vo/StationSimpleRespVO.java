@@ -12,4 +12,6 @@ public class StationSimpleRespVO {
     private String stationCode;
     @Schema(description = "站点名称", requiredMode = Schema.RequiredMode.REQUIRED)
     private String stationName;
+    @Schema(description = "站点地址")
+    private String address;
 }

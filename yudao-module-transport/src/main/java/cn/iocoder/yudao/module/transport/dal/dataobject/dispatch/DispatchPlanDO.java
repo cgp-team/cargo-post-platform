@@ -32,6 +32,8 @@ public class DispatchPlanDO extends TenantBaseDO {
     private BigDecimal estRevenue;
     /** 预计成本(元，按计价规则估算) */
     private BigDecimal estCost;
+    /** ETA 路网来源：AMAP=高德路网真实时长 / EUCLIDEAN_FALLBACK=直线÷均速估算（估算时回写） */
+    private String routeProvider;
     private Integer status;
     private Long approvedBy;
     private LocalDateTime approvedTime;

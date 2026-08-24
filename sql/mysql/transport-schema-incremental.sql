@@ -236,6 +236,22 @@ PREPARE stmt FROM @ddl;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
+-- transport_dispatch_plan.route_provider
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'route_provider'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `route_provider` varchar(32) DEFAULT NULL COMMENT ''ETA路网来源:AMAP=高德真实时长 EUCLIDEAN_FALLBACK=直线估算''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 -- transport_dispatch_plan_item.station_id
 SET @col_exists := (
   SELECT COUNT(*) FROM information_schema.COLUMNS

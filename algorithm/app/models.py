@@ -129,3 +129,37 @@ class ErrorResponse(BaseModel):
     message: str
     requestId: str | None = None
     details: dict[str, Any] | None = None
+
+
+class DistancePoint(BaseModel):
+    stationId: str
+    longitude: float
+    latitude: float
+
+
+class DistanceRequest(BaseModel):
+    """两站点间距离查询（寄货页取货→送达站点路网距离/耗时）。"""
+
+    requestId: str
+    stations: list[DistancePoint]
+
+
+class DistancePair(BaseModel):
+    fromStationId: str
+    toStationId: str
+    # 里程（恒为公里 km，不做 degree 换算）
+    distanceKm: float | None = None
+    # 行驶秒数（高德路网真实秒；euclidean 直线估算也给出按均速估算的秒）
+    durationSeconds: float | None = None
+    # 数据来源：amap=高德路网 / euclidean=直线估算
+    provider: str = "amap"
+    # 是否可用：False=该点对明确不可达（无距离/时长）
+    available: bool = True
+
+
+class DistanceResponse(BaseModel):
+    requestId: str
+    # 恒为 "km"（高德路网公里 / 直线估算 Haversine 公里，均不重复换算）
+    distanceUnit: str = "km"
+    pairs: list[DistancePair] = Field(default_factory=list)
+    computedAt: datetime

@@ -10,13 +10,23 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .distance import AmapDistanceProvider, AmapUnavailable
+from .distance import (
+    EUCLIDEAN_AVG_SPEED_KMH,
+    AmapDistanceProvider,
+    AmapUnavailable,
+    RouteResult,
+    haversine_km,
+)
 from .models import (
     AlgorithmConfig,
+    DistancePair,
+    DistanceRequest,
+    DistanceResponse,
     ErrorResponse,
     OrderType,
     PlanRequest,
     PlanResult,
+    Station,
 )
 from .solver import solve
 
@@ -181,6 +191,44 @@ def create_plan(request: PlanRequest):
     result = build_result(request)
     jobs[request.requestId] = JobRecord(request=request, result=result, created_at=now())
     return result
+
+
+@app.post(
+    "/api/v1/distance",
+    response_model=DistanceResponse,
+    response_model_exclude_none=True,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def get_distance(request: DistanceRequest):
+    """两站点间距离/耗时查询（寄货页取货→送达）。
+
+    复用高德路网矩阵（AmapDistanceProvider）；未配置 AMAP_KEY 或高德不可用时降级
+    欧氏直线（distanceUnit=degree，durationSeconds 为 null，由业务侧换算/兜底）。
+    """
+    if len(request.stations) != 2:
+        return error_response(400, "INVALID_INPUT", "距离查询需要且仅需要 2 个站点", request.requestId)
+    points = [Station(stationId=s.stationId, longitude=s.longitude, latitude=s.latitude) for s in request.stations]
+    origin, destination = points[0], points[1]
+    if amap_provider is not None:
+        route = amap_provider.get_route(origin, destination)
+    else:
+        # 未配置 AMAP_KEY：直线估算（provider=euclidean），恒 km
+        km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
+        seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
+        route = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean")
+    pair = DistancePair(
+        fromStationId=origin.stationId,
+        toStationId=destination.stationId,
+        distanceKm=route.distanceKm,
+        durationSeconds=route.durationSeconds,
+        provider=route.provider,
+        available=route.available,
+    )
+    return DistanceResponse(requestId=request.requestId, distanceUnit="km", pairs=[pair], computedAt=now())
 
 
 @app.get(
