@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.service.transport.bus;
 
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusLineRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusNearbyRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 
 import java.util.List;
@@ -17,5 +18,15 @@ public interface AppBusService {
 
     /** 实时公交线路（含经停点与该线在线车辆，供「车来了式」地图+列表页） */
     List<AppBusLineRespVO> getLines();
+
+    /**
+     * 附近实时公交：按用户坐标 Haversine 直线过滤 radius 内车辆与站点（第一版不调高德路网）。
+     *
+     * @param latitude  用户纬度（GCJ-02；无精确位置可传 null）
+     * @param longitude 用户经度（GCJ-02；无精确位置可传 null）
+     * @param radius    筛选半径(米)，默认 5000
+     * @param district  无精确位置时的区域名 fallback（按站点名称/地址模糊匹配）
+     */
+    AppBusNearbyRespVO getNearbyBuses(Double latitude, Double longitude, Double radius, String district);
 
 }

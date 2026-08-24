@@ -3,6 +3,8 @@ package cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Schema(description = "管理后台 - 监控车辆实时位置 Response VO")
 @Data
 public class MonitoringVehicleRespVO {
@@ -39,4 +41,10 @@ public class MonitoringVehicleRespVO {
 
     @Schema(description = "估算速度(km/h，按线路里程与计划时长估算，仅在途时有值)")
     private Double speedKmh;
+
+    @Schema(description = "位置数据来源：REAL=司机5分钟内上报真实位置 / SIMULATED=按班次计划时间模拟插值")
+    private String dataSource;
+
+    @Schema(description = "最后位置时间（司机真实上报时间；模拟车辆为 null）")
+    private LocalDateTime lastLocationTime;
 }
