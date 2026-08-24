@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.dal.mysql.product;
 
+import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.mybatis.core.mapper.BaseMapperX;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
@@ -30,6 +31,13 @@ public interface ProductMapper extends BaseMapperX<ProductDO> {
     /** 查询全部上架商品（按 sort 升序、id 倒序） */
     default List<ProductDO> selectOnShelfList() {
         return selectList(new LambdaQueryWrapperX<ProductDO>()
+                .eq(ProductDO::getStatus, 0)
+                .orderByAsc(ProductDO::getSort).orderByDesc(ProductDO::getId));
+    }
+
+    /** 上架商品分页（条件与排序同 selectOnShelfList） */
+    default PageResult<ProductDO> selectOnShelfPage(PageParam pageParam) {
+        return selectPage(pageParam, new LambdaQueryWrapperX<ProductDO>()
                 .eq(ProductDO::getStatus, 0)
                 .orderByAsc(ProductDO::getSort).orderByDesc(ProductDO::getId));
     }
