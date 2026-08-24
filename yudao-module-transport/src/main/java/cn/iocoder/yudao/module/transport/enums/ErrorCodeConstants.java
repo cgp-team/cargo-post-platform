@@ -39,6 +39,7 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_DEPOT_NOT_EXISTS = new ErrorCode(1_005_008_005, "场站不存在");
     ErrorCode DISPATCH_NO_FEASIBLE = new ErrorCode(1_005_008_006, "算法判定无可行解:{}");
     ErrorCode DISPATCH_SCALE_OVER_LIMIT = new ErrorCode(1_005_008_007, "智能派单规模超出算法上限（30 站点 / 25 订单 / 3 车），当前 {}，请拆分批次或减少订单");
+    ErrorCode DISPATCH_ORDER_NOT_COLLECTABLE = new ErrorCode(1_005_008_008, "部分订单当前状态不可归集（仅待调度/审核通过的货运可入池）");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");
@@ -70,6 +71,7 @@ public interface ErrorCodeConstants {
     // Cargo Audit（货运物品审核）
     ErrorCode CARGO_AUDIT_ONLY_CARGO = new ErrorCode(1_005_014_000, "仅货运订单需要审核");
     ErrorCode CARGO_AUDIT_STATUS_ILLEGAL = new ErrorCode(1_005_014_001, "订单当前状态不允许审核");
+    ErrorCode CARGO_AUDIT_PENDING = new ErrorCode(1_005_014_002, "订单未通过货运审核，暂不可归集");
     // Notice（平台公告）；段内 1_005_013_000/001 已被邮快件取件占用，从 002 起
     ErrorCode NOTICE_NOT_EXISTS = new ErrorCode(1_005_013_002, "公告不存在");
     // Feedback（意见反馈）；段内 1_005_014_000/001 已被货运审核占用，从 002 起
