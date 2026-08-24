@@ -8,6 +8,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDist
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmStationDTO;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -53,25 +54,20 @@ public class AppSendRouteInfoService {
         StationDO pickup = requireEnabled(pickupStationId);
         StationDO delivery = requireEnabled(deliveryStationId);
 
-        RoutePreviewRespVO vo = new RoutePreviewRespVO();
         AlgorithmDistanceRespDTO resp;
         try {
             resp = algorithmClient.distance(AlgorithmDistanceReqDTO.builder()
                     .stations(List.of(toAlgorithmStation(pickup), toAlgorithmStation(delivery)))
                     .build());
         } catch (Exception ex) {
-            log.warn("[routePreview][{}-{} 算法服务不可用：{}]", pickupStationId, deliveryStationId, ex.getMessage());
-            vo.setAvailable(false);
-            vo.setProvider("amap");
-            vo.setWarning("路线服务暂不可用，请稍后重试");
-            return vo;
+            // 算法服务未部署/不可达：过渡期降级后端直线估算，明确标注，不伪装成高德
+            log.warn("[routePreview][{}-{} 算法服务不可用，降级直线估算：{}]", pickupStationId, deliveryStationId, ex.getMessage());
+            return euclideanFallback(pickup, delivery);
         }
         if (resp == null || resp.getPairs() == null || resp.getPairs().isEmpty()) {
-            vo.setAvailable(false);
-            vo.setProvider("amap");
-            vo.setWarning("路线服务暂不可用，请稍后重试");
-            return vo;
+            return euclideanFallback(pickup, delivery);
         }
+        RoutePreviewRespVO vo = new RoutePreviewRespVO();
         AlgorithmDistancePairDTO pair = resp.getPairs().get(0);
         if (pair.getAvailable() != null && !pair.getAvailable()) {
             vo.setAvailable(false);
@@ -114,6 +110,31 @@ public class AppSendRouteInfoService {
                 .longitude(station.getLongitude().doubleValue())
                 .latitude(station.getLatitude().doubleValue())
                 .build();
+    }
+
+    /** 过渡期直线估算：算法服务不可达/未部署时，后端按 Haversine 公里 + 均速分钟降级（provider=euclidean），
+     *  明确标注"直线估算"，不伪装成高德真实路网。 */
+    private RoutePreviewRespVO euclideanFallback(StationDO pickup, StationDO delivery) {
+        RoutePreviewRespVO vo = new RoutePreviewRespVO();
+        if (!hasCoords(pickup) || !hasCoords(delivery)) {
+            vo.setAvailable(false);
+            vo.setProvider("euclidean");
+            vo.setWarning("站点坐标缺失，无法估算路线");
+            return vo;
+        }
+        double km = GeoDistanceUtil.haversineKm(
+                pickup.getLongitude().doubleValue(), pickup.getLatitude().doubleValue(),
+                delivery.getLongitude().doubleValue(), delivery.getLatitude().doubleValue());
+        vo.setAvailable(true);
+        vo.setDistanceKm(BigDecimal.valueOf(Math.round(km * 100) / 100.0));
+        vo.setDurationMinutes(GeoDistanceUtil.estimateMinutes(km, GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH));
+        vo.setProvider("euclidean");
+        vo.setWarning("路网暂不可用，当前为直线估算");
+        return vo;
+    }
+
+    private boolean hasCoords(StationDO station) {
+        return station != null && station.getLongitude() != null && station.getLatitude() != null;
     }
 
 }

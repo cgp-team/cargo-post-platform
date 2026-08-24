@@ -163,3 +163,27 @@ class DistanceResponse(BaseModel):
     distanceUnit: str = "km"
     pairs: list[DistancePair] = Field(default_factory=list)
     computedAt: datetime
+
+
+class RoutePoint(BaseModel):
+    """坐标点（GCJ-02），范围校验防 malformed 输入。"""
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
+class RouteRequest(BaseModel):
+    """单路线查询：坐标 → 坐标（实时公交 ETA 用：车辆位置 → 下一站）。"""
+    origin: RoutePoint
+    destination: RoutePoint
+
+
+class RouteResponse(BaseModel):
+    available: bool
+    # 距离（恒为公里 km）
+    distanceKm: float | None = None
+    # 行驶秒数（高德真实秒；euclidean 直线估算也给出按均速换算的秒）
+    durationSeconds: float | None = None
+    # 数据来源：amap=高德路网 / euclidean=直线估算
+    provider: str = "amap"
+    # 不可用时原因码（如 ROUTE_UNAVAILABLE）
+    reasonCode: str | None = None
