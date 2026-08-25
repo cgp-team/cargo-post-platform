@@ -43,17 +43,24 @@ class SolveOutcome:
 class _Node:
     station_id: str
     action: StopAction
-    order_id: str
+    order_id: str | None = None  # 骨架 PASS 节点无订单
 
 
 def _scaled_distance(a, b) -> int:
     return int(round(hypot(a.longitude - b.longitude, a.latitude - b.latitude) * DISTANCE_SCALE))
 
 
-def _total_demand(request: PlanRequest) -> tuple[int, int]:
+def _total_demand(request: PlanRequest) -> tuple[int, int, int]:
+    """总需求统计：载客人数 / 派送件总量 / 揽收件总量。
+
+    载货按「净载荷·出程/返程」口径拆分：派送件在出程占货仓（到站点卸载）、
+    揽收件在返程占货仓（从站点装载），两向不互相挤占，故分别与总货仓容量比较，
+    而非旧的「派送+揽收 全部累计 ≤ 容量」（旧口径把返程可用仓位置 0，闲置运力无法利用）。
+    """
     passengers = sum(1 for order in request.orders if order.orderType == OrderType.PASSENGER)
-    cargo = sum(order.itemCount for order in request.orders if order.orderType != OrderType.PASSENGER)
-    return passengers, cargo
+    deliveries = sum(order.itemCount for order in request.orders if order.orderType == OrderType.DELIVERY)
+    pickups = sum(order.itemCount for order in request.orders if order.orderType == OrderType.PICKUP)
+    return passengers, deliveries, pickups
 
 
 def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:
@@ -63,19 +70,19 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
     matrix 为 None 时用两点欧氏直线（度）；注入矩阵（如高德路网，公里）时按站点对查表，
     成本缩放与输出换算逻辑不变，segmentDistance/totalDistance 跟随矩阵单位。
     """
-    passengers, cargo = _total_demand(request)
+    passengers, deliveries, pickups = _total_demand(request)
     if not request.orders:
         return SolveOutcome(status="feasible")
-    if passengers > sum(v.passengerCapacity for v in request.vehicles) or cargo > sum(
-        v.cargoCapacity for v in request.vehicles
-    ):
+    total_passenger_capacity = sum(v.passengerCapacity for v in request.vehicles)
+    total_cargo_capacity = sum(v.cargoCapacity for v in request.vehicles)
+    if passengers > total_passenger_capacity or deliveries > total_cargo_capacity or pickups > total_cargo_capacity:
         return SolveOutcome(status="infeasible", reason_code="OVER_CAPACITY")
 
     station_map = {station.stationId: station for station in request.stations}
     station_map[request.depot.stationId] = request.depot
 
     # 节点 0 为场站，其后按订单展开作业节点
-    nodes: list[_Node] = [_Node(station_id=request.depot.stationId, action=StopAction.DEPART, order_id="")]
+    nodes: list[_Node] = [_Node(station_id=request.depot.stationId, action=StopAction.DEPART)]
     passenger_pairs: list[tuple[int, int]] = []  # (board_node, alight_node)
     for order in request.orders:
         if order.orderType == OrderType.PASSENGER:
@@ -87,6 +94,23 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             nodes.append(_Node(order.stationId, StopAction.DELIVER, order.orderId))
         else:
             nodes.append(_Node(order.stationId, StopAction.PICKUP, order.orderId))
+
+    # 公交骨架节点（Mandatory Passenger Service）：提供 skeleton 的车辆必须按顺序经停。
+    # 骨架站点作为 PASS 经停，货运/揽收作为绕行插入骨架间隙。
+    skeleton_nodes: dict[int, list[int]] = {}  # vehicle_index -> [node_idx, ...]
+    skeleton_sets: dict[int, set[str]] = {}  # vehicle_index -> set(stationId)（绕行判定用）
+    for vehicle_index, vehicle in enumerate(request.vehicles):
+        if not vehicle.skeleton:
+            continue
+        skel_stations = [sid for sid in vehicle.skeleton if sid in station_map]
+        if not skel_stations:
+            continue
+        idxs: list[int] = []
+        for sid in skel_stations:
+            nodes.append(_Node(sid, StopAction.PASS))
+            idxs.append(len(nodes) - 1)
+        skeleton_nodes[vehicle_index] = idxs
+        skeleton_sets[vehicle_index] = set(skel_stations)
 
     num_vehicles = len(request.vehicles)
     manager = pywrapcp.RoutingIndexManager(len(nodes), num_vehicles, 0)
@@ -130,26 +154,46 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
         "Passenger",
     )
 
-    # 载货维度：DELIVER / PICKUP 均 +itemCount，单车次累计货件 ≤ cargoCapacity
-    # （派送件占仓位整个车次，与载客维度同为累计口径）
+    # 载货双维度（净载荷·出程/返程）：
+    #   - CargoOut 派送维度：DELIVER +itemCount，单车次累计派送件 ≤ cargoCapacity
+    #     （出程时货仓满装派送件，到站逐件卸载释放仓位）；
+    #   - CargoIn 揽收维度：PICKUP +itemCount，单车次累计揽收件 ≤ cargoCapacity
+    #     （返程时装载揽收件，回到场站统一卸载）。
+    # 两向独立累计，正是「公交闲置运力」运营模型：出程派送、返程揽收，货仓依次复用，
+    # 不再像旧口径那样把「派送+揽收」一起累计导致返程仓位被置 0、闲置运力无法利用。
     item_count = {
         order.orderId: order.itemCount for order in request.orders if order.orderType != OrderType.PASSENGER
     }
 
-    def cargo_demand(node: int) -> int:
-        if nodes[node].action in (StopAction.DELIVER, StopAction.PICKUP):
+    def delivery_demand(node: int) -> int:
+        if nodes[node].action == StopAction.DELIVER:
             return item_count[nodes[node].order_id]
         return 0
 
-    cargo_callback_index = routing.RegisterUnaryTransitCallback(
-        lambda from_index: cargo_demand(manager.IndexToNode(from_index))
+    def pickup_demand(node: int) -> int:
+        if nodes[node].action == StopAction.PICKUP:
+            return item_count[nodes[node].order_id]
+        return 0
+
+    delivery_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: delivery_demand(manager.IndexToNode(from_index))
     )
     routing.AddDimensionWithVehicleCapacity(
-        cargo_callback_index,
+        delivery_callback_index,
         0,
         [v.cargoCapacity for v in request.vehicles],
         True,
-        "Cargo",
+        "CargoOut",
+    )
+    pickup_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: pickup_demand(manager.IndexToNode(from_index))
+    )
+    routing.AddDimensionWithVehicleCapacity(
+        pickup_callback_index,
+        0,
+        [v.cargoCapacity for v in request.vehicles],
+        True,
+        "CargoIn",
     )
 
     # 里程维度：供客运先上后下的时序约束使用（距离累计单调不减）
@@ -165,8 +209,18 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
         solver.Add(routing.VehicleVar(board_index) == routing.VehicleVar(alight_index))
         solver.Add(distance_dimension.CumulVar(board_index) <= distance_dimension.CumulVar(alight_index))
 
+    # 公交骨架约束：骨架站点必须由指定车辆按顺序经停（Mandatory Passenger Service，不可删站/跳站）
+    for vehicle_index, skel in skeleton_nodes.items():
+        for skel_node in skel:
+            solver.Add(routing.VehicleVar(manager.NodeToIndex(skel_node)) == vehicle_index)
+        for i in range(len(skel) - 1):
+            solver.Add(distance_dimension.CumulVar(manager.NodeToIndex(skel[i]))
+                       <= distance_dimension.CumulVar(manager.NodeToIndex(skel[i + 1])))
+
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    # PATH_CHEAPEST_ARC（确定性）：对公交骨架的「按序经停」cumul 顺序约束更稳健；
+    # PARALLEL_CHEAPEST_INSERTION 在骨架顺序约束下首解构造会失败。
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     search_parameters.time_limit.FromSeconds(SOLVER_TIME_LIMIT_SECONDS)
 
     solution = routing.SolveWithParameters(search_parameters)
@@ -201,15 +255,28 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
                 )
                 break
             node = nodes[manager.IndexToNode(next_index)]
-            stops.append(
-                RouteStop(
-                    stationId=node.station_id,
-                    orderId=node.order_id,
-                    action=node.action,
-                    segmentDistance=segment / DISTANCE_SCALE,
-                    segmentDuration=segment_seconds(from_station, to_station),
+            segment_km = segment / DISTANCE_SCALE
+            seg_sec = segment_seconds(from_station, to_station)
+            route_stop: dict = {
+                "stationId": node.station_id,
+                "orderId": node.order_id,
+                "action": node.action,
+                "segmentDistance": segment_km,
+                "segmentDuration": seg_sec,
+            }
+            # 算法解释（仅货运/揽收经停）：accepted/serviceMode/servicePoint/detour（Phase 5）
+            if node.order_id and node.action in (StopAction.PICKUP, StopAction.DELIVER):
+                on_skeleton = node.station_id in skeleton_sets.get(vehicle_index, set())
+                route_stop.update(
+                    accepted=True,
+                    serviceMode="NEAREST_STATION",
+                    servicePoint=node.station_id,
+                    detourDistance=0.0 if on_skeleton else segment_km,
+                    detourDuration=0.0 if on_skeleton else (seg_sec if seg_sec is not None else 0.0),
+                    passengerImpact=0.0,
+                    reasonCode=None,
                 )
-            )
+            stops.append(RouteStop(**route_stop))
             index = next_index
         vehicle_plans.append(
             VehiclePlan(

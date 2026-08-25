@@ -22,6 +22,9 @@ public class DispatchSmartPlanReqVO {
     @Size(max = 3, message = "可用车辆不能超过 3 台")
     private List<Long> vehicleIds;
 
+    @Schema(description = "班次编号（可选）：指定后该批派单车辆按班次线路公交骨架经停，货运作为绕行插入（联合调度）")
+    private Long shiftId;
+
     @Schema(description = "算法超参数，不传用算法默认值")
     private Map<String, Object> algorithmConfig;
 

@@ -2,9 +2,12 @@ package cn.iocoder.yudao.module.transport.util;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * GeoDistanceUtil 单测：Haversine 距离 + 到站分钟估算 + 坐标缺失返回 null。
@@ -60,5 +63,21 @@ class GeoDistanceUtilTest {
                 GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH));
         assertNull(GeoDistanceUtil.computeKmAndMinutes(104.0, 30.0, null, 30.1,
                 GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH));
+    }
+
+    @Test
+    void deviation_from_polyline() {
+        // 沿纬度线的 polyline（经度 104.000 → 104.010 @ 纬度 30.000）
+        List<double[]> poly = List.of(new double[]{104.000, 30.000}, new double[]{104.010, 30.000});
+        // 点在线段上 → ~0
+        assertEquals(0.0, GeoDistanceUtil.deviationMetersFromPolyline(104.005, 30.000, poly), 0.5);
+        // 点偏北 0.0018°（纬度方向 ≈ 200m）→ 约 200m（>100m 阈值 → 偏航）
+        double d = GeoDistanceUtil.deviationMetersFromPolyline(104.005, 30.0018, poly);
+        assertTrue(d > 150 && d < 250, "偏北应约 200m，实际 " + d);
+        // 线段端点外（前方 0.01° 经度 ≈ 963m）
+        assertTrue(GeoDistanceUtil.deviationMetersFromPolyline(104.02, 30.000, poly) > 900);
+        // 空/单点无法判定 → -1
+        assertEquals(-1, GeoDistanceUtil.deviationMetersFromPolyline(104.0, 30.0, List.of(new double[]{104.0, 30.0})));
+        assertEquals(-1, GeoDistanceUtil.deviationMetersFromPolyline(104.0, 30.0, null));
     }
 }

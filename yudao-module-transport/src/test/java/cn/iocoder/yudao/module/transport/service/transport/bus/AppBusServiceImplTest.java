@@ -357,7 +357,7 @@ class AppBusServiceImplTest {
         when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
                 List.of(point(1L, "红花村站", 104.005, 30.0), point(2L, "青山镇站", 104.1234, 30.6012)))));
         MonitoringVehicleRespVO v = vehicle(10L, 1, 104.005, 30.01, "SH001", "R001", nextStation, dataSource);
-        v.setLastLocationTime(java.time.LocalDateTime.of(2026, 8, 24, 12, 0));
+        v.setLastLocationTime(java.time.LocalDateTime.now()); // 新鲜：<5min → REAL_FRESH
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(v));
     }
 

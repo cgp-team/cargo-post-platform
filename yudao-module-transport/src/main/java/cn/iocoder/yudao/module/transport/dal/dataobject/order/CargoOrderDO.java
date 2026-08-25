@@ -36,6 +36,16 @@ public class CargoOrderDO extends TenantBaseDO {
     private Integer auditStatus;
     /** 拒绝原因（审核拒绝时） */
     private String rejectReason;
+    /** 承运审核结果（ReviewStatusEnum：0待审 1通过 2需客户操作 3需人工 4拒运；自动审核落库） */
+    private Integer reviewStatus;
+    /** 承运审核原因码（ReviewReasonCodeEnum，逗号分隔多个） */
+    private String reviewReasonCodes;
+    /** 取货服务方式（ServiceModeEnum） */
+    private String pickupServiceMode;
+    /** 送达服务方式（ServiceModeEnum） */
+    private String deliveryServiceMode;
+    /** 建议服务站点编号（替代交接：客户送站/最近站点时推荐） */
+    private Long servicePointStationId;
     /** 收货人 */
     private String receiverName;
     /** 收货电话 */

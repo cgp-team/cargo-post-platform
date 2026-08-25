@@ -7,11 +7,15 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
@@ -68,6 +72,8 @@ class DispatchServiceImplTest {
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
+    @Mock private ShiftMapper shiftMapper;
+    @Mock private RouteStationMapper routeStationMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
     @Mock private DispatchEstimationService dispatchEstimationService;
 
@@ -88,6 +94,8 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
+        ReflectionTestUtils.setField(dispatchService, "shiftMapper", shiftMapper);
+        ReflectionTestUtils.setField(dispatchService, "routeStationMapper", routeStationMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
         ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
@@ -95,14 +103,15 @@ class DispatchServiceImplTest {
     }
 
     @Test
-    void collectOrders_marks_created_orders_pooled() {
-        // 候选订单：2 货运(已审核通过) + 1 邮快件，均可归集
+    void collectOrders_marks_ready_for_pool_orders_pooled() {
+        // 时间范围归集：待入池(READY_FOR_POOL)订单可入池（Phase 2：审核通过才可归集）
         when(orderMapper.selectList(any())).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).orderType(2).build(),
-                TransportOrderDO.builder().id(2L).orderType(2).build(),
-                TransportOrderDO.builder().id(3L).orderType(3).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
-                .thenReturn(CargoOrderDO.builder().auditStatus(1).build());
+                TransportOrderDO.builder().id(1L).orderType(2)
+                        .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
+                TransportOrderDO.builder().id(2L).orderType(2)
+                        .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
+                TransportOrderDO.builder().id(3L).orderType(3)
+                        .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(3);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -117,16 +126,13 @@ class DispatchServiceImplTest {
     }
 
     @Test
-    void collectOrders_skips_unaudited_cargo() {
-        // 候选订单：2 货运(订单1已审核/订单2未审核) + 1 邮快件 → 未审核货运不入池
+    void collectOrders_only_selects_ready_for_pool() {
+        // SQL 按 status=READY_FOR_POOL 过滤：非待入池订单（待审核/取消等）不会出现在候选里
         when(orderMapper.selectList(any())).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).orderType(2).build(),
-                TransportOrderDO.builder().id(2L).orderType(2).build(),
-                TransportOrderDO.builder().id(3L).orderType(3).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
-                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(1).build()); // 已审核
-        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(2L)))
-                .thenReturn(CargoOrderDO.builder().orderId(2L).auditStatus(0).build()); // 未审核
+                TransportOrderDO.builder().id(1L).orderType(2)
+                        .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
+                TransportOrderDO.builder().id(3L).orderType(3)
+                        .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -134,9 +140,8 @@ class DispatchServiceImplTest {
         reqVO.setBatchEnd(LocalDateTime.of(2026, 8, 9, 10, 30));
         int count = dispatchService.collectOrders(reqVO);
 
-        // 2 个入池：1 个已审核货运 + 1 个邮快件（未审核货运被过滤）
         assertEquals(2, count);
-        // 捕获入池更新条件：in 的订单编号含 1、3，不含 2
+        // 捕获入池更新条件：in 的订单编号含 1、3，不含非待入池订单
         // （MyBatis-Plus 3.5.16 的 wrapper 参数延迟物化：先注册表信息，再触发 SQL 物化后才能读到参数）
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), TransportOrderDO.class);
         ArgumentCaptor<Wrapper<TransportOrderDO>> wrapperCaptor = ArgumentCaptor.forClass(Wrapper.class);
@@ -262,6 +267,87 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_attaches_bus_skeleton_when_shift_provided() {
+        // Phase 5 回归：指定班次时，算法车辆 DTO 携带公交骨架（线路站点按 sequenceNo 排序、去场站）
+        mockSmartPlanContext();
+        when(shiftMapper.selectById(99L)).thenReturn(ShiftDO.builder().id(99L).routeId(88L).build());
+        when(routeStationMapper.selectListByRouteIds(List.of(88L))).thenReturn(List.of(
+                RouteStationDO.builder().stationId(12L).sequenceNo(2).build(),
+                RouteStationDO.builder().stationId(11L).sequenceNo(1).build()));
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        DispatchSmartPlanReqVO reqVO = smartReqVO();
+        reqVO.setShiftId(99L);
+        dispatchService.createSmartPlan(reqVO);
+
+        // 骨架按顺序、去场站(1)：11 → 12
+        assertEquals(List.of("11", "12"), reqCaptor.getValue().getVehicles().get(0).getSkeleton());
+    }
+
+    @Test
+    void createSmartPlan_pool_claimed_by_concurrent_throws() {
+        // P1-004 回归：并发智能派单——订单池已被其它派单 CAS 抢占（update 返回 0）→ 不重复派单
+        mockSmartPlanContext();
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(0);
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+
+        assertEquals(DISPATCH_POOL_EMPTY.getCode(), ex.getCode());
+        verify(algorithmAdapter, never()).plan(any());
+        verify(dispatchPlanMapper, never()).insert(any(DispatchPlanDO.class));
+    }
+
+    @Test
+    void createSmartPlan_partial_claim_rolls_back() {
+        // P1-004 回归：订单池被非派单路径并发修改（CAS 仅抢占部分）→ 抛非 ServiceException 触发整事务回滚
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).orderType(2)
+                        .pickupStationId(13L).deliveryStationId(1L)
+                        .status(TransportOrderStatusEnum.POOLED.getStatus()).build(),
+                TransportOrderDO.builder().id(2L).orderType(2)
+                        .pickupStationId(13L).deliveryStationId(1L)
+                        .status(TransportOrderStatusEnum.POOLED.getStatus()).build()));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(4).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(13L).build()));
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1); // 仅抢占 1/2
+
+        assertThrows(IllegalStateException.class, () -> dispatchService.createSmartPlan(smartReqVO()));
+        verify(algorithmAdapter, never()).plan(any());
+    }
+
+    @Test
+    void createSmartPlan_infeasible_releases_claimed_orders() {
+        // P1-004 回归：算法无解时回滚 CAS 抢占（订单回池可重新派单，不滞留 ASSIGNED）
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(AlgorithmPlanRespDTO.builder()
+                .requestId("req-1")
+                .status(AlgorithmPlanRespDTO.STATUS_INFEASIBLE)
+                .reasonCode(AlgorithmPlanRespDTO.REASON_TIMING_CONFLICT)
+                .build());
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        assertEquals(DISPATCH_NO_FEASIBLE.getCode(), ex.getCode());
+        // 两次更新：CAS 抢占(ASSIGNED) + 失败回滚(POOLED)，最后一次应为回池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
+        List<TransportOrderDO> updates = orderCaptor.getAllValues();
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
+                updates.get(updates.size() - 1).getStatus());
+        verify(dispatchPlanMapper, never()).insert(any(DispatchPlanDO.class));
+    }
+
+    @Test
     void reviewPlan_not_pending_throws() {
         DispatchPlanDO plan = DispatchPlanDO.builder().id(100L)
                 .status(DispatchPlanStatusEnum.ISSUED.getStatus()).build();
@@ -330,6 +416,33 @@ class DispatchServiceImplTest {
         assertEquals(TransportOrderStatusEnum.DEPARTED.getStatus(), orderCaptor.getValue().getStatus());
     }
 
+    @Test
+    void departureCheck_constrains_order_source_state() {
+        // P1-003 回归：发车核验只推进「已分配(ASSIGNED)」订单为已发车，不盲目覆盖已完成/已取消等其它状态订单
+        DispatchPlanDO plan = DispatchPlanDO.builder().id(100L)
+                .status(DispatchPlanStatusEnum.ISSUED.getStatus()).build();
+        when(dispatchPlanMapper.selectById(100L)).thenReturn(plan);
+        when(dispatchPlanItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                DispatchPlanItemDO.builder().planId(100L).vehicleId(7L).orderId(1L).build(),
+                DispatchPlanItemDO.builder().planId(100L).vehicleId(7L).orderId(2L).build()));
+
+        DispatchCheckReqVO reqVO = new DispatchCheckReqVO();
+        reqVO.setPlanId(100L);
+        reqVO.setVehicleId(7L);
+        reqVO.setPass(true);
+        dispatchService.departureCheck(reqVO);
+
+        // 更新条件必须带来源状态约束：仅已分配(2)订单可被推进为已发车
+        ArgumentCaptor<AbstractWrapper> wrapperCaptor = ArgumentCaptor.forClass(AbstractWrapper.class);
+        verify(orderMapper).update(any(), wrapperCaptor.capture());
+        String sql = wrapperCaptor.getValue().getSqlSegment();
+        assertTrue(sql.contains("status"), "更新条件应约束来源状态，实际 SQL: " + sql);
+        // 参数值中包含已分配状态(2)（订单 id 为 Long，不会与 Integer 2 冲突）
+        assertTrue(wrapperCaptor.getValue().getParamNameValuePairs().values().stream()
+                        .anyMatch(v -> Integer.valueOf(TransportOrderStatusEnum.ASSIGNED.getStatus()).equals(v)),
+                "更新条件来源状态应为已分配(2)，实际参数: " + wrapperCaptor.getValue().getParamNameValuePairs());
+    }
+
     // ==================== 测试桩数据 ====================
 
     @Test
@@ -366,6 +479,8 @@ class DispatchServiceImplTest {
                 StationDO.builder().id(13L).build()));
         // 注：cargoOrderMapper 不显式桩（selectList(SFunction,Object) 的类匹配对方法引用不可靠），
         // getItemCount 命中空列表 → 件数取默认 1
+        // P1-004：CAS 抢占返回池内订单数（1 张）
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
         ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
         when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasiblePickupResult());
         doAnswer(invocation -> {
@@ -457,6 +572,54 @@ class DispatchServiceImplTest {
         // 载客 3 > 2 → 超员 1，运力不足预警
         assertTrue(resp.getCapacityCheck().getOverCapacity());
         assertEquals(1, resp.getCapacityCheck().getPassengerExceed());
+    }
+
+    @Test
+    void validate_cargo_capacity_uses_net_load_dimensions() {
+        // P1-002 回归：载货按净载荷双维度口径（派送/揽收分别累计），不再「派送+揽收」全部累计。
+        // 3 件派送 + 3 件揽收、货仓容量 4：旧口径 6 > 4 会误报超载；净载荷口径 max(3,3)=3 ≤ 4 不预警。
+        TransportOrderDO pickup1 = TransportOrderDO.builder().id(1L).orderNo("K1").orderType(2)
+                .pickupStationId(11L).deliveryStationId(1L) // 终点=场站 → 揽收
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO pickup2 = TransportOrderDO.builder().id(2L).orderNo("K2").orderType(2)
+                .pickupStationId(12L).deliveryStationId(1L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO pickup3 = TransportOrderDO.builder().id(3L).orderNo("K3").orderType(3)
+                .pickupStationId(13L).deliveryStationId(1L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO delivery1 = TransportOrderDO.builder().id(4L).orderNo("M1").orderType(2)
+                .pickupStationId(1L).deliveryStationId(14L) // 终点=村 → 派送
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO delivery2 = TransportOrderDO.builder().id(5L).orderNo("M2").orderType(2)
+                .pickupStationId(1L).deliveryStationId(15L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        TransportOrderDO delivery3 = TransportOrderDO.builder().id(6L).orderNo("M3").orderType(3)
+                .pickupStationId(1L).deliveryStationId(16L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any())).thenReturn(List.of(pickup1, pickup2, pickup3, delivery1, delivery2, delivery3));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(4).build()));
+        when(stationMapper.selectList()).thenReturn(List.of(
+                StationDO.builder().id(11L).stationName("S11").build(),
+                StationDO.builder().id(12L).stationName("S12").build(),
+                StationDO.builder().id(13L).stationName("S13").build(),
+                StationDO.builder().id(14L).stationName("S14").build(),
+                StationDO.builder().id(15L).stationName("S15").build(),
+                StationDO.builder().id(16L).stationName("S16").build()));
+        // 注：cargo/postal 子表不显式桩，getItemCount 默认每件 1
+
+        DispatchValidateReqVO reqVO = new DispatchValidateReqVO();
+        reqVO.setDepotStationId(1L);
+        reqVO.setVehicleIds(Collections.singletonList(7L));
+        DispatchValidateRespVO resp = dispatchService.validate(reqVO);
+
+        assertEquals(3, resp.getOrderStats().getPickupCount());
+        assertEquals(3, resp.getOrderStats().getDeliveryCount());
+        assertEquals(6, resp.getOrderStats().getParcelCount()); // 总件数展示仍为 6
+        // 净载荷口径：max(3 派送, 3 揽收) = 3 ≤ 货仓 4 → 不预警（旧口径 6 > 4 会误报超载）
+        assertFalse(resp.getCapacityCheck().getOverCapacity());
+        assertEquals(0, resp.getCapacityCheck().getCargoExceed());
     }
 
     @Test
@@ -558,6 +721,8 @@ class DispatchServiceImplTest {
         when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
                 StationDO.builder().id(11L).longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build(),
                 StationDO.builder().id(12L).longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
+        // P1-004：CAS 抢占返回池内订单数（1 张）。lenient：并发抢占用例会覆盖为 0
+        lenient().when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
     }
 
     private DispatchSmartPlanReqVO smartReqVO() {
@@ -605,13 +770,11 @@ class DispatchServiceImplTest {
     // ==================== 按勾选订单归集（orderIds） ====================
 
     @Test
-    void collectByOrderIds_all_created_pooled() {
-        // 全部待调度（CREATED），货运已审核 → 全部入池
+    void collectByOrderIds_all_ready_for_pool_pooled() {
+        // 全部待入池（READY_FOR_POOL，Phase 2 审核通过）→ 全部入池
         when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
-                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(3).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
-                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(1).build());
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).orderType(3).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -626,9 +789,9 @@ class DispatchServiceImplTest {
 
     @Test
     void collectByOrderIds_mixed_status_throws() {
-        // 一个待调度 + 一个已入池 → 明确报错，不悄悄跳过
+        // 一个待入池 + 一个已入池 → 明确报错，不悄悄跳过（已入池不能再归集）
         when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).build(),
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
                 TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.POOLED.getStatus()).build()));
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
@@ -640,25 +803,23 @@ class DispatchServiceImplTest {
     }
 
     @Test
-    void collectByOrderIds_unaudited_cargo_throws() {
-        // 货运未审核通过 → 明确报错
+    void collectByOrderIds_not_ready_for_pool_throws() {
+        // 未审核通过（待审核/已取消等非 READY_FOR_POOL）→ 明确报错，未审核订单不得入池
         when(orderMapper.selectBatchIds(List.of(1L))).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(1L)))
-                .thenReturn(CargoOrderDO.builder().orderId(1L).auditStatus(0).build());
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.PENDING_REVIEW.getStatus()).orderType(2).build()));
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
         reqVO.setOrderIds(List.of(1L));
         ServiceException ex = assertThrows(ServiceException.class, () -> dispatchService.collectOrders(reqVO));
 
-        assertEquals(CARGO_AUDIT_PENDING.getCode(), ex.getCode());
+        assertEquals(DISPATCH_ORDER_NOT_COLLECTABLE.getCode(), ex.getCode());
     }
 
     @Test
     void collectByOrderIds_missing_order_throws() {
         // orderIds 有订单查不到 → 报不存在
         when(orderMapper.selectBatchIds(List.of(1L, 99L))).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).build()));
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build()));
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
         reqVO.setOrderIds(List.of(1L, 99L));
@@ -669,13 +830,11 @@ class DispatchServiceImplTest {
 
     @Test
     void collectByOrderIds_batch_multiple_cargo() {
-        // 批量：2 货运已审核 + 1 邮快件 → 全部入池
+        // 批量：2 货运待入池 + 1 邮快件待入池 → 全部入池
         when(orderMapper.selectBatchIds(List.of(1L, 2L, 3L))).thenReturn(List.of(
-                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
-                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(2).build(),
-                TransportOrderDO.builder().id(3L).status(TransportOrderStatusEnum.CREATED.getStatus()).orderType(3).build()));
-        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
-                .thenReturn(CargoOrderDO.builder().auditStatus(1).build());
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).orderType(2).build(),
+                TransportOrderDO.builder().id(3L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).orderType(3).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(3);
 
         DispatchCollectReqVO reqVO = new DispatchCollectReqVO();

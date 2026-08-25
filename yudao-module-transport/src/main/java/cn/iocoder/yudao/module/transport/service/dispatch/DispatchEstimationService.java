@@ -17,6 +17,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.PlanItemActionEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -99,6 +100,21 @@ public class DispatchEstimationService {
         Map<Long, StationDO> stationMap = stationIds.isEmpty() ? Map.of()
                 : stationMapper.selectBatchIds(stationIds).stream()
                         .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        // 预加载订单子表（数量回写用，一次加载消除逐单查询）
+        Set<Long> itemOrderIds = items.stream().map(DispatchPlanItemDO::getOrderId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, PassengerOrderDO> passengerMap = itemOrderIds.isEmpty() ? Map.of()
+                : passengerOrderMapper.selectList(new LambdaQueryWrapperX<PassengerOrderDO>()
+                        .in(PassengerOrderDO::getOrderId, itemOrderIds)).stream()
+                        .collect(Collectors.toMap(PassengerOrderDO::getOrderId, Function.identity(), (a, b) -> a));
+        Map<Long, CargoOrderDO> cargoMap = itemOrderIds.isEmpty() ? Map.of()
+                : cargoOrderMapper.selectList(new LambdaQueryWrapperX<CargoOrderDO>()
+                        .in(CargoOrderDO::getOrderId, itemOrderIds)).stream()
+                        .collect(Collectors.toMap(CargoOrderDO::getOrderId, Function.identity(), (a, b) -> a));
+        Map<Long, PostalOrderDO> postalMap = itemOrderIds.isEmpty() ? Map.of()
+                : postalOrderMapper.selectList(new LambdaQueryWrapperX<PostalOrderDO>()
+                        .in(PostalOrderDO::getOrderId, itemOrderIds)).stream()
+                        .collect(Collectors.toMap(PostalOrderDO::getOrderId, Function.identity(), (a, b) -> a));
         // 按车分组、访问顺序升序，逐车独立累计 ETA 与里程
         Map<Long, List<DispatchPlanItemDO>> itemsByVehicle = items.stream()
                 .filter(item -> item.getVehicleId() != null)
@@ -112,6 +128,9 @@ public class DispatchEstimationService {
             Integer prevAction = null;
             for (DispatchPlanItemDO item : vehicleItems) {
                 StationDO station = item.getStationId() != null ? stationMap.get(item.getStationId()) : null;
+                // 本段（上一站→本站）路网时长/里程，估算后回写明细（P1-001：segmentDuration 落库）
+                Integer segmentSeconds = null;
+                BigDecimal segmentKm = null;
                 if (prevStation != null) {
                     // 上一站作业分钟
                     if (SERVICE_ACTIONS.contains(prevAction)) {
@@ -120,40 +139,78 @@ public class DispatchEstimationService {
                     // 站间行驶：优先算法返回的路网分段时长/里程，缺省回退直线÷均速（坐标缺失按 0 里程）
                     RoadSegment roadSegment = roadSegments.get(item.getVehicleId() + ":" + item.getVisitSequence());
                     if (roadSegment != null && roadSegment.durationSeconds() != null) {
-                        eta = eta.plusSeconds(roadSegment.durationSeconds());
+                        segmentSeconds = roadSegment.durationSeconds().intValue();
+                        eta = eta.plusSeconds(segmentSeconds);
                     } else if (hasCoords(prevStation) && hasCoords(station)) {
                         double km = GeoDistanceUtil.haversineKm(
                                 prevStation.getLongitude().doubleValue(), prevStation.getLatitude().doubleValue(),
                                 station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+                        segmentSeconds = travelMinutes(km, speedKmh) * 60;
                         eta = eta.plusMinutes(travelMinutes(km, speedKmh));
                     }
                     if (roadSegment != null && roadSegment.distanceKm() != null) {
-                        totalKm += roadSegment.distanceKm();
+                        segmentKm = BigDecimal.valueOf(roadSegment.distanceKm());
                     } else if (hasCoords(prevStation) && hasCoords(station)) {
-                        totalKm += GeoDistanceUtil.haversineKm(
+                        double km = GeoDistanceUtil.haversineKm(
                                 prevStation.getLongitude().doubleValue(), prevStation.getLatitude().doubleValue(),
                                 station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+                        segmentKm = BigDecimal.valueOf(km).setScale(3, RoundingMode.HALF_UP);
+                    }
+                    if (segmentKm != null) {
+                        totalKm += segmentKm.doubleValue();
                     }
                 }
+                // 本站作业时长（接/送/派/揽计停站作业），计划离站 = 到达 + 作业；数量按订单子表回写
+                Integer itemServiceSeconds = SERVICE_ACTIONS.contains(item.getActionType())
+                        ? serviceMinutes * 60 : 0;
                 DispatchPlanItemDO update = new DispatchPlanItemDO();
                 update.setId(item.getId());
                 update.setEstimatedArrivalTime(eta);
+                update.setPlannedDepartureTime(eta.plusSeconds(itemServiceSeconds));
+                update.setServiceDurationSeconds(itemServiceSeconds);
+                update.setQuantity(quantityOf(item, passengerMap, cargoMap, postalMap));
+                update.setSegmentDurationSeconds(segmentSeconds);
+                update.setSegmentDistanceKm(segmentKm);
+                update.setStatus(TaskItemStatusEnum.PENDING.getStatus());
                 dispatchPlanItemMapper.updateById(update);
                 prevStation = station;
                 prevAction = item.getActionType();
             }
             maxDurationMinutes = Math.max(maxDurationMinutes, Duration.between(departTime, eta).toMinutes());
         }
-        // 方案摘要：预计耗时/收入/成本 + ETA 路网来源（明确记录，避免把直线估算伪装成高德真实时长）
+        // 方案摘要：预计耗时/收入/成本 + ETA 路网来源 + 任务段窗口
         DispatchPlanDO planUpdate = new DispatchPlanDO();
         planUpdate.setId(planId);
         planUpdate.setEstDurationMinutes((int) maxDurationMinutes);
         planUpdate.setRouteProvider(roadSegments.isEmpty() ? "EUCLIDEAN_FALLBACK" : "AMAP");
+        planUpdate.setTaskWindowStart(departTime);
+        planUpdate.setTaskWindowEnd(departTime.plusMinutes(maxDurationMinutes));
         planUpdate.setEstRevenue(computeRevenue(items, stationMap, rule));
         planUpdate.setEstCost(rule.getVehicleCostPerKm() != null
                 ? rule.getVehicleCostPerKm().multiply(BigDecimal.valueOf(totalKm)).setScale(2, RoundingMode.HALF_UP)
                 : null);
         dispatchPlanMapper.updateById(planUpdate);
+    }
+
+    /** 明细数量：BOARD/ALIGHT=客运人数，PICKUP/DELIVERY=货运/邮快件件数（子表缺失按 1 兜底） */
+    private Integer quantityOf(DispatchPlanItemDO item, Map<Long, PassengerOrderDO> passengerMap,
+                               Map<Long, CargoOrderDO> cargoMap, Map<Long, PostalOrderDO> postalMap) {
+        if (item.getOrderId() == null) {
+            return null;
+        }
+        Integer action = item.getActionType();
+        if (PlanItemActionEnum.BOARD.getAction().equals(action)
+                || PlanItemActionEnum.ALIGHT.getAction().equals(action)) {
+            PassengerOrderDO passenger = passengerMap.get(item.getOrderId());
+            return passenger != null && passenger.getPassengerCount() != null
+                    ? passenger.getPassengerCount() : 1;
+        }
+        CargoOrderDO cargo = cargoMap.get(item.getOrderId());
+        if (cargo != null) {
+            return cargo.getItemCount() != null ? cargo.getItemCount() : 1;
+        }
+        PostalOrderDO postal = postalMap.get(item.getOrderId());
+        return postal != null && postal.getItemCount() != null ? postal.getItemCount() : 1;
     }
 
     /**

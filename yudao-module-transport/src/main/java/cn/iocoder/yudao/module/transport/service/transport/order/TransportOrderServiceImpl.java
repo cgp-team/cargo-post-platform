@@ -15,6 +15,10 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
+import cn.iocoder.yudao.module.transport.service.order.CargoReviewResult;
+import cn.iocoder.yudao.module.transport.service.order.CargoReviewService;
+import cn.iocoder.yudao.module.transport.service.order.CargoReviewServiceImpl;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +33,8 @@ import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionU
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_ONLY_CARGO;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_STATUS_ILLEGAL;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ORDER_NOT_EXISTS;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_NOT_YOURS;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_STATUS_ILLEGAL;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_USER_NOT_LOGIN;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_STATIONS_SAME;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_DISABLED;
@@ -44,6 +50,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private MemberUserApi memberUserApi;
     @Resource private StationMapper stationMapper;
+    @Resource private CargoReviewService cargoReviewService;
 
     @Override
     @Transactional
@@ -114,7 +121,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         }
         // 二次校验站点（不信任小程序前端）：非空 / 不相同 / 存在 / 未删除 / 已启用
         validateSendStations(reqVO.getPickupStationId(), reqVO.getDeliveryStationId());
-        // 主表：货运订单，status=0 待调度，天然可被调度员归集入池
+        // 主表：货运订单，先置已创建，随后的自动承运审核立即流转（审核通过才可入池）
         TransportOrderDO order = TransportOrderDO.builder()
                 .orderNo(generateOrderNo())
                 .orderType(2) // 货运/生鲜
@@ -140,7 +147,51 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .receiverAddress(reqVO.getReceiverAddress())
                 .build();
         cargoOrderMapper.insert(sub);
+
+        // Phase 2 承运审核：客户提交后先审核，结果决定生命周期（通过→待入池，需操作→待客户操作，
+        // 需人工→待审核，拒运→取消）；审核结果与原因码落子表，供小程序实时展示
+        applyAutoReview(order, sub);
         return order.getId();
+    }
+
+    /** 自动承运审核：写子表审核结果/服务方式 + 主表生命周期流转（审核结果由 reasonCode 表达） */
+    private void applyAutoReview(TransportOrderDO order, CargoOrderDO sub) {
+        CargoReviewResult result = cargoReviewService.review(
+                sub.getGoodsName(), sub.getWeightKg(), sub.getFreshFlag(),
+                sub.getGoodsNote(), order.getPickupStationId(), order.getDeliveryStationId());
+        CargoOrderDO upd = new CargoOrderDO();
+        upd.setId(sub.getId());
+        upd.setReviewStatus(result.getReviewStatus());
+        upd.setReviewReasonCodes(CargoReviewServiceImpl.joinReasonCodes(result.getReasonCodes()));
+        upd.setPickupServiceMode(result.getPickupServiceMode());
+        upd.setDeliveryServiceMode(result.getDeliveryServiceMode());
+        upd.setServicePointStationId(result.getServicePointStationId());
+        // 拒运：兼容旧 auditStatus 字段 + 原因文案（村民查件页可见"审核不通过+原因"）
+        if (result.isRejected()) {
+            upd.setAuditStatus(2);
+            upd.setRejectReason(CargoReviewServiceImpl.reasonText(result.getReasonCodes()));
+        }
+        cargoOrderMapper.updateById(upd);
+        // 主表生命周期流转
+        TransportOrderDO orderUpd = new TransportOrderDO();
+        orderUpd.setId(order.getId());
+        orderUpd.setStatus(resolveReviewLifecycle(result.getReviewStatus()));
+        orderMapper.updateById(orderUpd);
+    }
+
+    /** 审核结果 → 订单生命周期状态（与 CargoReviewService 契约一致） */
+    private Integer resolveReviewLifecycle(Integer reviewStatus) {
+        if (ReviewStatusEnum.PASSED.getStatus().equals(reviewStatus)) {
+            return TransportOrderStatusEnum.READY_FOR_POOL.getStatus();
+        }
+        if (ReviewStatusEnum.CONDITIONAL.getStatus().equals(reviewStatus)) {
+            return TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus();
+        }
+        if (ReviewStatusEnum.MANUAL_REVIEW.getStatus().equals(reviewStatus)) {
+            return TransportOrderStatusEnum.PENDING_REVIEW.getStatus();
+        }
+        // REJECTED → 明确不可运输，终态取消，不可入池
+        return TransportOrderStatusEnum.CANCELLED.getStatus();
     }
 
     /** 寄货订单落库前二次校验站点：非空 / 不相同 / 存在（未删除）/ 已启用（status=0） */
@@ -219,19 +270,31 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         if (cargo == null) {
             throw exception(ORDER_NOT_EXISTS);
         }
-        // 状态机：仅待调度(0)/已入池(1) 且未审核(audit_status=0) 可审，防重复审核与在途改单
-        if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.CREATED.getStatus())
-                && !Objects.equals(order.getStatus(), TransportOrderStatusEnum.POOLED.getStatus())) {
+        // 状态机：仅 已创建(0)/已入池(1)/待审核(6，自动审核转人工) 且 审核未决（PENDING/MANUAL_REVIEW）可审
+        Integer status = order.getStatus();
+        boolean reviewGate = Objects.equals(status, TransportOrderStatusEnum.CREATED.getStatus())
+                || Objects.equals(status, TransportOrderStatusEnum.POOLED.getStatus())
+                || Objects.equals(status, TransportOrderStatusEnum.PENDING_REVIEW.getStatus());
+        if (!reviewGate) {
             throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
         }
-        if (!Objects.equals(cargo.getAuditStatus(), 0)) {
+        Integer reviewStatus = cargo.getReviewStatus();
+        boolean undecided = reviewStatus == null
+                || ReviewStatusEnum.PENDING.getStatus().equals(reviewStatus)
+                || ReviewStatusEnum.MANUAL_REVIEW.getStatus().equals(reviewStatus);
+        if (!undecided) {
             throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
         }
         CargoOrderDO upd = new CargoOrderDO();
         upd.setId(cargo.getId());
         if (Boolean.TRUE.equals(reqVO.getPass())) {
-            // 通过：标记审核通过，可进调度池
+            // 通过：审核通过 → 可进调度池（生命周期转 READY_FOR_POOL）
             upd.setAuditStatus(1);
+            upd.setReviewStatus(ReviewStatusEnum.PASSED.getStatus());
+            TransportOrderDO orderUpd = new TransportOrderDO();
+            orderUpd.setId(order.getId());
+            orderUpd.setStatus(TransportOrderStatusEnum.READY_FOR_POOL.getStatus());
+            orderMapper.updateById(orderUpd);
         } else {
             // 拒绝（危险品/违禁品等）：原因必填，标记拒绝 + 原因，主表置取消，村民查件可见
             if (StrUtil.isBlank(reqVO.getRejectReason())) {
@@ -239,12 +302,37 @@ public class TransportOrderServiceImpl implements TransportOrderService {
             }
             upd.setAuditStatus(2);
             upd.setRejectReason(reqVO.getRejectReason());
+            upd.setReviewStatus(ReviewStatusEnum.REJECTED.getStatus());
             TransportOrderDO orderUpd = new TransportOrderDO();
             orderUpd.setId(order.getId());
             orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
             orderMapper.updateById(orderUpd);
         }
         cargoOrderMapper.updateById(upd);
+    }
+
+    @Override
+    @Transactional
+    public void confirmStationAction(Long userId, Long orderId) {
+        if (userId == null) {
+            throw exception(SEND_ORDER_USER_NOT_LOGIN);
+        }
+        TransportOrderDO order = validateExists(orderId);
+        // 归属校验：仅下单人本人可确认（防越权替他人确认）
+        if (!Objects.equals(order.getMemberUserId(), userId)) {
+            throw exception(SEND_ORDER_NOT_YOURS);
+        }
+        // 仅「待客户操作」状态可确认（防重复确认 / 状态不符）
+        if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus())) {
+            throw exception(SEND_ORDER_STATUS_ILLEGAL);
+        }
+        // CAS 条件更新：仅待客户操作 → 待入池，防并发重复确认
+        TransportOrderDO orderUpd = new TransportOrderDO();
+        orderUpd.setId(orderId);
+        orderUpd.setStatus(TransportOrderStatusEnum.READY_FOR_POOL.getStatus());
+        orderMapper.update(orderUpd, new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getId, orderId)
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus()));
     }
 
     private TransportOrderDO validateExists(Long id) {

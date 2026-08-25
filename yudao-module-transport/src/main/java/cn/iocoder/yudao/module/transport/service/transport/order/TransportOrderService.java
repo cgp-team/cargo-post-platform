@@ -30,4 +30,10 @@ public interface TransportOrderService {
     CargoOrderDO getCargoOrder(Long orderId);
     /** 货运物品审核：通过 / 拒绝（危险品/违禁品） */
     void audit(@Valid OrderAuditReqVO reqVO);
+    /**
+     * 客户确认已按替代交接（CUSTOMER_TO_STATION）送到指定站点：
+     * WAITING_CUSTOMER_ACTION → READY_FOR_POOL（可入池）。
+     * 仅下单人本人可操作，且订单必须在「待客户操作」状态。
+     */
+    void confirmStationAction(Long userId, Long orderId);
 }

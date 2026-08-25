@@ -54,14 +54,18 @@ def make_request(orders: list[PlanOrder], vehicle_count: int = 1, request_id: st
 
 
 def simulate_loads(plan, orders_by_id: dict[str, PlanOrder]) -> tuple[int, int]:
-    """按累计口径统计单车次载客/载货量：座位与仓位在批次内不复用。"""
+    """按双维度口径统计单车次载客/载货峰值：载客按累计（座位批次内不复用）；
+    载货 = max(累计派送件, 累计揽收件)（出程派送、返程揽收，货仓依次复用）。"""
     passenger_total = sum(1 for stop in plan.stops if stop.action == StopAction.BOARD)
-    cargo_total = sum(
+    deliveries = sum(
         orders_by_id[stop.orderId].itemCount
-        for stop in plan.stops
-        if stop.action in (StopAction.DELIVER, StopAction.PICKUP)
+        for stop in plan.stops if stop.action == StopAction.DELIVER
     )
-    return passenger_total, cargo_total
+    pickups = sum(
+        orders_by_id[stop.orderId].itemCount
+        for stop in plan.stops if stop.action == StopAction.PICKUP
+    )
+    return passenger_total, max(deliveries, pickups)
 
 
 def test_board_before_alight() -> None:
@@ -161,6 +165,37 @@ def test_cargo_over_total_capacity_infeasible() -> None:
     assert outcome.reason_code == "OVER_CAPACITY"
 
 
+def test_net_load_capacity_reuse_single_vehicle() -> None:
+    """P1-002 回归：载货净载荷（出程派送 + 返程揽收）复用货仓。
+
+    单车容量 10，6 件揽收 + 4 件派送 + 3 件揽收 = 13 件总货量。
+    旧「派送+揽收全部累计」口径下 13 > 10 会误判 OVER_CAPACITY；
+    净载荷双维度口径下 派送 4 ≤ 10 且 揽收 9 ≤ 10，单车可行——这正是「闲置运力利用」。
+    """
+    orders = (
+        [cargo_order(i, OrderType.PICKUP, f"S{i % 9 + 1}") for i in range(1, 7)]
+        + [cargo_order(i, OrderType.DELIVERY, f"S{i % 9 + 1}") for i in range(7, 11)]
+        + [cargo_order(i, OrderType.PICKUP, f"S{i % 9 + 1}") for i in range(11, 14)]
+    )
+    request = make_request(orders, vehicle_count=1)
+    request.vehicles[0].cargoCapacity = 10
+    outcome = solve(request)
+    assert outcome.status == "feasible", f"净载荷口径下单车 13 件(派4+揽9)应可行: {outcome.reason_code}"
+    assert len(outcome.vehicle_plans) == 1
+    orders_by_id = {order.orderId: order for order in orders}
+    for plan in outcome.vehicle_plans:
+        _, cargo_max = simulate_loads(plan, orders_by_id)
+        assert cargo_max <= 10, f"任一时点货件 {cargo_max} 不应超容量 10"
+
+
+def test_deliveries_only_still_need_second_vehicle() -> None:
+    """P1-002 回归：净载荷下纯派送仍受容量约束——6 件派送 > 单车 4 件仍须启用第 2 辆车。"""
+    orders = [cargo_order(i, OrderType.DELIVERY, f"S{i % 9 + 1}") for i in range(6)]
+    outcome = solve(make_request(orders, vehicle_count=2))
+    assert outcome.status == "feasible"
+    assert len(outcome.vehicle_plans) == 2
+
+
 def test_deterministic_same_input_same_output() -> None:
     orders = (
         [passenger_order(i, f"S{i % 9 + 1}", f"S{(i + 2) % 9 + 1}") for i in range(1, 6)]
@@ -174,6 +209,30 @@ def test_deterministic_same_input_same_output() -> None:
     assert [plan.model_dump() for plan in first.vehicle_plans] == [
         plan.model_dump() for plan in second.vehicle_plans
     ]
+
+
+def test_skeleton_mandatory_order_and_cargo_detour() -> None:
+    """Phase 5 回归：公交骨架（Mandatory Passenger Service）车辆必须按序经停骨架站，
+    货运作为绕行插入骨架间隙，且携带算法解释字段（accepted/serviceMode/detour）。"""
+    orders = [
+        cargo_order(1, OrderType.DELIVERY, "S4", 1),  # 绕行派送（S4 不在骨架）
+        cargo_order(2, OrderType.PICKUP, "S2", 2),     # 骨架站揽收
+    ]
+    req = make_request(orders, vehicle_count=1)
+    req.vehicles[0].skeleton = ["S1", "S2", "S3"]
+    outcome = solve(req)
+    assert outcome.status == "feasible", f"骨架+货运应可行: {outcome.reason_code}"
+    plan = outcome.vehicle_plans[0]
+    # 骨架 PASS 按序经停（不可删站/跳站）
+    pass_stops = [s for s in plan.stops if s.action == StopAction.PASS]
+    assert [s.stationId for s in pass_stops] == ["S1", "S2", "S3"]
+    # 货运经停带算法解释：绕行的 S4 有 detour，骨架站 S2 detour=0
+    cargo_stops = {s.orderId: s for s in plan.stops if s.orderId}
+    assert cargo_stops["O-D1"].accepted is True
+    assert cargo_stops["O-D1"].serviceMode == "NEAREST_STATION"
+    assert cargo_stops["O-D1"].servicePoint == "S4"
+    assert cargo_stops["O-D1"].detourDistance is not None and cargo_stops["O-D1"].detourDistance > 0
+    assert cargo_stops["O-P2"].detourDistance == 0
 
 
 def test_full_scale_25_orders_under_time_limit() -> None:
