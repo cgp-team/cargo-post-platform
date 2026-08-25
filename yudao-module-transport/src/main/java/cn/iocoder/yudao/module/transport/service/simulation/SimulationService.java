@@ -63,6 +63,38 @@ public class SimulationService {
 
     public SimulationEngine.SimRun getRun(Long vehicleId) { return simulationEngine.getRun(vehicleId); }
 
+    /** 模拟运行状态（管理端控制页轮询）；无运行返回 null */
+    public cn.iocoder.yudao.module.transport.controller.admin.simulation.SimulationStatusRespVO getStatus(Long vehicleId) {
+        SimulationEngine.SimRun run = simulationEngine.getRun(vehicleId);
+        if (run == null) {
+            return null;
+        }
+        SimulationEngine.SimTick tick = simulationEngine.tick(vehicleId);
+        cn.iocoder.yudao.module.transport.controller.admin.simulation.SimulationStatusRespVO vo =
+                new cn.iocoder.yudao.module.transport.controller.admin.simulation.SimulationStatusRespVO();
+        vo.setVehicleId(vehicleId);
+        vo.setPlanId(run.getPlanId());
+        vo.setStatus(run.getStatus());
+        vo.setStatusName(statusName(run.getStatus()));
+        vo.setMultiplier(run.getMultiplier());
+        vo.setSimSeconds(run.currentSimSeconds());
+        vo.setTotalSimSeconds(run.getTotalSimSeconds());
+        if (tick != null) {
+            vo.setCurrentStationName(tick.getStationName());
+            vo.setArrived(tick.isArrived());
+        }
+        return vo;
+    }
+
+    private String statusName(int status) {
+        return switch (status) {
+            case SimulationEngine.STATUS_RUNNING -> "运行中";
+            case SimulationEngine.STATUS_PAUSED -> "已暂停";
+            case SimulationEngine.STATUS_COMPLETED -> "已完成";
+            default -> "待启动";
+        };
+    }
+
     // ==================== 任务段 → 模拟段 ====================
 
     /**
