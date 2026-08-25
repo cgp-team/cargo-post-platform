@@ -37,4 +37,8 @@ public class DispatchPlanDO extends TenantBaseDO {
     private Integer status;
     private Long approvedBy;
     private LocalDateTime approvedTime;
+    /** 任务段窗口开始（该方案车辆运营起始时刻，默认=批次开始，估算后按经停推进） */
+    private LocalDateTime taskWindowStart;
+    /** 任务段窗口结束（默认=开始+预计耗时，方案完成后回写实际到达终点时刻） */
+    private LocalDateTime taskWindowEnd;
 }

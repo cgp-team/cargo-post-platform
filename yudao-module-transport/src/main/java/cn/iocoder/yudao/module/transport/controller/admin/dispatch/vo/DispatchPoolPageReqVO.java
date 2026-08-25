@@ -20,7 +20,7 @@ public class DispatchPoolPageReqVO extends PageParam {
     @Schema(description = "订单类型：1 客运 2 货运 3 邮快件", example = "1")
     private Integer orderType;
 
-    @Schema(description = "订单状态：0 待调度 1 已入池", example = "1")
+    @Schema(description = "订单状态：8 待入池 1 已入池 2 已分配 ... (OrderLifecycle)", example = "1")
     private Integer status;
 
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)

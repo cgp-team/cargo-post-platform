@@ -15,18 +15,25 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
+import cn.iocoder.yudao.module.transport.service.order.CargoReviewResult;
+import cn.iocoder.yudao.module.transport.service.order.CargoReviewService;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants.BAD_REQUEST;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.CARGO_AUDIT_STATUS_ILLEGAL;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_NOT_YOURS;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_ORDER_STATUS_ILLEGAL;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_STATIONS_SAME;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_DISABLED;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_EXISTS;
@@ -46,6 +53,7 @@ class TransportOrderServiceImplTest {
     @Mock private PostalOrderMapper postalOrderMapper;
     @Mock private MemberUserApi memberUserApi;
     @Mock private StationMapper stationMapper;
+    @Mock private CargoReviewService cargoReviewService;
 
     private TransportOrderServiceImpl orderService;
 
@@ -58,6 +66,7 @@ class TransportOrderServiceImplTest {
         ReflectionTestUtils.setField(orderService, "postalOrderMapper", postalOrderMapper);
         ReflectionTestUtils.setField(orderService, "memberUserApi", memberUserApi);
         ReflectionTestUtils.setField(orderService, "stationMapper", stationMapper);
+        ReflectionTestUtils.setField(orderService, "cargoReviewService", cargoReviewService);
     }
 
     private AppSendOrderCreateReqVO sendReqVO(Long pickup, Long delivery) {
@@ -99,23 +108,69 @@ class TransportOrderServiceImplTest {
     }
 
     @Test
-    void createSendOrder_valid_stations_inserts_order() {
+    void createSendOrder_valid_stations_inserts_order_and_auto_reviews() {
+        // 审核引擎默认通过 → 生命周期流转为待入池(READY_FOR_POOL)，审核结果写子表
         when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).status(0).build());
         when(stationMapper.selectById(2L)).thenReturn(StationDO.builder().id(2L).status(0).build());
+        when(cargoReviewService.review(any(), any(), any(), any(), any(), any()))
+                .thenReturn(CargoReviewResult.builder()
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus())
+                        .reasonCodes(List.of())
+                        .pickupServiceMode("STATION_TO_STATION")
+                        .deliveryServiceMode("STATION_TO_STATION")
+                        .message("审核通过")
+                        .build());
+
         orderService.createSendOrder(100L, sendReqVO(1L, 2L));
+
         verify(orderMapper).insert(any(TransportOrderDO.class));
         verify(cargoOrderMapper).insert(any(CargoOrderDO.class));
+        // 子表回写审核结果
+        ArgumentCaptor<CargoOrderDO> cargoCaptor = ArgumentCaptor.forClass(CargoOrderDO.class);
+        verify(cargoOrderMapper).updateById(cargoCaptor.capture());
+        assertEquals(ReviewStatusEnum.PASSED.getStatus(), cargoCaptor.getValue().getReviewStatus());
+        // 主表流转为待入池（READY_FOR_POOL，唯一可归集入池状态）
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).updateById(orderCaptor.capture());
+        assertEquals(TransportOrderStatusEnum.READY_FOR_POOL.getStatus(), orderCaptor.getValue().getStatus());
+    }
+
+    @Test
+    void createSendOrder_rejected_cargo_moves_to_cancelled() {
+        // 审核引擎判定危险品 → 拒运 → 生命周期终态取消，子表记录原因码 + 兼容 rejectReason
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L).status(0).build());
+        when(stationMapper.selectById(2L)).thenReturn(StationDO.builder().id(2L).status(0).build());
+        when(cargoReviewService.review(any(), any(), any(), any(), any(), any()))
+                .thenReturn(CargoReviewResult.builder()
+                        .reviewStatus(ReviewStatusEnum.REJECTED.getStatus())
+                        .reasonCodes(List.of("DANGEROUS_GOODS"))
+                        .pickupServiceMode("STATION_TO_STATION")
+                        .deliveryServiceMode("STATION_TO_STATION")
+                        .message("货物不符合运输条件")
+                        .build());
+
+        orderService.createSendOrder(100L, sendReqVO(1L, 2L));
+
+        ArgumentCaptor<CargoOrderDO> cargoCaptor = ArgumentCaptor.forClass(CargoOrderDO.class);
+        verify(cargoOrderMapper).updateById(cargoCaptor.capture());
+        assertEquals(ReviewStatusEnum.REJECTED.getStatus(), cargoCaptor.getValue().getReviewStatus());
+        assertEquals("DANGEROUS_GOODS", cargoCaptor.getValue().getReviewReasonCodes());
+        // 主表终态取消，不可入池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).updateById(orderCaptor.capture());
+        assertEquals(TransportOrderStatusEnum.CANCELLED.getStatus(), orderCaptor.getValue().getStatus());
     }
 
     // ==================== 货运审核 ====================
 
     @Test
     void audit_repeated_audit_throws() {
-        // 已审核通过(audit_status=1)的订单重复审核 → 拒绝
+        // 已审核通过(review_status=PASSED)的订单重复审核 → 拒绝
         when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
                 .id(1L).orderType(2).status(TransportOrderStatusEnum.CREATED.getStatus()).build());
         when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
-                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(1).build());
+                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(1)
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
 
         OrderAuditReqVO reqVO = new OrderAuditReqVO();
         reqVO.setOrderId(1L);
@@ -124,6 +179,49 @@ class TransportOrderServiceImplTest {
 
         assertEquals(CARGO_AUDIT_STATUS_ILLEGAL.getCode(), ex.getCode());
         verify(cargoOrderMapper, never()).updateById(any(CargoOrderDO.class));
+    }
+
+    @Test
+    void confirmStationAction_waiting_action_to_ready_for_pool() {
+        // 待客户操作(status=7) → 确认送站 → 待入池(status=8)
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).memberUserId(100L)
+                .status(TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus()).build());
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
+
+        orderService.confirmStationAction(100L, 1L);
+
+        ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).update(captor.capture(), any());
+        assertEquals(TransportOrderStatusEnum.READY_FOR_POOL.getStatus(), captor.getValue().getStatus());
+    }
+
+    @Test
+    void confirmStationAction_not_owner_throws() {
+        // 非下单人 → 无权操作
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).memberUserId(200L)
+                .status(TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus()).build());
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> orderService.confirmStationAction(100L, 1L));
+
+        assertEquals(SEND_ORDER_NOT_YOURS.getCode(), ex.getCode());
+        verify(orderMapper, never()).update(any(TransportOrderDO.class), any());
+    }
+
+    @Test
+    void confirmStationAction_wrong_status_throws() {
+        // 已入池(status=1)状态确认 → 拒绝（仅待客户操作可确认）
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).memberUserId(100L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build());
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> orderService.confirmStationAction(100L, 1L));
+
+        assertEquals(SEND_ORDER_STATUS_ILLEGAL.getCode(), ex.getCode());
+        verify(orderMapper, never()).update(any(TransportOrderDO.class), any());
     }
 
     @Test

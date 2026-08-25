@@ -155,6 +155,9 @@ yudao:
     algorithm:
       # 仅由后端 transport 算法适配层访问，前端不得直连。
       base-url: ${ALGORITHM_BASE_URL:http://127.0.0.1:18080}
+    simulation:
+      # 模拟运营引擎开关：生产默认 false（false 时所有模拟控制为 no-op，监控不采用模拟位置）。
+      enabled: ${SIMULATION_ENABLED:false}
   codegen:
     base-package: ${yudao.info.base-package}
     db-schemas: ${spring.datasource.dynamic.datasource.master.name}

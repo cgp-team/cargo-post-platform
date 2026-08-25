@@ -284,12 +284,19 @@ public class AppBusServiceImpl implements AppBusService {
                 }).toList();
     }
 
-    /** 位置新鲜度：REAL(5min 内真实上报)→REAL_FRESH；SIMULATED→SIMULATED；无坐标→NO_LOCATION */
+    /** 真实位置新鲜度阈值（分钟）：超过视为 STALE（司机中断上报但未超过监控窗口） */
+    private static final long REAL_FRESH_MINUTES = 5;
+
+    /** 位置新鲜度：REAL 且 lastLocationTime<5min→REAL_FRESH；REAL 且 ≥5min→REAL_STALE；SIMULATED→SIMULATED；无坐标→NO_LOCATION */
     private String locationSource(MonitoringVehicleRespVO v) {
         if (v.getLongitude() == null || v.getLatitude() == null) {
             return "NO_LOCATION";
         }
         if (AppBusNearbyRespVO.SOURCE_REAL.equals(v.getDataSource())) {
+            if (v.getLastLocationTime() != null
+                    && v.getLastLocationTime().isBefore(LocalDateTime.now().minusMinutes(REAL_FRESH_MINUTES))) {
+                return "REAL_STALE";
+            }
             return "REAL_FRESH";
         }
         return "SIMULATED";

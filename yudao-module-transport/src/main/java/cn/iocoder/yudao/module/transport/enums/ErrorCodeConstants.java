@@ -39,7 +39,7 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_DEPOT_NOT_EXISTS = new ErrorCode(1_005_008_005, "场站不存在");
     ErrorCode DISPATCH_NO_FEASIBLE = new ErrorCode(1_005_008_006, "算法判定无可行解:{}");
     ErrorCode DISPATCH_SCALE_OVER_LIMIT = new ErrorCode(1_005_008_007, "智能派单规模超出算法上限（30 站点 / 25 订单 / 3 车），当前 {}，请拆分批次或减少订单");
-    ErrorCode DISPATCH_ORDER_NOT_COLLECTABLE = new ErrorCode(1_005_008_008, "部分订单当前状态不可归集（仅待调度/审核通过的货运可入池）");
+    ErrorCode DISPATCH_ORDER_NOT_COLLECTABLE = new ErrorCode(1_005_008_008, "部分订单当前状态不可归集（仅承运审核通过的待入池订单可入池）");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");
@@ -53,6 +53,8 @@ public interface ErrorCodeConstants {
     // Send（小程序寄货）
     ErrorCode SEND_ORDER_USER_NOT_LOGIN = new ErrorCode(1_005_010_006, "请先登录");
     ErrorCode SEND_STATIONS_SAME = new ErrorCode(1_005_010_007, "取货站点和送达站点不能相同");
+    ErrorCode SEND_ORDER_STATUS_ILLEGAL = new ErrorCode(1_005_010_008, "订单当前状态不允许该操作");
+    ErrorCode SEND_ORDER_NOT_YOURS = new ErrorCode(1_005_010_009, "无权操作该订单");
     // Driver App（司机端）
     ErrorCode DRIVER_NOT_FOUND = new ErrorCode(1_005_011_000, "未找到司机档案");
     ErrorCode DRIVER_VEHICLE_NOT_BOUND = new ErrorCode(1_005_011_001, "司机未绑定车辆");

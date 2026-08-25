@@ -59,6 +59,13 @@ public class AppDriverController {
         return success(driverAppService.tasks(driverId));
     }
 
+    @GetMapping("/route")
+    @Operation(summary = "司机路线（完整任务段有序经停 + 真实道路 polyline + 偏航判定，Phase 9 地图数据）")
+    @Parameter(name = "driverId", description = "司机编号", required = true)
+    public CommonResult<AppDriverRouteRespVO> route(@RequestParam("driverId") Long driverId) {
+        return success(driverAppService.getRoute(driverId));
+    }
+
     @PostMapping("/depart")
     @Operation(summary = "发车（创建班次执行，货运订单推进已发车）")
     public CommonResult<Boolean> depart(@Valid @RequestBody AppDriverDepartReqVO reqVO) {

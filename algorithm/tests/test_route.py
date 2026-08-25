@@ -31,7 +31,8 @@ class _FakeResponse:
 
 
 class _FakeAmapClient:
-    """模拟 httpx.Client：按 origins 数返回确定性距离/时长，可注入故障；calls 记录外部调用次数。"""
+    """模拟 httpx.Client：距离矩阵 API 按 origins 数返回；驾车路径 API（/route）返回 polyline。
+    可注入故障；calls 记录外部调用次数。"""
 
     def __init__(self, meters: int = 2800, seconds: int = 360, failure: str | None = None):
         self.meters = meters
@@ -45,16 +46,28 @@ class _FakeAmapClient:
             raise httpx.ConnectError("connection refused")
         if self.failure == "status0":
             return _FakeResponse({"status": "0", "info": "DAILY_QUERY_OVER_LIMIT", "infocode": "10003"})
-        origins = params["origins"].split("|")
-        results = []
-        for i in range(len(origins)):
-            if self.failure == "result_error" and i == 0:
-                results.append({"origin_id": "1", "dest_id": "1", "info": "未知错误", "code": "2"})
-            else:
-                results.append(
-                    {"origin_id": str(i + 1), "dest_id": "1", "distance": str(self.meters), "duration": str(self.seconds)}
-                )
-        return _FakeResponse({"status": "1", "info": "OK", "infocode": "10000", "results": results})
+        if "origins" in params:
+            # 距离矩阵 API（/distance、派单矩阵）
+            origins = params["origins"].split("|")
+            results = []
+            for i in range(len(origins)):
+                if self.failure == "result_error" and i == 0:
+                    results.append({"origin_id": "1", "dest_id": "1", "info": "未知错误", "code": "2"})
+                else:
+                    results.append(
+                        {"origin_id": str(i + 1), "dest_id": "1", "distance": str(self.meters), "duration": str(self.seconds)}
+                    )
+            return _FakeResponse({"status": "1", "info": "OK", "infocode": "10000", "results": results})
+        # 驾车路径 API（/route，含 polyline）
+        if self.failure == "result_error":
+            return _FakeResponse({"status": "1", "route": {"paths": []}})
+        return _FakeResponse({
+            "status": "1", "info": "OK", "infocode": "10000",
+            "route": {"paths": [{
+                "distance": str(self.meters), "duration": str(self.seconds),
+                "polyline": "104.0657,30.5723;104.08,30.58;104.1234,30.6012",
+            }]},
+        })
 
 
 def _payload(olat=30.5723, olon=104.0657, dlat=30.6012, dlon=104.1234) -> dict:
@@ -75,6 +88,9 @@ def test_route_success_returns_amap_km_and_seconds(monkeypatch: pytest.MonkeyPat
     assert body["distanceKm"] == 2.8        # 2800 米 → km
     assert body["durationSeconds"] == 360
     assert body["provider"] == "amap"
+    # Phase 6：真实道路 polyline 随路线返回（≥2 个坐标点，GCJ-02）
+    assert body["polyline"] and len(body["polyline"]) >= 2
+    assert body["polyline"][0]["longitude"] == 104.0657
 
 
 def test_route_duration_and_distance_correct(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,15 +137,15 @@ def test_route_without_key_returns_euclidean(monkeypatch: pytest.MonkeyPatch) ->
     assert body["distanceKm"] > 0
 
 
-def test_route_cache_reuses_matrix_without_extra_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_cache_reuses_polyline_without_extra_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _FakeAmapClient(meters=2800, seconds=360)
     monkeypatch.setattr(main, "amap_provider", AmapDistanceProvider(key="test-key", client=client))
     with TestClient(main.app) as http:
         http.post("/api/v1/route", json=_payload())
-        http.post("/api/v1/route", json=_payload())  # 同坐标 → 命中进程缓存
+        http.post("/api/v1/route", json=_payload())  # 同坐标 → 命中进程缓存（RoadSegment 缓存，禁止每车每 5s 打高德）
         http.post("/api/v1/route", json=_payload(olon=104.07))  # 坐标变了 → 新缓存键
-    # 同坐标只调 1 次高德；不同坐标再调（get_matrix 每 destination 一次，2 点 → 2 次）
-    assert client.calls and len(client.calls) == 4  # 首次 2 次 + 变坐标 2 次，缓存命中不新增
+    # 同坐标只调 1 次高德；不同坐标再调 1 次，缓存命中不新增
+    assert client.calls and len(client.calls) == 2
 
 
 @pytest.mark.parametrize("lat,lon", [(-95.0, 104.0), (95.0, 104.0), (30.0, -190.0), (30.0, 190.0)])

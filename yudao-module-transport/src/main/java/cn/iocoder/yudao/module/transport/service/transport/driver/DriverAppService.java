@@ -24,6 +24,13 @@ public interface DriverAppService {
     /** 调度任务（算法派单结果；司机身份从登录态解析，driverId 仅做一致性校验） */
     List<AppDriverTaskRespVO> tasks(Long driverId);
 
+    /**
+     * 司机路线（地图数据，Phase 9）：完整任务段的有序经停 + 真实道路 polyline。
+     * 运营顺序来自 DispatchPlan，道路轨迹来自 RoadSegments（/api/v1/route，失败回退直线明确 euclidean）。
+     * 返回当前车辆位置对规划 polyline 的偏航判定（>100m 标记 ROUTE_DEVIATED，只报警不自动改方案）。
+     */
+    AppDriverRouteRespVO getRoute(Long driverId);
+
     /** 发车：创建/复用当天班次执行记录并置在途，该司机名下已分配货运订单推进为已发车 */
     void depart(AppDriverDepartReqVO reqVO);
 

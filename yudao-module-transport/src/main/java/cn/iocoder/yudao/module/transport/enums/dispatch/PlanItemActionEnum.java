@@ -15,7 +15,8 @@ public enum PlanItemActionEnum {
     ALIGHT(2, "ALIGHT"),
     DELIVER(3, "DELIVER"),
     PICKUP(4, "PICKUP"),
-    RETURN(5, "RETURN");
+    RETURN(5, "RETURN"),
+    PASS(6, "PASS");
 
     private final Integer action;
     /** 契约字符串，见 docs/api/algorithm-api.yaml */
