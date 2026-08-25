@@ -65,4 +65,11 @@ public class SimulationController {
         return success(true);
     }
 
+    @GetMapping("/status")
+    @Operation(summary = "查询模拟运行状态（控制页轮询）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:smart-plan')")
+    public CommonResult<SimulationStatusRespVO> status(@RequestParam("vehicleId") Long vehicleId) {
+        return success(simulationService.getStatus(vehicleId));
+    }
+
 }
