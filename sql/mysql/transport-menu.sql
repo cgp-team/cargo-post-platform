@@ -117,7 +117,8 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 -- Monitoring
 (6877, '车辆监控', '', 1, 9, 6800, 'monitoring', 'ep:map-location', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
 (6878, '实时监控', 'transport:monitoring:query', 2, 1, 6877, 'map', '', 'transport/monitoring/index', 'TransportMonitoring', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
-(6879, '轨迹回放', 'transport:monitoring:query', 2, 2, 6877, 'replay', '', 'transport/monitoring/replay', 'TransportMonitoringReplay', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
+(6879, '轨迹回放', 'transport:monitoring:query', 2, 2, 6877, 'replay', '', 'transport/monitoring/replay', 'TransportMonitoringReplay', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'),
+(6915, '模拟运营', 'transport:dispatch:smart-plan', 2, 3, 6877, 'simulation', 'ep:video-play', 'transport/simulation/index', 'TransportSimulation', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 -- Product
