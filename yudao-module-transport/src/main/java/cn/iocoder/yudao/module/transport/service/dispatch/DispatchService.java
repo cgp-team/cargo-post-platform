@@ -11,12 +11,12 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 public interface DispatchService {
 
     /**
-     * 获得调度订单池分页（待调度 + 已入池订单）
+     * 获得调度订单池分页（待入池 + 已入池订单）
      */
     PageResult<TransportOrderDO> getOrderPoolPage(DispatchPoolPageReqVO reqVO);
 
     /**
-     * 订单归集：把创建时间落在批次区间内的待调度订单批量入池
+     * 订单归集：把创建时间落在批次区间内的待入池订单批量入池
      *
      * @return 入池订单数量，0 条时不报错返回 0
      */

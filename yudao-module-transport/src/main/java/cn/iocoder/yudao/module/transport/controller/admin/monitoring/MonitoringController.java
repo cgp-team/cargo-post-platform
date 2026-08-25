@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.transport.controller.admin.monitoring;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
@@ -49,6 +50,13 @@ public class MonitoringController {
     @PreAuthorize("@ss.hasPermission('transport:monitoring:query')")
     public CommonResult<List<MonitoringShiftRespVO>> getShiftExecution() {
         return success(monitoringService.getShiftExecution());
+    }
+
+    @GetMapping("/vehicle-plan")
+    @Operation(summary = "获取车辆任务段详情（后台调度地图：完整任务段 + 真实道路 polyline + 乘客/货运动作）")
+    @PreAuthorize("@ss.hasPermission('transport:monitoring:query')")
+    public CommonResult<MonitoringPlanRespVO> getVehiclePlan(@RequestParam("vehicleId") Long vehicleId) {
+        return success(monitoringService.getVehiclePlan(vehicleId));
     }
 
     @GetMapping("/track")

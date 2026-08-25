@@ -13,6 +13,7 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppD
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverProfileRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanLogDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -25,6 +26,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanLogMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
@@ -39,6 +41,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,6 +58,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_CARGO_FULL;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.DRIVER_IDENTITY_MISMATCH;
@@ -92,6 +98,7 @@ class DriverAppServiceImplTest {
     @Mock private PostalOrderMapper postalOrderMapper;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DispatchPlanMapper dispatchPlanMapper;
+    @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Mock private ShiftExecutionMapper shiftExecutionMapper;
     @Mock private VehicleLocationMapper vehicleLocationMapper;
     @Mock private VehicleLocationTrackMapper vehicleLocationTrackMapper;
@@ -114,6 +121,7 @@ class DriverAppServiceImplTest {
         ReflectionTestUtils.setField(driverAppService, "postalOrderMapper", postalOrderMapper);
         ReflectionTestUtils.setField(driverAppService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(driverAppService, "dispatchPlanMapper", dispatchPlanMapper);
+        ReflectionTestUtils.setField(driverAppService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
         ReflectionTestUtils.setField(driverAppService, "shiftExecutionMapper", shiftExecutionMapper);
         ReflectionTestUtils.setField(driverAppService, "vehicleLocationMapper", vehicleLocationMapper);
         ReflectionTestUtils.setField(driverAppService, "vehicleLocationTrackMapper", vehicleLocationTrackMapper);
@@ -249,6 +257,44 @@ class DriverAppServiceImplTest {
         assertEquals(11L, captor.getValue().getCurrentStationId());
         assertEquals(0, captor.getValue().getStatus());
         assertNull(captor.getValue().getArriveTime());
+    }
+
+    @Test
+    void arrive_syncs_task_item_status() {
+        // Phase 8 回归：到站后按任务段推进明细状态（后端为源）——之前 COMPLETED / 当前 ARRIVED / 其后 PENDING
+        loginMember();
+        stubLoginDriver();
+        when(shiftMapper.selectById(10L)).thenReturn(ShiftDO.builder().id(10L).routeId(5L).build());
+        ShiftExecutionDO exec = todayExecution(0);
+        exec.setCurrentStationId(11L); // 已到首站，本次到第 2 站 S2
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(exec);
+        when(routeStationMapper.selectListByRouteIds(List.of(5L))).thenReturn(List.of(
+                RouteStationDO.builder().routeId(5L).stationId(11L).sequenceNo(1).build(),
+                RouteStationDO.builder().routeId(5L).stationId(22L).sequenceNo(2).build()));
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanItemDO.builder().id(1L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(11L).visitSequence(1).status(TaskItemStatusEnum.PENDING.getStatus()).build(),
+                DispatchPlanItemDO.builder().id(2L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(22L).visitSequence(2).status(TaskItemStatusEnum.PENDING.getStatus()).build(),
+                DispatchPlanItemDO.builder().id(3L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(1L).visitSequence(3).status(TaskItemStatusEnum.PENDING.getStatus()).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build())); // RUNNING
+
+        AppDriverArriveReqVO reqVO = new AppDriverArriveReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setShiftId(10L);
+        reqVO.setStationId(22L);
+        driverAppService.arrive(reqVO);
+
+        // 到 S2(seq2)：S1 COMPLETED、S2 ARRIVED；场站原本 PENDING 无需更新（仅 2 条 updateById）
+        ArgumentCaptor<DispatchPlanItemDO> captor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper, times(2)).updateById(captor.capture());
+        Map<Long, Integer> statusById = captor.getAllValues().stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getId, DispatchPlanItemDO::getStatus));
+        assertEquals(TaskItemStatusEnum.COMPLETED.getStatus(), statusById.get(1L));
+        assertEquals(TaskItemStatusEnum.ARRIVED.getStatus(), statusById.get(2L));
     }
 
     @Test
@@ -590,6 +636,35 @@ class DriverAppServiceImplTest {
         ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
         verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
         assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+    }
+
+    @Test
+    void deliver_completes_plan_when_all_orders_done() {
+        // P1-003 回归：方案内订单全部完成后，方案从执行中流转为已完成并写日志
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, 10L);
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(2));
+        // maybeCompletePlan：方案执行中，方案内唯一订单已完成
+        when(dispatchPlanMapper.selectById(100L)).thenReturn(
+                DispatchPlanDO.builder().id(100L).status(DispatchPlanStatusEnum.RUNNING.getStatus()).build());
+        when(transportOrderMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1000L).status(TransportOrderStatusEnum.COMPLETED.getStatus()).build()));
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        driverAppService.deliver(reqVO);
+
+        // 方案 → 已完成并写日志
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        assertEquals(DispatchPlanStatusEnum.COMPLETED.getStatus(), planCaptor.getValue().getStatus());
+        verify(dispatchPlanLogMapper).insert(any(DispatchPlanLogDO.class));
     }
 
     @Test

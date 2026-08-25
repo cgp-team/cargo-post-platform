@@ -2,11 +2,15 @@ package cn.iocoder.yudao.module.transport.service.monitoring;
 
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
@@ -15,8 +19,11 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
@@ -25,6 +32,12 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
+import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -81,6 +94,11 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
+    @Resource private SimulationEngine simulationEngine;
+    @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
+    @Resource private TransportOrderMapper transportOrderMapper;
+    @Resource private AlgorithmClient algorithmClient;
 
     @Override
     public MonitoringMapDataRespVO getMapData() {
@@ -134,9 +152,10 @@ public class MonitoringServiceImpl implements MonitoringService {
         // 全量班次（真实上报车辆按 location.shiftId 关联班次/线路用）
         Map<Long, ShiftDO> shiftMap = shiftMapper.selectList().stream()
                 .collect(Collectors.toMap(ShiftDO::getId, Function.identity(), (a, b) -> a));
-        // 司机上报的实时位置（5 分钟内有效）：存在时优先于插值模拟
+        // 司机上报的实时位置（15 分钟内有效）：存在时优先于插值模拟；
+        // 前端按 lastLocationTime 区分 REAL_FRESH(<5min)/REAL_STALE(≥5min，司机中断上报)（Phase 10）
         Map<Long, VehicleLocationDO> realLocationMap = vehicleLocationMapper
-                .selectRecent(LocalDateTime.now().minusMinutes(5)).stream()
+                .selectRecent(LocalDateTime.now().minusMinutes(15)).stream()
                 .collect(Collectors.toMap(VehicleLocationDO::getVehicleId, Function.identity(), (a, b) -> a));
 
         // 模拟排班：启用班次按发车时间升序，轮转分配给可用车辆（一车多班）。
@@ -194,6 +213,20 @@ public class MonitoringServiceImpl implements MonitoringService {
             ShiftDO shift = selectCurrentShift(vehicleShiftsMap.get(vehicle.getId()), now);
             if (shift == null) {
                 vo.setStatus(STATUS_IDLE);
+                return vo;
+            }
+            // Phase 7 模拟运营：有活跃模拟运行（且 simulationEnabled=true）时，沿真实道路 polyline 推进
+            SimulationEngine.SimTick sim = simulationEngine.tick(vehicle.getId());
+            if (sim != null) {
+                SimulationEngine.SimRun simRun = simulationEngine.getRun(vehicle.getId());
+                vo.setStatus(STATUS_IN_TRANSIT);
+                vo.setLongitude(sim.getLongitude());
+                vo.setLatitude(sim.getLatitude());
+                vo.setDataSource("SIMULATED");
+                vo.setNextStationName(sim.getStationName());
+                if (simRun != null && simRun.getTotalSimSeconds() > 0) {
+                    vo.setProgress((int) Math.min(100, sim.getSimSeconds() * 100 / simRun.getTotalSimSeconds()));
+                }
                 return vo;
             }
             vo.setShiftCode(shift.getShiftCode());
@@ -279,6 +312,136 @@ public class MonitoringServiceImpl implements MonitoringService {
             return point;
         }).toList());
         return respVO;
+    }
+
+    /** 经停动作中文名 */
+    private static final Map<Integer, String> ACTION_NAMES = Map.of(
+            0, "出发", 1, "接客", 2, "送客", 3, "派送", 4, "揽收", 5, "返回", 6, "经停");
+
+    @Override
+    public MonitoringPlanRespVO getVehiclePlan(Long vehicleId) {
+        VehicleDO vehicle = vehicleMapper.selectById(vehicleId);
+        if (vehicle == null) {
+            return null;
+        }
+        MonitoringPlanRespVO vo = new MonitoringPlanRespVO();
+        vo.setVehicleId(vehicleId);
+        vo.setPlateNo(vehicle.getPlateNo());
+        // 最新位置（REAL 优先；模拟引擎运行中取引擎位置）
+        VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
+        if (loc != null && loc.getLongitude() != null) {
+            vo.setLongitude(toDouble(loc.getLongitude()));
+            vo.setLatitude(toDouble(loc.getLatitude()));
+            vo.setDataSource("REAL");
+        } else {
+            SimulationEngine.SimTick sim = simulationEngine.tick(vehicleId);
+            if (sim != null) {
+                vo.setLongitude(sim.getLongitude());
+                vo.setLatitude(sim.getLatitude());
+                vo.setDataSource("SIMULATED");
+            }
+        }
+        // 该车辆方案（取最新一条已下发/执行中）
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getVehicleId, vehicleId));
+        if (items.isEmpty()) {
+            return vo;
+        }
+        Set<Long> planIds = items.stream().map(DispatchPlanItemDO::getPlanId).collect(Collectors.toSet());
+        Map<Long, DispatchPlanDO> planMap = planIds.isEmpty() ? Map.of()
+                : dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
+                        .in(DispatchPlanDO::getId, planIds))
+                .stream().collect(Collectors.toMap(DispatchPlanDO::getId, Function.identity(), (a, b) -> a));
+        DispatchPlanItemDO anchor = items.stream()
+                .filter(i -> planMap.containsKey(i.getPlanId()))
+                .max(Comparator.comparing(DispatchPlanItemDO::getId)).orElse(null);
+        if (anchor == null) {
+            return vo;
+        }
+        DispatchPlanDO plan = planMap.get(anchor.getPlanId());
+        vo.setPlanId(plan.getId());
+        vo.setPlanStatusName(DispatchPlanStatusEnum.nameOf(plan.getStatus()));
+        vo.setTaskWindowStart(plan.getTaskWindowStart());
+        vo.setTaskWindowEnd(plan.getTaskWindowEnd());
+        // 该方案该车辆经停（运营顺序来自 DispatchPlan）
+        items = items.stream()
+                .filter(i -> Objects.equals(i.getPlanId(), plan.getId()))
+                .sorted(Comparator.comparing(DispatchPlanItemDO::getVisitSequence,
+                        Comparator.nullsLast(Integer::compareTo)))
+                .toList();
+        Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        Set<Long> orderIds = items.stream().map(DispatchPlanItemDO::getOrderId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, String> orderNoMap = orderIds.isEmpty() ? Map.of()
+                : transportOrderMapper.selectBatchIds(orderIds).stream()
+                        .collect(Collectors.toMap(TransportOrderDO::getId, TransportOrderDO::getOrderNo, (a, b) -> a));
+        // 真实道路 polyline（RoadSegments，与司机端同一份；来源恒为 amap，逐段 euclidean 兜底不深究）
+        List<double[]> fullPolyline = new ArrayList<>();
+        List<MonitoringPlanRespVO.Stop> stops = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            DispatchPlanItemDO item = items.get(i);
+            StationDO station = item.getStationId() != null ? stationMap.get(item.getStationId()) : null;
+            MonitoringPlanRespVO.Stop stop = new MonitoringPlanRespVO.Stop();
+            stop.setStationId(item.getStationId());
+            stop.setStationName(station != null ? station.getStationName() : "");
+            if (station != null) {
+                stop.setLongitude(station.getLongitude() != null ? station.getLongitude().doubleValue() : null);
+                stop.setLatitude(station.getLatitude() != null ? station.getLatitude().doubleValue() : null);
+            }
+            stop.setVisitSequence(item.getVisitSequence());
+            stop.setActionName(ACTION_NAMES.getOrDefault(item.getActionType(), ""));
+            stop.setOrderId(item.getOrderId());
+            stop.setOrderNo(item.getOrderId() != null ? orderNoMap.get(item.getOrderId()) : null);
+            stop.setQuantity(item.getQuantity());
+            stop.setEstimatedArrivalTime(item.getEstimatedArrivalTime());
+            stop.setPlannedDepartureTime(item.getPlannedDepartureTime());
+            stop.setStatus(item.getStatus());
+            stop.setStatusName(TaskItemStatusEnum.nameOf(item.getStatus()));
+            stops.add(stop);
+            if (i > 0) {
+                DispatchPlanItemDO prev = items.get(i - 1);
+                StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
+                List<double[]> seg = fetchPlanPolyline(from, station);
+                if (seg != null) {
+                    if (fullPolyline.isEmpty()) {
+                        fullPolyline.addAll(seg);
+                    } else {
+                        fullPolyline.addAll(seg.subList(1, seg.size()));
+                    }
+                }
+            }
+        }
+        vo.setStops(stops);
+        vo.setPolyline(fullPolyline.stream().map(p -> new MonitoringPlanRespVO.Point(p[0], p[1])).toList());
+        vo.setRouteProvider("amap");
+        return vo;
+    }
+
+    /** 坐标对 → 真实道路 polyline（算法 /route；不可用回退两点直线，明确 euclidean） */
+    private List<double[]> fetchPlanPolyline(StationDO from, StationDO to) {
+        if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+                || to.getLongitude() == null || to.getLatitude() == null) {
+            return null;
+        }
+        try {
+            AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
+                    .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
+                            .longitude(from.getLongitude().doubleValue()).latitude(from.getLatitude().doubleValue()).build())
+                    .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
+                            .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
+                    .build());
+            if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
+                    && route.getPolyline().size() >= 2) {
+                return route.getPolyline().stream()
+                        .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
+                        .collect(Collectors.toList());
+            }
+        } catch (Exception ignored) {
+            // 算法不可用：走直线兜底
+        }
+        return List.of(new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
+                new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
     }
 
     /** 从 map 按 id 取对象的指定字段（对象缺失返回 null） */

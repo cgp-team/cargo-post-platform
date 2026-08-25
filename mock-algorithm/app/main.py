@@ -49,6 +49,8 @@ class Vehicle(BaseModel):
     vehicleId: int
     passengerCapacity: int = Field(default=5, ge=1)
     cargoCapacity: int = Field(default=4, ge=1)
+    # 公交骨架（Mandatory Passenger Service）：车辆必须按序经停的站点编号（不含场站）；Mock 接受但不参与求解
+    skeleton: list[str] | None = None
 
 
 class PlanOrder(BaseModel):
@@ -223,25 +225,29 @@ def haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     return 2 * 6371.0 * asin(sqrt(a))
 
 
-def demand(request: PlanRequest) -> tuple[int, int]:
+def demand(request: PlanRequest) -> tuple[int, int, int]:
+    """与真实算法一致：载客按人数累计；载货按净载荷双维度拆分派送/揽收。"""
     passengers = sum(1 for order in request.orders if order.orderType == OrderType.PASSENGER)
-    cargo = sum(order.itemCount for order in request.orders if order.orderType != OrderType.PASSENGER)
-    return passengers, cargo
+    deliveries = sum(order.itemCount for order in request.orders if order.orderType == OrderType.DELIVERY)
+    pickups = sum(order.itemCount for order in request.orders if order.orderType == OrderType.PICKUP)
+    return passengers, deliveries, pickups
 
 
 def build_result(request: PlanRequest) -> PlanResult:
-    """按"优先单车、装不下自动加车"的规则生成确定性 Mock 方案，不做真实寻优。"""
-    passengers, cargo = demand(request)
+    """按"优先单车、装不下自动加车"的规则生成确定性 Mock 方案，不做真实寻优。
+    载货净载荷双维度口径与真实算法一致：派送累计 / 揽收累计 分别不超总货仓容量。"""
+    passengers, deliveries, pickups = demand(request)
     used: list[Vehicle] = []
-    covered_passengers = covered_cargo = 0
+    covered_passengers = covered_deliveries = covered_pickups = 0
     for vehicle in request.vehicles:
-        if covered_passengers >= passengers and covered_cargo >= cargo:
+        if covered_passengers >= passengers and covered_deliveries >= deliveries and covered_pickups >= pickups:
             break
         used.append(vehicle)
         covered_passengers += vehicle.passengerCapacity
-        covered_cargo += vehicle.cargoCapacity
+        covered_deliveries += vehicle.cargoCapacity
+        covered_pickups += vehicle.cargoCapacity
 
-    if covered_passengers < passengers or covered_cargo < cargo:
+    if covered_passengers < passengers or covered_deliveries < deliveries or covered_pickups < pickups:
         return PlanResult(
             requestId=request.requestId,
             status="infeasible",

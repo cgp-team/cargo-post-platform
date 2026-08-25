@@ -32,6 +32,7 @@ class StopAction(str, Enum):
     ALIGHT = "ALIGHT"
     DELIVER = "DELIVER"
     PICKUP = "PICKUP"
+    PASS = "PASS"
     RETURN = "RETURN"
 
 
@@ -45,6 +46,9 @@ class Vehicle(BaseModel):
     vehicleId: int
     passengerCapacity: int = Field(default=5, ge=1)
     cargoCapacity: int = Field(default=4, ge=1)
+    # 公交骨架（Mandatory Passenger Service）：车辆必须按顺序经停的站点编号列表（不含场站）。
+    # 提供时该车辆按骨架顺序强制停靠，货运/揽收作为绕行插入骨架间隙；缺省为纯 VRP。
+    skeleton: list[str] | None = None
 
 
 class PlanOrder(BaseModel):
@@ -101,6 +105,14 @@ class RouteStop(BaseModel):
     segmentDistance: float = 0.0
     # 分段路网行驶秒数（仅高德矩阵路径；欧氏路径为 None，后端按直线÷均速兜底）
     segmentDuration: float | None = None
+    # 算法解释（仅货运/揽收经停 PICKUP/DELIVER 携带，供后台"为什么这样安排"展示）
+    accepted: bool = True
+    serviceMode: str | None = None
+    servicePoint: str | None = None
+    detourDistance: float | None = None
+    detourDuration: float | None = None
+    passengerImpact: float | None = None
+    reasonCode: str | None = None
 
 
 class VehiclePlan(BaseModel):
@@ -187,3 +199,5 @@ class RouteResponse(BaseModel):
     provider: str = "amap"
     # 不可用时原因码（如 ROUTE_UNAVAILABLE）
     reasonCode: str | None = None
+    # 真实道路 polyline（GCJ-02 坐标点序列，供车辆沿真实道路运行；euclidean 兜底时仅起终点两点）
+    polyline: list[RoutePoint] | None = None

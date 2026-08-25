@@ -5,12 +5,14 @@
       <el-form :inline="true" :model="poolQuery" @submit.prevent="getPoolList">
         <el-form-item label="订单状态">
           <el-select v-model="poolQuery.status" placeholder="请选择" clearable style="width:140px">
-            <el-option label="待调度" :value="0" />
+            <el-option label="待入池" :value="8" />
             <el-option label="已入池" :value="1" />
             <el-option label="已分配" :value="2" />
             <el-option label="已发车" :value="3" />
             <el-option label="已完成" :value="4" />
             <el-option label="已取消" :value="5" />
+            <el-option label="待客户操作" :value="7" />
+            <el-option label="待审核" :value="6" />
           </el-select>
         </el-form-item>
         <el-form-item label="订单类型">
@@ -400,10 +402,11 @@ const orderTypeLabel = (type?: number) => (type === undefined ? '-' : orderTypeL
 const orderTypeTagMap: Record<number, TagType> = { 1: 'success', 2: 'warning', 3: 'info' }
 const orderTypeTag = (type?: number): TagType => (type === undefined ? 'info' : orderTypeTagMap[type] || 'info')
 
-// 订单状态:0 待调度 1 已入池 2 已分配 3 已发车 4 已完成 5 已取消
-const orderStatusLabelMap: Record<number, string> = { 0: '待调度', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消' }
+// 订单状态(OrderLifecycle):0 已创建 6 待审核 7 待客户操作 8 待入池 1 已入池 2 已分配 3 已发车 4 已完成 5 已取消
+// Phase 2/3：承运审核前置——仅「待入池(8)」可归集入池
+const orderStatusLabelMap: Record<number, string> = { 0: '已创建', 6: '待审核', 7: '待客户操作', 8: '待入池', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消' }
 const orderStatusLabel = (status?: number) => (status === undefined ? '-' : orderStatusLabelMap[status] || '未知')
-const orderStatusTagMap: Record<number, TagType> = { 0: 'info', 1: 'warning', 2: 'primary', 3: 'success', 4: 'success', 5: 'danger' }
+const orderStatusTagMap: Record<number, TagType> = { 0: 'info', 6: 'warning', 7: 'warning', 8: 'warning', 1: 'warning', 2: 'primary', 3: 'success', 4: 'success', 5: 'danger' }
 const orderStatusTag = (status?: number): TagType => (status === undefined ? 'info' : orderStatusTagMap[status] || 'info')
 
 // 方案状态:0 待审核 1 已下发 2 执行中 3 已完成 4 已作废
@@ -416,10 +419,10 @@ const planStatusTag = (status?: number): TagType => (status === undefined ? 'inf
 const modeLabel = (mode?: number) => (mode === undefined ? '-' : mode === 1 ? '智能' : '手工')
 const modeTag = (mode?: number): TagType => (mode === 1 ? 'success' : 'info')
 
-// 经停动作:0 出发 1 接客 2 送客 3 派送 4 揽收 5 返回
-const actionLabelMap: Record<number, string> = { 0: '出发', 1: '接客', 2: '送客', 3: '派送', 4: '揽收', 5: '返回' }
+// 经停动作:0 出发 1 接客 2 送客 3 派送 4 揽收 5 返回 6 经停
+const actionLabelMap: Record<number, string> = { 0: '出发', 1: '接客', 2: '送客', 3: '派送', 4: '揽收', 5: '返回', 6: '经停' }
 const actionLabel = (type?: number) => (type === undefined ? '-' : actionLabelMap[type] || '未知')
-const actionTagMap: Record<number, TagType> = { 0: 'info', 1: 'success', 2: 'warning', 3: 'primary', 4: 'primary', 5: 'info' }
+const actionTagMap: Record<number, TagType> = { 0: 'info', 1: 'success', 2: 'warning', 3: 'primary', 4: 'primary', 5: 'info', 6: 'info' }
 const actionTag = (type?: number): TagType => (type === undefined ? 'info' : actionTagMap[type] || 'info')
 
 // 站点/车辆精简列表
@@ -467,8 +470,8 @@ const resetPoolQuery = () => {
   Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: 1, orderType: undefined })
   getPoolList()
 }
-// 待调度(status=0)可勾选归集入池；已入池(status=1)可勾选手工/智能派单
-const poolSelectable = (row: DispatchApi.DispatchOrderVO) => row.status === 0 || row.status === 1
+// 待入池(status=8)可勾选归集入池；已入池(status=1)可勾选手工/智能派单
+const poolSelectable = (row: DispatchApi.DispatchOrderVO) => row.status === 8 || row.status === 1
 const handleSelectionChange = (rows: DispatchApi.DispatchOrderVO[]) => {
   selectedOrders.value = rows
 }
@@ -503,15 +506,15 @@ const resetPlanQuery = () => {
   getPlanList()
 }
 
-/** 归集入池：勾选待调度订单后按 orderIds 归集（不再用时间弹窗，语义与勾选一致） */
+/** 归集入池：勾选待入池订单后按 orderIds 归集（仅承运审核通过的待入池订单可入池） */
 const collectLoading = ref(false)
-/** 可归集订单（待调度 status=0） */
-const collectableSelected = computed(() => selectedOrders.value.filter((o) => o.status === 0))
-/** 归集按钮禁用：当前筛选已入池(status=1) 或 无待调度勾选 */
+/** 可归集订单（待入池 status=8） */
+const collectableSelected = computed(() => selectedOrders.value.filter((o) => o.status === 8))
+/** 归集按钮禁用：当前筛选已入池(status=1) 或 无待入池勾选 */
 const collectDisabled = computed(() => poolQuery.status === 1 || collectableSelected.value.length === 0)
 const submitCollectBySelection = async () => {
   if (!collectableSelected.value.length) {
-    message.warning('请先选择待调度的订单')
+    message.warning('请先选择待入池的订单')
     return
   }
   collectLoading.value = true

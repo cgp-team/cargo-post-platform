@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 坐标→坐标单路线结果，对齐契约 RouteResponse。
  */
@@ -28,5 +30,23 @@ public class AlgorithmRouteRespDTO {
 
     /** 不可用时原因码（如 ROUTE_UNAVAILABLE） */
     private String reasonCode;
+
+    /** 真实道路 polyline（GCJ-02 坐标点序列；euclidean 兜底时仅起终点两点，不伪装真实道路） */
+    private List<PolylinePoint> polyline;
+
+    /** polyline 坐标点 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PolylinePoint {
+
+        /** 经度 */
+        private Double longitude;
+
+        /** 纬度 */
+        private Double latitude;
+
+    }
 
 }
