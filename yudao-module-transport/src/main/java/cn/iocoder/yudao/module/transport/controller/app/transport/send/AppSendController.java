@@ -28,6 +28,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.send.AppSendRouteInfoService;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
@@ -83,6 +84,13 @@ public class AppSendController {
     @Operation(summary = "寄货创建货运订单")
     public CommonResult<AppSendOrderRespVO> create(@Valid @RequestBody AppSendOrderCreateReqVO reqVO) {
         Long orderId = transportOrderService.createSendOrder(getLoginUserId(), reqVO);
+        return success(toRespVO(transportOrderService.get(orderId)));
+    }
+
+    @PostMapping("/confirm-station-action")
+    @Operation(summary = "客户确认已按替代交接送到指定站点（待客户操作 → 待入池）")
+    public CommonResult<AppSendOrderRespVO> confirmStationAction(@RequestParam("orderId") Long orderId) {
+        transportOrderService.confirmStationAction(getLoginUserId(), orderId);
         return success(toRespVO(transportOrderService.get(orderId)));
     }
 
@@ -360,6 +368,13 @@ public class AppSendController {
                 vo.setPhotoUrl(cargo.getPhotoUrl());
                 vo.setAuditStatus(cargo.getAuditStatus());
                 vo.setRejectReason(cargo.getRejectReason());
+                // 承运审核结果 + 原因码 + 服务方式（前端按原因码映射文案，见 reasonCode 契约）
+                vo.setReviewStatus(cargo.getReviewStatus());
+                vo.setReviewStatusName(ReviewStatusEnum.nameOf(cargo.getReviewStatus()));
+                vo.setReviewReasonCodes(cargo.getReviewReasonCodes());
+                vo.setPickupServiceMode(cargo.getPickupServiceMode());
+                vo.setDeliveryServiceMode(cargo.getDeliveryServiceMode());
+                vo.setServicePointStationId(cargo.getServicePointStationId());
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());

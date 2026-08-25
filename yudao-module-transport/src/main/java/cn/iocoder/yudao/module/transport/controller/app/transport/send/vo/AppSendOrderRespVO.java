@@ -16,7 +16,7 @@ public class AppSendOrderRespVO {
     private String orderNo;
     @Schema(description = "订单类型：1客运 2货运 3邮快件")
     private Integer orderType;
-    @Schema(description = "订单状态(0待调度 1已入池 2已分配 3已发车 4已完成 5已取消)")
+    @Schema(description = "订单状态(0已创建 1已入池 2已分配 3已发车 4已完成 5已取消 6待审核 7待客户操作 8待入池)")
     private Integer status;
     @Schema(description = "订单状态名")
     private String statusName;
@@ -28,6 +28,20 @@ public class AppSendOrderRespVO {
     private Integer auditStatus;
     @Schema(description = "拒绝原因（审核拒绝时）")
     private String rejectReason;
+    @Schema(description = "承运审核结果(ReviewStatusEnum)：0待审 1通过 2需客户操作 3需人工 4拒运")
+    private Integer reviewStatus;
+    @Schema(description = "承运审核结果名")
+    private String reviewStatusName;
+    @Schema(description = "承运审核原因码(ReviewReasonCodeEnum，逗号分隔，前端映射文案)")
+    private String reviewReasonCodes;
+    @Schema(description = "取货服务方式(ServiceModeEnum)")
+    private String pickupServiceMode;
+    @Schema(description = "送达服务方式(ServiceModeEnum)")
+    private String deliveryServiceMode;
+    @Schema(description = "建议服务站点编号(替代交接推荐)")
+    private Long servicePointStationId;
+    @Schema(description = "建议服务站点名")
+    private String servicePointStationName;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")

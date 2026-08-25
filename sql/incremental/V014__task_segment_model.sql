@@ -1,0 +1,12 @@
+-- V014：任务段模型（Phase 4）——调度方案/明细补完整连续任务段字段。
+-- 非破坏性 DDL 唯一维护在 sql/mysql/transport-schema.sql，本文件只做人工执行入口。
+-- 已有库执行本文件后，若表已存在（老库），请人工执行文件内注释的 ALTER：
+-- ALTER TABLE `transport_dispatch_plan`
+--   ADD COLUMN `task_window_start` datetime DEFAULT NULL COMMENT '任务段窗口开始(该方案车辆运营起始时刻，默认=批次开始)' AFTER `approved_time`,
+--   ADD COLUMN `task_window_end` datetime DEFAULT NULL COMMENT '任务段窗口结束(默认=开始+预计耗时，方案完成后回写实际终点时刻)' AFTER `task_window_start`;
+-- ALTER TABLE `transport_dispatch_plan_item`
+--   ADD COLUMN `planned_departure_time` datetime DEFAULT NULL COMMENT '计划离站时间(=预计到达+本站作业时长)' AFTER `segment_distance_km`,
+--   ADD COLUMN `service_duration_seconds` int DEFAULT NULL COMMENT '本站作业时长(秒，接/送/派/揽计停站作业)' AFTER `planned_departure_time`,
+--   ADD COLUMN `quantity` int DEFAULT NULL COMMENT '数量(BOARD/ALIGHT=人数，PICKUP/DELIVERY=件数)' AFTER `service_duration_seconds`,
+--   ADD COLUMN `status` tinyint NOT NULL DEFAULT 0 COMMENT '任务段明细状态(TaskItemStatusEnum)：0待执行 1行驶中 2已到站 3上车中 4下车中 5揽收中 6派送中 7已完成 8失败' AFTER `quantity`;
+SOURCE sql/mysql/transport-schema.sql;

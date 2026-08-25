@@ -27,4 +27,7 @@ public class AlgorithmVehicleDTO {
     /** 货仓实时最大包裹件数 */
     private Integer cargoCapacity;
 
+    /** 公交骨架（Mandatory Passenger Service）：该车辆必须按序经停的站点编号（不含场站）。缺省纯 VRP。 */
+    private java.util.List<String> skeleton;
+
 }

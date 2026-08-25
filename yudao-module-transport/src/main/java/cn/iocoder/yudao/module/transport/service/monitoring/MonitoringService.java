@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.service.monitoring;
 
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
@@ -35,4 +36,11 @@ public interface MonitoringService {
      * 获取车辆指定日期的历史轨迹（transport_vehicle_location_track，司机端在途上报）
      */
     MonitoringTrackRespVO getVehicleTrack(Long vehicleId, LocalDate date);
+
+    /**
+     * 后台调度地图：车辆完整任务段详情（Phase 11）。
+     * 运营顺序来自 DispatchPlan，道路轨迹来自 RoadSegments（真实 polyline），
+     * 与司机端共享同一份方案与路线。
+     */
+    MonitoringPlanRespVO getVehiclePlan(Long vehicleId);
 }

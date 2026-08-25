@@ -13,6 +13,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,9 +28,11 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.*;
@@ -158,6 +161,101 @@ class DispatchEstimationServiceTest {
         assertEquals(0, captor.getValue().getEstCost().compareTo(new BigDecimal("25.00")));
         // 有路网分段 → 明确记录 AMAP（高德真实时长）
         assertEquals("AMAP", captor.getValue().getRouteProvider());
+    }
+
+    @Test
+    void estimatePlan_persists_segment_duration_and_distance() {
+        // P1-001 回归：分段路网时长/里程随 ETA 一并回写明细（不再只写 estimatedArrivalTime）
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(
+                item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, 1001L),
+                item(3L, 7L, 12L, 3, 2, 1001L), item(4L, 7L, 10L, 4, 5, null));
+        when(orderMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1001L).orderType(2)
+                        .pickupStationId(11L).deliveryStationId(12L).build()));
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().itemCount(1).build());
+        Map<String, DispatchEstimationService.RoadSegment> roadSegments = Map.of(
+                "7:2", new DispatchEstimationService.RoadSegment(120L, 2.5),  // S0→S1 高德
+                "7:3", new DispatchEstimationService.RoadSegment(180L, 3.0),  // S1→S2 高德
+                "7:4", new DispatchEstimationService.RoadSegment(300L, 4.5)); // S2→S0 高德
+
+        estimationService.estimatePlan(100L, T0, roadSegments);
+
+        ArgumentCaptor<DispatchPlanItemDO> captor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper, times(4)).updateById(captor.capture());
+        Map<Long, DispatchPlanItemDO> byId = captor.getAllValues().stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getId, Function.identity()));
+        // DEPART(seq1) 无上一站 → 无分段
+        assertNull(byId.get(1L).getSegmentDurationSeconds());
+        assertNull(byId.get(1L).getSegmentDistanceKm());
+        // 有路网分段 → 时长取高德秒数、里程取高德公里
+        assertEquals(120, byId.get(2L).getSegmentDurationSeconds());
+        assertEquals(0, byId.get(2L).getSegmentDistanceKm().compareTo(new BigDecimal("2.5")));
+        assertEquals(180, byId.get(3L).getSegmentDurationSeconds());
+        assertEquals(0, byId.get(3L).getSegmentDistanceKm().compareTo(new BigDecimal("3.0")));
+        assertEquals(300, byId.get(4L).getSegmentDurationSeconds());
+        assertEquals(0, byId.get(4L).getSegmentDistanceKm().compareTo(new BigDecimal("4.5")));
+    }
+
+    @Test
+    void estimatePlan_persists_segment_fallback_to_haversine() {
+        // P1-001 回归：无路网段（手工派单/欧氏）→ 分段时长/里程按直线÷均速兜底回写
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, null), item(3L, 7L, 12L, 3, 2, null));
+
+        estimationService.estimatePlan(100L, T0);
+
+        ArgumentCaptor<DispatchPlanItemDO> captor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper, times(3)).updateById(captor.capture());
+        Map<Long, DispatchPlanItemDO> byId = captor.getAllValues().stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getId, Function.identity()));
+        assertNull(byId.get(1L).getSegmentDurationSeconds()); // DEPART 无分段
+        // 0.01° @ 纬度30 ≈ 0.963km，25km/h → 2 分钟 = 120 秒（travelMinutes 四舍五入）
+        assertEquals(120, byId.get(2L).getSegmentDurationSeconds());
+        assertEquals(120, byId.get(3L).getSegmentDurationSeconds());
+        assertEquals(0, byId.get(2L).getSegmentDistanceKm().compareTo(new BigDecimal("0.963")));
+    }
+
+    @Test
+    void estimatePlan_persists_task_segment_fields() {
+        // Phase 4 回归：任务段明细回写 计划离站/作业时长/数量/状态 + 方案任务段窗口
+        mockRule();
+        mockStations(station(10L, "104.0000"), station(11L, "104.0100"), station(12L, "104.0200"));
+        mockItems(
+                item(1L, 7L, 10L, 1, 0, null), item(2L, 7L, 11L, 2, 1, 1001L),
+                item(3L, 7L, 12L, 3, 2, 1001L), item(4L, 7L, 10L, 4, 5, null));
+        when(orderMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1001L).orderType(1)
+                        .pickupStationId(11L).deliveryStationId(12L).build()));
+        when(passengerOrderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                PassengerOrderDO.builder().orderId(1001L).passengerCount(2).build()));
+
+        estimationService.estimatePlan(100L, T0);
+
+        ArgumentCaptor<DispatchPlanItemDO> itemCaptor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper, times(4)).updateById(itemCaptor.capture());
+        Map<Long, DispatchPlanItemDO> byId = itemCaptor.getAllValues().stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getId, Function.identity()));
+        // BOARD(seq2)：到达 T0+2，作业 3 分钟 → 离站 T0+5，数量=2 人，状态待执行
+        assertEquals(T0.plusMinutes(2), byId.get(2L).getEstimatedArrivalTime());
+        assertEquals(T0.plusMinutes(5), byId.get(2L).getPlannedDepartureTime());
+        assertEquals(180, byId.get(2L).getServiceDurationSeconds());
+        assertEquals(2, byId.get(2L).getQuantity());
+        assertEquals(TaskItemStatusEnum.PENDING.getStatus(), byId.get(2L).getStatus());
+        // ALIGHT(seq3)：作业 3 分钟，数量 2
+        assertEquals(180, byId.get(3L).getServiceDurationSeconds());
+        assertEquals(2, byId.get(3L).getQuantity());
+        // RETURN(seq4)：无作业、无数量
+        assertEquals(0, byId.get(4L).getServiceDurationSeconds());
+        assertNull(byId.get(4L).getQuantity());
+        // 方案任务段窗口：开始=出发时刻，结束=开始+预计耗时(15 分钟)
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        assertEquals(T0, planCaptor.getValue().getTaskWindowStart());
+        assertEquals(T0.plusMinutes(15), planCaptor.getValue().getTaskWindowEnd());
     }
 
     @Test

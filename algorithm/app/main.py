@@ -255,15 +255,19 @@ def get_route(request: RouteRequest):
     destination = Station(stationId="destination",
                           longitude=request.destination.longitude, latitude=request.destination.latitude)
     if amap_provider is not None:
-        result = amap_provider.get_route(origin, destination)
+        # 含真实道路 polyline（Phase 6 RoadSegment）；失败/超时/未配 key 均回退直线（provider 明确标注）
+        result = amap_provider.get_route_with_polyline(origin, destination)
     else:
         km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
         seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
-        result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean")
+        result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean",
+                             polyline=[RoutePoint(longitude=origin.longitude, latitude=origin.latitude),
+                                       RoutePoint(longitude=destination.longitude, latitude=destination.latitude)])
     if not result.available:
         return RouteResponse(available=False, provider="amap", reasonCode="ROUTE_UNAVAILABLE")
     return RouteResponse(available=True, distanceKm=result.distanceKm,
-                         durationSeconds=result.durationSeconds, provider=result.provider)
+                         durationSeconds=result.durationSeconds, provider=result.provider,
+                         polyline=result.polyline)
 
 
 @app.get(

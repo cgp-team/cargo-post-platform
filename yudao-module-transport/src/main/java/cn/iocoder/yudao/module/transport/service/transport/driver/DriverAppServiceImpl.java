@@ -8,6 +8,7 @@ import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanLogDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
@@ -22,6 +23,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanLogMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
@@ -36,7 +38,13 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -85,9 +93,9 @@ public class DriverAppServiceImpl implements DriverAppService {
 
     private static final Map<Integer, String> SHIFT_STATUS_NAMES = Map.of(0, "未发车", 1, "在途", 2, "已完成");
 
-    /** 调度明细动作类型中文名（0出发 1接客 2送客 3派送 4揽收 5返回） */
+    /** 调度明细动作类型中文名（0出发 1接客 2送客 3派送 4揽收 5返回 6经停） */
     private static final Map<Integer, String> ACTION_NAMES = Map.of(
-            0, "出发", 1, "接客", 2, "送客", 3, "派送", 4, "揽收", 5, "返回");
+            0, "出发", 1, "接客", 2, "送客", 3, "派送", 4, "揽收", 5, "返回", 6, "经停");
 
     @Resource private DriverMapper driverMapper;
     @Resource private DriverVehicleMapper driverVehicleMapper;
@@ -101,10 +109,12 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
+    @Resource private AlgorithmClient algorithmClient;
 
     @Override
     public AppDriverProfileRespVO profile() {
@@ -258,11 +268,12 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (items.isEmpty()) {
             return List.of();
         }
-        // 仅返回已下发/执行中方案的明细
+        // 仅返回已下发/执行中方案的明细；携带任务段窗口（同一 planId 下按 visitSequence 有序即完整任务段）
         Set<Long> planIds = items.stream().map(DispatchPlanItemDO::getPlanId).collect(Collectors.toSet());
-        Map<Long, Integer> planStatusMap = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
+        Map<Long, DispatchPlanDO> planMap = planIds.isEmpty() ? Map.of()
+                : dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
                         .in(DispatchPlanDO::getId, planIds))
-                .stream().collect(Collectors.toMap(DispatchPlanDO::getId, DispatchPlanDO::getStatus));
+                .stream().collect(Collectors.toMap(DispatchPlanDO::getId, Function.identity(), (a, b) -> a));
         Map<Long, String> stationNameMap = stationMapper.selectList().stream()
                 .collect(Collectors.toMap(StationDO::getId, StationDO::getStationName));
         Set<Long> orderIdSet = items.stream().map(DispatchPlanItemDO::getOrderId)
@@ -272,9 +283,19 @@ public class DriverAppServiceImpl implements DriverAppService {
                         .in(TransportOrderDO::getId, orderIdSet))
                 .stream().collect(Collectors.toMap(TransportOrderDO::getId, TransportOrderDO::getOrderNo));
         return items.stream()
-                .filter(item -> isIssued(planStatusMap.get(item.getPlanId())))
+                .filter(item -> {
+                    DispatchPlanDO plan = planMap.get(item.getPlanId());
+                    return plan != null && isIssued(plan.getStatus());
+                })
                 .map(item -> {
                     AppDriverTaskRespVO vo = new AppDriverTaskRespVO();
+                    vo.setPlanId(item.getPlanId());
+                    DispatchPlanDO plan = planMap.get(item.getPlanId());
+                    if (plan != null) {
+                        vo.setTaskWindowStart(plan.getTaskWindowStart());
+                        vo.setTaskWindowEnd(plan.getTaskWindowEnd());
+                    }
+                    vo.setVisitSequence(item.getVisitSequence());
                     vo.setId(item.getId());
                     vo.setStationId(item.getStationId());
                     vo.setStationName(item.getStationId() != null ? stationNameMap.get(item.getStationId()) : null);
@@ -283,12 +304,132 @@ public class DriverAppServiceImpl implements DriverAppService {
                     vo.setOrderId(item.getOrderId());
                     vo.setOrderNo(item.getOrderId() != null ? orderNoMap.get(item.getOrderId()) : null);
                     vo.setEstimatedArrivalTime(item.getEstimatedArrivalTime());
+                    vo.setPlannedDepartureTime(item.getPlannedDepartureTime());
+                    vo.setServiceDurationSeconds(item.getServiceDurationSeconds());
+                    vo.setQuantity(item.getQuantity());
+                    vo.setSegmentDurationSeconds(item.getSegmentDurationSeconds());
+                    vo.setSegmentDistanceKm(item.getSegmentDistanceKm());
+                    vo.setStatus(item.getStatus());
+                    vo.setStatusName(TaskItemStatusEnum.nameOf(item.getStatus()));
                     return vo;
                 }).toList();
     }
 
     private boolean isIssued(Integer planStatus) {
         return planStatus != null && (planStatus == 1 || planStatus == 2);
+    }
+
+    @Override
+    public AppDriverRouteRespVO getRoute(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        Long vehicleId = resolveVehicleId(driver.getId());
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getDriverId, driver.getId())
+                .eq(DispatchPlanItemDO::getVehicleId, vehicleId)
+                .orderByAsc(DispatchPlanItemDO::getVisitSequence));
+        if (items.isEmpty()) {
+            return null;
+        }
+        Map<Long, Integer> planStatusMap = planStatusMap(items.stream().map(DispatchPlanItemDO::getPlanId)
+                .collect(Collectors.toSet()));
+        DispatchPlanItemDO anchor = items.stream()
+                .filter(i -> isIssued(planStatusMap.get(i.getPlanId())))
+                .findFirst().orElse(null);
+        if (anchor == null) {
+            return null;
+        }
+        Long planId = anchor.getPlanId();
+        // 仅取该方案该车辆的经停
+        items = items.stream()
+                .filter(i -> Objects.equals(i.getPlanId(), planId))
+                .collect(Collectors.toList());
+        Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        AppDriverRouteRespVO vo = new AppDriverRouteRespVO();
+        vo.setPlanId(planId);
+        vo.setVehicleId(vehicleId);
+        List<AppDriverRouteRespVO.Stop> stops = new ArrayList<>();
+        List<double[]> fullPolyline = new ArrayList<>();
+        String provider = "amap";
+        for (int i = 0; i < items.size(); i++) {
+            DispatchPlanItemDO item = items.get(i);
+            StationDO station = item.getStationId() != null ? stationMap.get(item.getStationId()) : null;
+            AppDriverRouteRespVO.Stop stop = new AppDriverRouteRespVO.Stop();
+            stop.setStationId(item.getStationId());
+            stop.setStationName(station != null ? station.getStationName() : "");
+            if (station != null) {
+                stop.setLongitude(station.getLongitude() != null ? station.getLongitude().doubleValue() : null);
+                stop.setLatitude(station.getLatitude() != null ? station.getLatitude().doubleValue() : null);
+            }
+            stop.setVisitSequence(item.getVisitSequence());
+            stop.setActionName(ACTION_NAMES.getOrDefault(item.getActionType(), ""));
+            stop.setStatus(item.getStatus());
+            stop.setStatusName(TaskItemStatusEnum.nameOf(item.getStatus()));
+            stops.add(stop);
+            // 拼接每段真实道路 polyline（首段起点为上一站）
+            if (i > 0) {
+                DispatchPlanItemDO prev = items.get(i - 1);
+                StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
+                RouteFetch fetched = fetchRoutePolyline(from, station);
+                if (fetched != null) {
+                    if (fullPolyline.isEmpty()) {
+                        fullPolyline.addAll(fetched.points); // 整段从上一站起
+                    } else {
+                        // 去掉与上段末点重复的起点，再拼接
+                        List<double[]> tail = fetched.points.subList(1, fetched.points.size());
+                        fullPolyline.addAll(tail);
+                    }
+                    if ("euclidean".equals(fetched.provider)) {
+                        provider = "euclidean";
+                    }
+                }
+            }
+        }
+        vo.setStops(stops);
+        vo.setPolyline(fullPolyline.stream()
+                .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
+        vo.setRouteProvider(provider);
+        // 偏航判定：车辆当前上报位置 → 距规划 polyline 最小距离（>100m 标记 ROUTE_DEVIATED，只报警）
+        VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
+        if (loc != null && loc.getLongitude() != null && loc.getLatitude() != null && fullPolyline.size() >= 2) {
+            double dev = GeoDistanceUtil.deviationMetersFromPolyline(
+                    loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(), fullPolyline);
+            vo.setDeviationMeters(Math.round(dev * 10) / 10.0);
+            vo.setDeviated(dev > GeoDistanceUtil.DEVIATION_THRESHOLD_METERS);
+        }
+        return vo;
+    }
+
+    /** 单段真实道路 polyline 抓取结果 */
+    private record RouteFetch(List<double[]> points, String provider) {
+    }
+
+    /** 坐标对 → 真实道路 polyline（算法 /route）；不可用/失败回退两点直线（明确 euclidean） */
+    private RouteFetch fetchRoutePolyline(StationDO from, StationDO to) {
+        if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+                || to.getLongitude() == null || to.getLatitude() == null) {
+            return null;
+        }
+        try {
+            AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
+                    .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
+                            .longitude(from.getLongitude().doubleValue()).latitude(from.getLatitude().doubleValue()).build())
+                    .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
+                            .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
+                    .build());
+            if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
+                    && route.getPolyline().size() >= 2) {
+                List<double[]> points = route.getPolyline().stream()
+                        .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
+                        .collect(Collectors.toList());
+                return new RouteFetch(points, route.getProvider());
+            }
+        } catch (Exception ignored) {
+            // 算法不可用：走直线兜底
+        }
+        return new RouteFetch(List.of(
+                new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
+                new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()}), "euclidean");
     }
 
     // ==================== 司机端写操作闭环 ====================
@@ -368,6 +509,54 @@ public class DriverAppServiceImpl implements DriverAppService {
             execution.setStatus(EXEC_STATUS_COMPLETED);
         }
         shiftExecutionMapper.updateById(execution);
+        // Phase 8：同步任务段明细状态（后端为源）——本站 ARRIVED，之前 COMPLETED，之后 PENDING
+        syncTaskItemStatusOnArrive(driver.getId(), reqVO.getStationId());
+    }
+
+    /**
+     * 到站后按任务段（经停顺序）推进明细状态：当前站 ARRIVED、更早经停 COMPLETED、其后 PENDING。
+     * 状态以后端为最终来源，前端不做布尔替代。
+     */
+    private void syncTaskItemStatusOnArrive(Long driverId, Long stationId) {
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getDriverId, driverId)
+                .orderByAsc(DispatchPlanItemDO::getVisitSequence));
+        if (items.isEmpty()) {
+            return;
+        }
+        Set<Long> planIds = items.stream().map(DispatchPlanItemDO::getPlanId).collect(Collectors.toSet());
+        Map<Long, Integer> planStatusMap = planStatusMap(planIds);
+        // 命中当前站的明细：取其 (planId, vehicleId) 作为该车任务段上下文
+        DispatchPlanItemDO anchor = items.stream()
+                .filter(i -> Objects.equals(i.getStationId(), stationId))
+                .findFirst().orElse(null);
+        if (anchor == null) {
+            return;
+        }
+        for (DispatchPlanItemDO item : items) {
+            if (!Objects.equals(item.getPlanId(), anchor.getPlanId())
+                    || !Objects.equals(item.getVehicleId(), anchor.getVehicleId())) {
+                continue;
+            }
+            if (!isIssued(planStatusMap.get(item.getPlanId()))) {
+                continue;
+            }
+            Integer newStatus;
+            if (Objects.equals(item.getStationId(), stationId)) {
+                newStatus = TaskItemStatusEnum.ARRIVED.getStatus();
+            } else if (item.getVisitSequence() != null && anchor.getVisitSequence() != null
+                    && item.getVisitSequence() < anchor.getVisitSequence()) {
+                newStatus = TaskItemStatusEnum.COMPLETED.getStatus();
+            } else {
+                newStatus = TaskItemStatusEnum.PENDING.getStatus();
+            }
+            if (!Objects.equals(item.getStatus(), newStatus)) {
+                DispatchPlanItemDO upd = new DispatchPlanItemDO();
+                upd.setId(item.getId());
+                upd.setStatus(newStatus);
+                dispatchPlanItemMapper.updateById(upd);
+            }
+        }
     }
 
     /** 站点在经停序列中的序号；未设置当前站时为 0（发车后应从首站开始到达） */
@@ -473,6 +662,8 @@ public class DriverAppServiceImpl implements DriverAppService {
                 shiftExecutionMapper.updateById(loadedUpdate);
             }
         }
+        // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
+        maybeCompletePlan(planItem.getPlanId());
     }
 
     @Override
@@ -522,6 +713,44 @@ public class DriverAppServiceImpl implements DriverAppService {
                 shiftExecutionMapper.updateById(loadedUpdate);
             }
         }
+        // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
+        maybeCompletePlan(planItem.getPlanId());
+    }
+
+    /**
+     * 方案内全部订单已完成时，将方案从执行中流转为已完成并写日志（P1-003 终态）。
+     * 仅处理执行中(RUNNING)方案，幂等：已完成/作废/待审核方案不处理。
+     */
+    private void maybeCompletePlan(Long planId) {
+        if (planId == null) {
+            return;
+        }
+        DispatchPlanDO plan = dispatchPlanMapper.selectById(planId);
+        if (plan == null || !Objects.equals(plan.getStatus(), DispatchPlanStatusEnum.RUNNING.getStatus())) {
+            return;
+        }
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getPlanId, planId)
+                .isNotNull(DispatchPlanItemDO::getOrderId));
+        if (items.isEmpty()) {
+            return;
+        }
+        Set<Long> orderIds = items.stream().map(DispatchPlanItemDO::getOrderId).collect(Collectors.toSet());
+        List<TransportOrderDO> orders = transportOrderMapper.selectBatchIds(orderIds);
+        boolean allDone = orders.stream()
+                .allMatch(o -> Objects.equals(o.getStatus(), TransportOrderStatusEnum.COMPLETED.getStatus()));
+        if (!allDone) {
+            return;
+        }
+        plan.setStatus(DispatchPlanStatusEnum.COMPLETED.getStatus());
+        dispatchPlanMapper.updateById(plan);
+        dispatchPlanLogMapper.insert(DispatchPlanLogDO.builder()
+                .planId(planId)
+                .fromStatus(DispatchPlanStatusEnum.RUNNING.getStatus())
+                .toStatus(DispatchPlanStatusEnum.COMPLETED.getStatus())
+                .operator(String.valueOf(SecurityFrameworkUtils.getLoginUserId()))
+                .reason("方案内全部订单已完成")
+                .build());
     }
 
     @Override

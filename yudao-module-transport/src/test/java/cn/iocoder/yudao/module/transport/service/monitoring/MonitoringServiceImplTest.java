@@ -1,10 +1,14 @@
 package cn.iocoder.yudao.module.transport.service.monitoring;
 
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -35,6 +40,9 @@ class MonitoringServiceImplTest {
 
     @Mock private VehicleMapper vehicleMapper;
     @Mock private VehicleLocationTrackMapper vehicleLocationTrackMapper;
+    @Mock private VehicleLocationMapper vehicleLocationMapper;
+    @Mock private SimulationEngine simulationEngine;
+    @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
 
     private MonitoringServiceImpl monitoringService;
 
@@ -43,6 +51,9 @@ class MonitoringServiceImplTest {
         monitoringService = new MonitoringServiceImpl();
         ReflectionTestUtils.setField(monitoringService, "vehicleMapper", vehicleMapper);
         ReflectionTestUtils.setField(monitoringService, "vehicleLocationTrackMapper", vehicleLocationTrackMapper);
+        ReflectionTestUtils.setField(monitoringService, "vehicleLocationMapper", vehicleLocationMapper);
+        ReflectionTestUtils.setField(monitoringService, "simulationEngine", simulationEngine);
+        ReflectionTestUtils.setField(monitoringService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
     }
 
     @Test
@@ -85,6 +96,20 @@ class MonitoringServiceImplTest {
         assertNull(vo.getPlateNo());
         assertNotNull(vo.getPoints());
         assertTrue(vo.getPoints().isEmpty());
+    }
+
+    @Test
+    void getVehiclePlan_no_plan_returns_vehicle_info() {
+        // Phase 11：车辆无调度方案时返回车牌与位置信息，不报错
+        when(vehicleMapper.selectById(VEHICLE_ID))
+                .thenReturn(VehicleDO.builder().id(VEHICLE_ID).plateNo("川A12345").build());
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of());
+
+        MonitoringPlanRespVO vo = monitoringService.getVehiclePlan(VEHICLE_ID);
+
+        assertEquals(VEHICLE_ID, vo.getVehicleId());
+        assertEquals("川A12345", vo.getPlateNo());
+        assertNull(vo.getPlanId()); // 无方案
     }
 
     @Test

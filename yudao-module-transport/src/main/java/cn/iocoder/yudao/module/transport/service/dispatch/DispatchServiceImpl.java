@@ -11,6 +11,8 @@ import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
@@ -22,6 +24,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.*;
@@ -64,6 +68,8 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private PassengerOrderMapper passengerOrderMapper;
     @Resource private StationMapper stationMapper;
+    @Resource private ShiftMapper shiftMapper;
+    @Resource private RouteStationMapper routeStationMapper;
     @Resource private VehicleMapper vehicleMapper;
     @Resource private DriverVehicleMapper driverVehicleMapper;
     @Resource private TransportDispatchTaskMapper dispatchTaskMapper;
@@ -77,7 +83,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     public PageResult<TransportOrderDO> getOrderPoolPage(DispatchPoolPageReqVO reqVO) {
         return orderMapper.selectPage(reqVO, new LambdaQueryWrapperX<TransportOrderDO>()
-                .inIfPresent(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus(),
+                .inIfPresent(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus(),
                         TransportOrderStatusEnum.POOLED.getStatus())
                 .eqIfPresent(TransportOrderDO::getStatus, reqVO.getStatus())
                 .eqIfPresent(TransportOrderDO::getOrderType, reqVO.getOrderType())
@@ -96,39 +102,37 @@ public class DispatchServiceImpl implements DispatchService {
         return collectByTimeRange(reqVO);
     }
 
-    /** 按勾选订单归集：校验全部存在 / 待调度 / 货运已审核；任一非法明确报错（不悄悄跳过） */
+    /**
+     * 按勾选订单归集：校验全部存在 / 承运审核通过（READY_FOR_POOL 待入池）。
+     * Phase 2：只有「待入池」订单可入池——客户提交 → 承运审核 → READY_FOR_POOL → 归集入池。
+     * 任一非法明确报错（不悄悄跳过）。
+     */
     private int collectByOrderIds(List<Long> orderIds) {
         List<TransportOrderDO> orders = orderMapper.selectBatchIds(orderIds);
         if (orders.size() != orderIds.size()) {
             throw exception(ORDER_NOT_EXISTS);
         }
         for (TransportOrderDO order : orders) {
-            if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.CREATED.getStatus())) {
+            if (!Objects.equals(order.getStatus(), TransportOrderStatusEnum.READY_FOR_POOL.getStatus())) {
                 throw exception(DISPATCH_ORDER_NOT_COLLECTABLE);
-            }
-            if (Objects.equals(order.getOrderType(), 2) && !isCargoAudited(order.getId())) {
-                throw exception(CARGO_AUDIT_PENDING);
             }
         }
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(TransportOrderStatusEnum.POOLED.getStatus());
         return orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
                 .in(TransportOrderDO::getId, orderIds)
-                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus()));
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus()));
     }
 
-    /** 兼容：按时间范围归集（批次区间内待调度订单，货运需审核通过；未提供区间返回 0） */
+    /** 兼容：按时间范围归集（区间内待入池订单；未提供区间返回 0） */
     private int collectByTimeRange(DispatchCollectReqVO reqVO) {
         if (reqVO.getBatchStart() == null || reqVO.getBatchEnd() == null) {
             return 0;
         }
         List<TransportOrderDO> orders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
-                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus())
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus())
                 .between(TransportOrderDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
-        List<Long> ids = orders.stream()
-                .filter(o -> !Objects.equals(o.getOrderType(), 2) || isCargoAudited(o.getId()))
-                .map(TransportOrderDO::getId)
-                .toList();
+        List<Long> ids = orders.stream().map(TransportOrderDO::getId).toList();
         if (ids.isEmpty()) {
             return 0;
         }
@@ -136,13 +140,7 @@ public class DispatchServiceImpl implements DispatchService {
         updateObj.setStatus(TransportOrderStatusEnum.POOLED.getStatus());
         return orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
                 .in(TransportOrderDO::getId, ids)
-                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.CREATED.getStatus()));
-    }
-
-    /** 货运是否已管理端审核通过（audit_status=1） */
-    private boolean isCargoAudited(Long orderId) {
-        CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, orderId);
-        return cargo != null && Objects.equals(cargo.getAuditStatus(), 1);
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus()));
     }
 
     @Override
@@ -174,7 +172,7 @@ public class DispatchServiceImpl implements DispatchService {
         }
         stops.add(buildStop(depot.getId(), null, AlgorithmRouteStopDTO.ACTION_RETURN));
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, Collections.singletonList(vehicle), orders,
-                null, SCENARIO_MANUAL);
+                null, SCENARIO_MANUAL, null);
         AlgorithmPlanRespDTO algorithmResp = AlgorithmPlanRespDTO.builder()
                 .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
                 .vehiclePlans(Collections.singletonList(AlgorithmVehiclePlanDTO.builder()
@@ -197,7 +195,8 @@ public class DispatchServiceImpl implements DispatchService {
         insertPlanItems(plan.getId(), vehicle.getId(), stops);
         // 估算每站预计到达时间（口径同智能派单：批次开始时刻出发，逐站累计行驶 + 停站作业分钟）
         dispatchEstimationService.estimatePlan(plan.getId(), batch[0]);
-        updateOrdersStatus(reqVO.getOrderIds(), TransportOrderStatusEnum.ASSIGNED);
+        updateOrdersStatus(reqVO.getOrderIds(), TransportOrderStatusEnum.ASSIGNED,
+                TransportOrderStatusEnum.POOLED);
         return plan.getId();
     }
 
@@ -213,14 +212,36 @@ public class DispatchServiceImpl implements DispatchService {
         if (pooledOrders.isEmpty()) {
             throw exception(DISPATCH_POOL_EMPTY);
         }
+        List<Long> pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
         StationDO depot = validateDepotExists(reqVO.getDepotStationId());
         List<VehicleDO> vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
 
-        // 构建快照并落任务（规划中）
+        // 先构建快照并做规模预检（只读，不占单）：无效输入快速失败，避免先 CAS 抢占后再抛错需要回滚。
+        // 联合调度：指定班次时车辆按班次线路公交骨架经停，货运作为绕行插入（Phase 5）
+        List<String> skeleton = resolveSkeleton(reqVO.getShiftId(), depot.getId());
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, vehicles, pooledOrders,
-                reqVO.getAlgorithmConfig(), reqVO.getScenario());
+                reqVO.getAlgorithmConfig(), reqVO.getScenario(), skeleton);
         // 规模上限预检：客运按人数拆单后可能超 25 单，超限直接报错而非等算法 413
         validateScaleLimit(algorithmReq);
+
+        // P1-004 并发防护：CAS 抢占订单池（仅已入池可推进为已分配）。InnoDB 行锁会串行化并发智能派单：
+        // 后到的派单在 CAS 上阻塞至先到提交，随后因订单已非 POOLED 而影响 0 行 → 走 DISPATCH_POOL_EMPTY。
+        // 抢占成功后订单即为 ASSIGNED，方案落库后无需再改状态；算法失败/无解需显式回滚抢占（本方法
+        // noRollbackFor=ServiceException 不回滚，必须手动释放，否则订单会滞留 ASSIGNED 而无方案）。
+        TransportOrderDO claim = new TransportOrderDO();
+        claim.setStatus(TransportOrderStatusEnum.ASSIGNED.getStatus());
+        int claimed = orderMapper.update(claim, new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getId, pooledIds)
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
+        if (claimed == 0) {
+            throw exception(DISPATCH_POOL_EMPTY); // 池已被并发派单抢占
+        }
+        if (claimed < pooledIds.size()) {
+            // 池被非智能派单路径并发修改（部分订单已非 POOLED）：抛非 ServiceException 触发整事务回滚，
+            // 撤销本次已抢占的订单，避免与其它路径的订单归属产生歧义。
+            throw new IllegalStateException("订单池状态并发变更，请刷新后重试");
+        }
+
         LocalDateTime[] batch = currentBatch();
         String taskNo = generateTaskNo();
         DispatchTaskDO task = DispatchTaskDO.builder()
@@ -233,7 +254,7 @@ public class DispatchServiceImpl implements DispatchService {
                 .build();
         dispatchTaskMapper.insert(task);
 
-        // 调用算法；失败时任务置 FAILED 后透传异常
+        // 调用算法；失败时任务置 FAILED、订单回滚抢占后透传异常
         AlgorithmPlanRespDTO result;
         try {
             result = algorithmAdapter.plan(algorithmReq);
@@ -241,15 +262,17 @@ public class DispatchServiceImpl implements DispatchService {
             task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
             task.setErrorMessage(ex.getMessage());
             dispatchTaskMapper.updateById(task);
+            releaseClaimedOrders(pooledIds);
             throw ex;
         }
         if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
             task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
             dispatchTaskMapper.updateById(task);
+            releaseClaimedOrders(pooledIds);
             throw exception(DISPATCH_NO_FEASIBLE, reasonCodeText(result.getReasonCode()));
         }
 
-        // 可行：任务置成功，方案与经停明细落库，订单置为已分配
+        // 可行：任务置成功，方案与经停明细落库（订单已在 CAS 抢占时置为已分配）
         task.setStatus(DispatchTaskStatusEnum.SUCCESS.getStatus());
         task.setAlgorithmJobId(result.getRequestId());
         dispatchTaskMapper.updateById(task);
@@ -277,9 +300,12 @@ public class DispatchServiceImpl implements DispatchService {
             }
         }
         dispatchEstimationService.estimatePlan(plan.getId(), batch[0], roadSegments);
-        updateOrdersStatus(pooledOrders.stream().map(TransportOrderDO::getId).collect(Collectors.toList()),
-                TransportOrderStatusEnum.ASSIGNED);
         return plan.getId();
+    }
+
+    /** 算法失败/无解时回滚 CAS 抢占：已分配订单回到订单池，可重新派单（P1-004） */
+    private void releaseClaimedOrders(List<Long> orderIds) {
+        updateOrdersStatus(orderIds, TransportOrderStatusEnum.POOLED, TransportOrderStatusEnum.ASSIGNED);
     }
 
     @Override
@@ -301,7 +327,8 @@ public class DispatchServiceImpl implements DispatchService {
             plan.setStatus(DispatchPlanStatusEnum.VOID.getStatus());
             dispatchPlanMapper.updateById(plan);
             // 驳回后方案内订单回到订单池，可重新派单
-            updateOrdersStatus(selectPlanOrderIds(reqVO.getPlanId(), null), TransportOrderStatusEnum.POOLED);
+            updateOrdersStatus(selectPlanOrderIds(reqVO.getPlanId(), null), TransportOrderStatusEnum.POOLED,
+                    TransportOrderStatusEnum.ASSIGNED);
         }
         insertPlanLog(plan.getId(), DispatchPlanStatusEnum.PENDING.getStatus(), plan.getStatus(), reqVO.getReason());
     }
@@ -333,7 +360,7 @@ public class DispatchServiceImpl implements DispatchService {
                     DispatchPlanStatusEnum.RUNNING.getStatus(), reqVO.getRemark());
         }
         updateOrdersStatus(selectPlanOrderIds(reqVO.getPlanId(), reqVO.getVehicleId()),
-                TransportOrderStatusEnum.DEPARTED);
+                TransportOrderStatusEnum.DEPARTED, TransportOrderStatusEnum.ASSIGNED);
     }
 
     @Override
@@ -375,6 +402,9 @@ public class DispatchServiceImpl implements DispatchService {
         stats.setDeliveryCount(0);
         stats.setPickupCount(0);
         stats.setParcelCount(0);
+        // 净载荷双维度口径：派送件 / 揽收件 分别累计（出程派送、返程揽收，货仓依次复用）
+        int deliveryItems = 0;
+        int pickupItems = 0;
         Map<Long, DispatchValidateRespVO.Marker> markerMap = new LinkedHashMap<>();
         List<DispatchValidateRespVO.TimeSeqIssue> issues = new ArrayList<>();
         for (TransportOrderDO order : pooledOrders) {
@@ -391,16 +421,20 @@ public class DispatchServiceImpl implements DispatchService {
                 boolean isPickup = Objects.equals(order.getDeliveryStationId(), depot.getId());
                 if (isPickup) {
                     stats.setPickupCount(stats.getPickupCount() + 1);
+                    pickupItems += getItemCount(order, cargoMap, postalMap);
                     addMarker(markerMap, order.getPickupStationId(), AlgorithmRouteStopDTO.ACTION_PICKUP, stationMap);
                 } else {
                     stats.setDeliveryCount(stats.getDeliveryCount() + 1);
+                    deliveryItems += getItemCount(order, cargoMap, postalMap);
                     addMarker(markerMap, order.getDeliveryStationId(), AlgorithmRouteStopDTO.ACTION_DELIVER, stationMap);
                 }
                 stats.setParcelCount(stats.getParcelCount() + getItemCount(order, cargoMap, postalMap));
             }
         }
 
-        // 运力校验：总容量 vs 总需求，超出即预警
+        // 运力校验：总容量 vs 总需求，超出即预警。
+        // 载货按净载荷双维度口径：max(派送件, 揽收件) 与总货仓容量比较（与算法 solver 一致），
+        // 不再把「派送+揽收」全部累计（旧口径把返程可用仓位置 0，闲置运力无法利用）。
         DispatchValidateRespVO.CapacityCheck capacityCheck = new DispatchValidateRespVO.CapacityCheck();
         int passengerCapacity = vehicles.stream()
                 .mapToInt(v -> v.getPassengerCapacity() != null ? v.getPassengerCapacity() : 0).sum();
@@ -409,7 +443,7 @@ public class DispatchServiceImpl implements DispatchService {
         capacityCheck.setTotalPassengerCapacity(passengerCapacity);
         capacityCheck.setTotalCargoCapacity(cargoCapacity);
         capacityCheck.setPassengerExceed(Math.max(0, stats.getPassengerCount() - passengerCapacity));
-        capacityCheck.setCargoExceed(Math.max(0, stats.getParcelCount() - cargoCapacity));
+        capacityCheck.setCargoExceed(Math.max(0, Math.max(deliveryItems, pickupItems) - cargoCapacity));
         capacityCheck.setOverCapacity(capacityCheck.getPassengerExceed() > 0 || capacityCheck.getCargoExceed() > 0);
 
         List<DispatchValidateRespVO.VehicleItem> vehicleItems = vehicles.stream().map(v -> {
@@ -690,10 +724,35 @@ public class DispatchServiceImpl implements DispatchService {
         return plan;
     }
 
-    /** 构建算法规划请求快照：站点 = 场站 + 订单引用站点去重 */
+    /**
+     * 班次线路公交骨架（Mandatory Passenger Service）：班次 → 线路 → 按 sequenceNo 排序的站点编号，
+     * 去掉场站（场站由算法自动作为起终点）。shiftId 为空/班次不存在/线路无站点时返回 null（纯 VRP）。
+     */
+    private List<String> resolveSkeleton(Long shiftId, Long depotStationId) {
+        if (shiftId == null) {
+            return null;
+        }
+        ShiftDO shift = shiftMapper.selectById(shiftId);
+        if (shift == null || shift.getRouteId() == null) {
+            return null;
+        }
+        List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId()));
+        if (routeStations.isEmpty()) {
+            return null;
+        }
+        return routeStations.stream()
+                .sorted(Comparator.comparing(RouteStationDO::getSequenceNo,
+                        Comparator.nullsLast(Integer::compareTo)))
+                .map(rs -> String.valueOf(rs.getStationId()))
+                .filter(sid -> !sid.equals(String.valueOf(depotStationId)))
+                .collect(Collectors.toList());
+    }
+
+    /** 构建算法规划请求快照：站点 = 场站 + 订单引用站点去重；skeleton 非空时该批车辆按公交骨架经停（联合调度） */
     private AlgorithmPlanReqDTO buildPlanRequest(StationDO depot, List<VehicleDO> vehicles,
                                                  List<TransportOrderDO> orders,
-                                                 Map<String, Object> algorithmConfig, String scenario) {
+                                                 Map<String, Object> algorithmConfig, String scenario,
+                                                 List<String> skeleton) {
         Set<Long> stationIds = new LinkedHashSet<>();
         orders.forEach(order -> {
             stationIds.add(order.getPickupStationId());
@@ -711,6 +770,8 @@ public class DispatchServiceImpl implements DispatchService {
                         // 货仓件数取车辆档案，缺省契约默认值 4
                         .cargoCapacity(vehicle.getCargoCapacity() != null
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
+                        // 公交骨架（Mandatory Passenger Service）：指定班次时该车辆按线路站点经停
+                        .skeleton(skeleton)
                         .build())
                 .collect(Collectors.toList());
         // 子表一次加载，内存匹配（消除逐单查询的 N+1）
@@ -886,15 +947,26 @@ public class DispatchServiceImpl implements DispatchService {
         for (int i = 0; i < stops.size(); i++) {
             AlgorithmRouteStopDTO stop = stops.get(i);
             PlanItemActionEnum action = PlanItemActionEnum.fromCode(stop.getAction());
-            dispatchPlanItemMapper.insert(DispatchPlanItemDO.builder()
+            var itemBuilder = DispatchPlanItemDO.builder()
                     .planId(planId)
                     .vehicleId(vehicleId)
                     .driverId(driverId)
                     .stationId(stop.getStationId() != null ? Long.valueOf(stop.getStationId()) : null)
                     .orderId(stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null)
                     .visitSequence(i + 1)
-                    .actionType(action != null ? action.getAction() : null)
-                    .build());
+                    .actionType(action != null ? action.getAction() : null);
+            // 算法解释（Phase 5）：货运/揽收经停携带服务方式/服务点/绕行/原因码
+            if (Boolean.TRUE.equals(stop.getAccepted()) || stop.getServiceMode() != null || stop.getReasonCode() != null) {
+                itemBuilder.serviceMode(stop.getServiceMode())
+                        .servicePointStationId(stop.getServicePoint() != null
+                                ? Long.valueOf(stop.getServicePoint()) : null)
+                        .detourDistanceKm(stop.getDetourDistance() != null
+                                ? BigDecimal.valueOf(stop.getDetourDistance()) : null)
+                        .detourDurationSeconds(stop.getDetourDuration() != null
+                                ? stop.getDetourDuration().intValue() : null)
+                        .reasonCode(stop.getReasonCode());
+            }
+            dispatchPlanItemMapper.insert(itemBuilder.build());
         }
     }
 
@@ -934,14 +1006,23 @@ public class DispatchServiceImpl implements DispatchService {
                 .stream().map(DispatchPlanItemDO::getOrderId).distinct().collect(Collectors.toList());
     }
 
-    private void updateOrdersStatus(List<Long> orderIds, TransportOrderStatusEnum status) {
+    /**
+     * 批量推进订单状态，并约束来源状态（P1-003：防跨状态误写）。
+     * source 为 null 时不约束来源（仅用于无明确来源的兼容场景）；建议始终显式传来源。
+     */
+    private void updateOrdersStatus(List<Long> orderIds, TransportOrderStatusEnum status,
+                                    TransportOrderStatusEnum source) {
         if (orderIds.isEmpty()) {
             return;
         }
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(status.getStatus());
-        orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
-                .in(TransportOrderDO::getId, orderIds));
+        LambdaQueryWrapperX<TransportOrderDO> wrapper = new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getId, orderIds);
+        if (source != null) {
+            wrapper.eq(TransportOrderDO::getStatus, source.getStatus());
+        }
+        orderMapper.update(updateObj, wrapper);
     }
 
     /** 当前半小时批次区间：分钟 < 30 则 :00，否则 :30 */
