@@ -103,7 +103,10 @@
           </div>
         </div>
       </template>
-      <template v-if="settlement">
+      <template v-if="settleFailed">
+        <el-empty :image-size="80" description="返程结算数据暂时不可用" />
+      </template>
+      <template v-else-if="settlement">
         <el-row :gutter="16">
           <el-col :md="6" :sm="12" :xs="24">
             <div class="settle-item">
@@ -216,17 +219,23 @@ const orderStats = ref<OrderStatisticsVO>({ typeDistribution: [], statusDistribu
 const settleRange = ref<[string, string] | null>(['', ''])
 const settleLoading = ref(false)
 const settlement = ref<DispatchSettlementRespVO>()
+const settleFailed = ref(false)
 const loadSettlement = async () => {
   if (!settleRange.value?.[0] || !settleRange.value?.[1]) {
     useMessage().warning('请选择结算时间区间')
     return
   }
   settleLoading.value = true
+  settleFailed.value = false
   try {
     settlement.value = await getDispatchSettlement({
       batchStart: settleRange.value[0],
       batchEnd: settleRange.value[1]
     })
+  } catch (e) {
+    console.error('Failed to load settlement data', e)
+    settlement.value = undefined
+    settleFailed.value = true
   } finally {
     settleLoading.value = false
   }
