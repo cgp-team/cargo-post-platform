@@ -26,6 +26,12 @@ class OrderType(str, Enum):
     PICKUP = "PICKUP"
 
 
+class CargoSource(str, Enum):
+    """货物来源：区分预装派送和任务段内揽收-派送配对。"""
+    PRELOADED = "PRELOADED"  # 场站预装，消耗 initialCargoLoad
+    SHIPMENT = "SHIPMENT"    # 任务段内 PICKUP→DELIVERY 配对
+
+
 class StopAction(str, Enum):
     DEPART = "DEPART"
     BOARD = "BOARD"
@@ -46,6 +52,12 @@ class Vehicle(BaseModel):
     vehicleId: int
     passengerCapacity: int = Field(default=5, ge=1)
     cargoCapacity: int = Field(default=4, ge=1)
+    # 初始乘客载荷：车辆出发时已有 N 名乘客（从上一站上车、未到站下车）。
+    # 缺省为 0（空车出发）。必须 < passengerCapacity。
+    initialPassengerLoad: int = Field(default=0, ge=0)
+    # 初始货物载荷：车辆出发时已有 N 件货物（从场站预装的派送件）。
+    # 缺省为 0（空车出发）。必须 < cargoCapacity。
+    initialCargoLoad: int = Field(default=0, ge=0)
     # 公交骨架（Mandatory Passenger Service）：车辆必须按顺序经停的站点编号列表（不含场站）。
     # 提供时该车辆按骨架顺序强制停靠，货运/揽收作为绕行插入骨架间隙；缺省为纯 VRP。
     skeleton: list[str] | None = None
@@ -60,6 +72,9 @@ class PlanOrder(BaseModel):
     itemCount: int = Field(default=1, ge=1)
     weightKg: float | None = Field(default=None, ge=0)
     volumeM3: float | None = Field(default=None, ge=0)
+    # 货物来源：PRELOADED=场站预装（消耗 initialCargoLoad），SHIPMENT=任务段内配对
+    # 缺省为 None，solver 按上下文推断（DELIVERY→PRELOADED，PICKUP→无来源语义）
+    cargoSource: CargoSource | None = None
 
 
 class AlgorithmConfig(BaseModel):
@@ -78,6 +93,28 @@ class AlgorithmConfig(BaseModel):
     Q: float = 100
     convergence_threshold: int = 20
 
+    # 绕行阈值配置（全部可选，不设置时保持当前兼容行为）
+    maxDetourDistanceKm: float | None = Field(default=None, ge=0)
+    maxDetourDurationSeconds: float | None = Field(default=None, ge=0)
+    maxPassengerImpactSeconds: float | None = Field(default=None, ge=0)
+
+
+class PlanShipment(BaseModel):
+    """完整货运订单：从 pickupStation 揽收 → 送到 deliveryStation。
+
+    与 PlanOrder 的区别：
+    - PlanOrder 只能表达单向（PICKUP 或 DELIVERY）
+    - PlanShipment 表达完整揽收→送达配对
+    - Solver 内部展开为 PICKUP + DELIVERY 两个节点，自动添加同车+顺序约束
+    """
+
+    shipmentId: str
+    pickupStationId: str
+    deliveryStationId: str
+    quantity: int = Field(ge=1)
+    weightKg: float | None = Field(default=None, ge=0)
+    volumeM3: float | None = Field(default=None, ge=0)
+
 
 class PlanRequest(BaseModel):
     requestId: str
@@ -86,7 +123,9 @@ class PlanRequest(BaseModel):
     depot: Station
     stations: list[Station]
     vehicles: list[Vehicle]
-    orders: list[PlanOrder]
+    orders: list[PlanOrder] = Field(default_factory=list)
+    # 新增：完整货运订单（展开为 PICKUP + DELIVERY 配对）
+    shipments: list[PlanShipment] = Field(default_factory=list)
     algorithmConfig: AlgorithmConfig = Field(default_factory=AlgorithmConfig)
     scenario: Scenario | None = None
 

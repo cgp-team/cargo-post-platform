@@ -90,17 +90,17 @@ class DistanceProvider(Protocol):
 
 
 class EuclideanDistanceProvider:
-    """现状欧氏直线口径（单位：度）；行驶秒数未知返回 None，由后端按直线÷均速兜底。"""
+    """欧氏直线口径（单位：度）+ Haversine 均速估算秒数。"""
 
     def get_matrix(self, points: list[Station]) -> DistanceMatrix:
-        return {
-            (a.stationId, b.stationId): (
-                hypot(a.longitude - b.longitude, a.latitude - b.latitude),
-                None,
-            )
-            for a in points
-            for b in points
-        }
+        result: DistanceMatrix = {}
+        for a in points:
+            for b in points:
+                dist_deg = hypot(a.longitude - b.longitude, a.latitude - b.latitude)
+                km = haversine_km(a.longitude, a.latitude, b.longitude, b.latitude)
+                seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600) if km > 0 else 0.0
+                result[(a.stationId, b.stationId)] = (dist_deg, seconds)
+        return result
 
 
 @dataclass

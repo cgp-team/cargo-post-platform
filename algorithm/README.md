@@ -27,15 +27,15 @@
 ## 求解器（app/solver.py）
 
 - 订单三类：PASSENGER（上车站+下车站，强制同车、先上后下）、DELIVERY（场站→站点）、PICKUP（站点→场站）。
-- 容量双维度累计约束：载客维度 BOARD +1（批次内座位不复用）、载货维度 DELIVER/PICKUP +itemCount，
-  单车次累计量 ≤ `passengerCapacity`（默认 5）/ `cargoCapacity`（默认 4），与 `OVER_CAPACITY`
-  预检（总需求 vs 总容量）口径一致。
+- 载客维度：BOARD +1, ALIGHT -1，座位动态释放。支持 `initialPassengerLoad`（车辆出发时已有乘客）。
+- 载货双维度：CargoOut（DELIVER +itemCount）/ CargoIn（PICKUP +itemCount）独立累计，
+  出程派送、返程揽收，货仓依次复用。单车次累计量 ≤ `cargoCapacity`。
 - 车辆池 ≤ 3，求解器自动选用子集：每启用一车计大额固定成本，目标函数等价于"先最少用车、再最短里程"（契约 Q7 优先单车）。
 - 目标：总里程最小；距离提供方按 `AMAP_KEY` 配置切换（`app/distance.py`）：未配置时为两点
   欧氏直线（输入坐标 GCJ-02，单位：度）；配置后为高德驾车路网距离（真实公里）。输出保留 3 位小数，
   `distanceUnit` 字段标明单位（`"degree"` / `"km"`），高德不可用（失败/超时/配额错误）时整单
   降级回直线并在 `warnings` 标注。详见 CHANGELOG [ortools-1.1.0]。
-- 确定性：仅使用确定性首解策略（PARALLEL_CHEAPEST_INSERTION），无随机元启发式，同输入必然同输出。
+- 确定性：仅使用确定性首解策略（PATH_CHEAPEST_ARC），无随机元启发式，同输入必然同输出。
 - 性能：满规模（25 单）求解远低于契约 10 秒时限（实测毫秒级），求解侧另设 5 秒护栏。
 
 ## 本地运行
