@@ -33,7 +33,7 @@ def make_payload(request_id: str, orders: list[dict], vehicle_count: int = 1) ->
     return {
         "requestId": request_id,
         "batchStart": "2026-08-23T08:00:00+08:00",
-        "batchEnd": "2026-08-23T08:30:00+08:00",
+        "batchEnd": "2026-08-23T18:00:00+08:00",
         "depot": {"stationId": "S0", "longitude": 104.000, "latitude": 30.000},
         "stations": STATIONS,
         "vehicles": [

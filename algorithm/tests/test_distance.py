@@ -93,7 +93,7 @@ def make_request(orders: list[PlanOrder] | None = None, request_id: str = "req-d
     return PlanRequest(
         requestId=request_id,
         batchStart="2026-08-23T08:00:00+08:00",
-        batchEnd="2026-08-23T08:30:00+08:00",
+        batchEnd="2026-08-23T12:00:00+08:00",
         depot=DEPOT,
         stations=STATIONS,
         vehicles=[Vehicle(vehicleId=1001)],
@@ -237,12 +237,14 @@ def test_solve_with_matrix_uses_km() -> None:
         assert all(stop.segmentDuration == 600.0 for stop in plan.stops[1:])
 
 
-def test_solve_without_matrix_has_no_segment_duration() -> None:
-    """欧氏路径（无矩阵）：segmentDuration 为 None，后端按直线÷均速兜底。"""
+def test_solve_without_matrix_has_estimated_duration() -> None:
+    """欧氏路径（无矩阵）：segmentDuration 为 Haversine 均速估算值（非 None）。"""
     outcome = solve(make_request())
     assert outcome.status == "feasible"
     for plan in outcome.vehicle_plans:
-        assert all(stop.segmentDuration is None for stop in plan.stops)
+        for stop in plan.stops[1:]:  # 跳过 DEPART
+            assert stop.segmentDuration is not None, "欧氏路径应有估算 duration"
+            assert stop.segmentDuration >= 0
 
 
 def test_euclidean_provider_matches_builtin() -> None:
