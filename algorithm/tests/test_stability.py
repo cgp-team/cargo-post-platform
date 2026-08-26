@@ -36,7 +36,7 @@ def make_orders() -> list[PlanOrder]:
 
 def solve_with(orders: list[PlanOrder]):
     req = PlanRequest(
-        requestId="r", batchStart="2026-08-23T08:00:00+08:00", batchEnd="2026-08-23T08:30:00+08:00",
+        requestId="r", batchStart="2026-08-23T08:00:00+08:00", batchEnd="2026-08-23T18:00:00+08:00",
         depot=DEPOT, stations=STATIONS,
         vehicles=[Vehicle(vehicleId=1000 + i, cargoCapacity=4) for i in range(3)],
         orders=orders,
