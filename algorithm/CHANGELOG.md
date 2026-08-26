@@ -2,6 +2,19 @@
 
 本服务镜像版本与参数版本变更记录（契约 Q8：默认值随镜像版本管理，CHANGELOG 记录参数变更）。
 
+## [ortools-1.3.0] - 2026-08-26
+
+算法优化 Phase 0-14：动态容量、初始载荷、时间窗口、矩阵完整性、动态成本。
+
+- 载客维度：BOARD +1, ALIGHT -1（座位动态释放），支持重访站点分批上下客。
+- 初始载荷：`Vehicle.initialPassengerLoad`，fix_start_cumul_to_0=False + SetRange。
+- 时间窗口：所有路径（含欧氏）均估算 segmentDuration，post-solve 验证 batchStart~batchEnd。
+- 矩阵完整性：预检所有站点对，缺失返回 `DISTANCE_MATRIX_INCOMPLETE`（防 pywrapcp 崩溃）。
+- 动态固定成本：`num_nodes × max_dist + 1`（取代硬编码 10^9）。
+- Validator：`app/validators.py`（passenger_load / cargo_load / order_precedence / skeleton / road_segments / time_window）。
+- 路径策略：PATH_CHEAPEST_ARC（取代 PARALLEL_CHEAPEST_INSERTION，骨架约束更稳健）。
+- `algorithmVersion=ortools-1.3.0`，`parameterVersion=params-v2`。
+
 ## [ortools-1.2.0] - 2026-08-23
 
 输出分段路网行驶时长（`segmentDuration`），支持业务后端 ETA 从"直线÷均速"升级为真实路网时长。

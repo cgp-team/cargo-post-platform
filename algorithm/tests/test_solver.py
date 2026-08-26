@@ -45,7 +45,7 @@ def make_request(orders: list[PlanOrder], vehicle_count: int = 1, request_id: st
     return PlanRequest(
         requestId=request_id,
         batchStart="2026-08-23T08:00:00+08:00",
-        batchEnd="2026-08-23T08:30:00+08:00",
+        batchEnd="2026-08-23T18:00:00+08:00",
         depot=DEPOT,
         stations=STATIONS,
         vehicles=[Vehicle(vehicleId=1000 + i) for i in range(1, vehicle_count + 1)],
@@ -54,9 +54,17 @@ def make_request(orders: list[PlanOrder], vehicle_count: int = 1, request_id: st
 
 
 def simulate_loads(plan, orders_by_id: dict[str, PlanOrder]) -> tuple[int, int]:
-    """按双维度口径统计单车次载客/载货峰值：载客按累计（座位批次内不复用）；
+    """按动态容量口径统计单车次载客峰值/载货峰值：
+    载客：BOARD +1, ALIGHT -1，取全程峰值（座位动态释放）。
     载货 = max(累计派送件, 累计揽收件)（出程派送、返程揽收，货仓依次复用）。"""
-    passenger_total = sum(1 for stop in plan.stops if stop.action == StopAction.BOARD)
+    passenger_load = 0
+    passenger_peak = 0
+    for stop in plan.stops:
+        if stop.action == StopAction.BOARD:
+            passenger_load += 1
+        elif stop.action == StopAction.ALIGHT:
+            passenger_load -= 1
+        passenger_peak = max(passenger_peak, passenger_load)
     deliveries = sum(
         orders_by_id[stop.orderId].itemCount
         for stop in plan.stops if stop.action == StopAction.DELIVER
@@ -65,7 +73,7 @@ def simulate_loads(plan, orders_by_id: dict[str, PlanOrder]) -> tuple[int, int]:
         orders_by_id[stop.orderId].itemCount
         for stop in plan.stops if stop.action == StopAction.PICKUP
     )
-    return passenger_total, max(deliveries, pickups)
+    return passenger_peak, max(deliveries, pickups)
 
 
 def test_board_before_alight() -> None:
@@ -134,12 +142,17 @@ def test_single_vehicle_preferred_when_capacity_enough() -> None:
 
 
 def test_auto_second_vehicle_on_passenger_overload() -> None:
-    # 6 名乘客 > 单车 5 人，必须自动启用第 2 辆车
+    # 6 名乘客，单车容量 5：新模型下 Solver 可通过重访站点（S1→S2→S1→S2）
+    # 用 1 辆车服务全部 6 人（分批上下客，峰值 ≤ 5），这是更优解。
     outcome = solve(make_request([passenger_order(i) for i in range(6)], vehicle_count=2))
     assert outcome.status == "feasible"
-    assert len(outcome.vehicle_plans) == 2
     served = {stop.orderId for plan in outcome.vehicle_plans for stop in plan.stops if stop.orderId}
     assert served == {f"O-P{i}" for i in range(6)}
+    # 验证每辆车峰值载客不超限
+    orders_by_id = {f"O-P{i}": passenger_order(i) for i in range(6)}
+    for plan in outcome.vehicle_plans:
+        peak, _ = simulate_loads(plan, orders_by_id)
+        assert peak <= 5, f"车辆 {plan.vehicleId} 峰值载客 {peak} 超限"
 
 
 def test_auto_second_vehicle_on_cargo_overload() -> None:
