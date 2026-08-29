@@ -99,6 +99,45 @@ def test_service_duration_included():
         assert stop.segmentDuration >= 0
 
 
+def test_time_dimension_avoids_short_but_overtime_path():
+    """时间窗约束下，solver 应避开「距离短但超时」的路径，改选「稍远但满足时间窗」的路径。
+
+    构造：D→S1→S2→D 距离短(3km) 但 S1→S2 段堵车(100s)，总时间 230s；
+          D→S2→S1→D 距离长(15km) 但全程快(15s)，总时间 135s。
+    窗口 140s：只有后者满足。旧 post-solve 会返回「距离最短」的前者再被拒绝；
+    加 Time Dimension 后 solver 应直接返回后者（feasible）。
+    """
+    depot = Station(stationId="D", longitude=104.0, latitude=30.0)
+    s1 = Station(stationId="S1", longitude=104.01, latitude=30.01)
+    s2 = Station(stationId="S2", longitude=104.02, latitude=30.02)
+
+    matrix = {
+        ("D", "D"): (0.0, 0.0), ("D", "S1"): (1.0, 5.0), ("D", "S2"): (5.0, 5.0),
+        ("S1", "D"): (5.0, 5.0), ("S1", "S1"): (0.0, 0.0), ("S1", "S2"): (1.0, 100.0),
+        ("S2", "D"): (1.0, 5.0), ("S2", "S1"): (5.0, 5.0), ("S2", "S2"): (0.0, 0.0),
+    }
+
+    req = PlanRequest(
+        requestId="time-guide",
+        batchStart="2026-08-26T08:00:00+08:00",
+        batchEnd="2026-08-26T08:02:20+08:00",  # 140 秒窗口
+        depot=depot,
+        stations=[s1, s2],
+        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10)],
+        orders=[
+            PlanOrder(orderId="D1", orderType=OrderType.DELIVERY, stationId="S1", itemCount=1),
+            PlanOrder(orderId="D2", orderType=OrderType.DELIVERY, stationId="S2", itemCount=1),
+        ],
+    )
+
+    outcome = solve(req, matrix)
+    assert outcome.status == "feasible"
+    plan = outcome.vehicle_plans[0]
+    deliver_order = [s.stationId for s in plan.stops if s.action == StopAction.DELIVER]
+    # 必须避开 S1→S2 堵车段（否则 230s 超时），故 S2 应在 S1 之前
+    assert deliver_order == ["S2", "S1"], f"应避开 S1→S2 堵车段，实际 {deliver_order}"
+
+
 # ── 与 CargoLoad 共存 ─────────────────────────────────────────
 
 def test_time_with_cargo():

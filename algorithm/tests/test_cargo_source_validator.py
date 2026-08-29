@@ -1,15 +1,15 @@
-"""V2-4.1：CargoSource Validator 测试。
+"""V2-4.1：CargoLoad Validator 测试（对齐 solver 口径）。
 
-验证 validate_cargo_load 按 CargoSource 正确处理：
+验证 validate_cargo_load 对车内真实货物量（CargoLoad）的处理：
 - PRELOADED DELIVERY：消耗 initialCargoLoad
-- SHIPMENT PICKUP/DELIVERY：+/- quantity
-- standalone：旧逻辑
+- PlanShipment PICKUP/DELIVERY：+/- quantity（通过 shipments_by_id）
+- standalone：不进 CargoLoad（由 CargoOut/CargoIn 保证）
 - cargoSource=None：向后兼容
 """
 
 from __future__ import annotations
 
-from app.models import CargoSource, OrderType, PlanOrder, RouteStop, StopAction, VehiclePlan
+from app.models import CargoSource, OrderType, PlanOrder, PlanShipment, RouteStop, StopAction, VehiclePlan
 from app.validators import validate_cargo_load
 
 
@@ -68,44 +68,37 @@ def test_case2_preloaded_delivery_insufficient():
     assert reason == "PRELOAD_INSUFFICIENT"
 
 
-# ── CASE 3: SHIPMENT PICKUP + DELIVERY ────────────────────────
+# ── CASE 3: PlanShipment PICKUP + DELIVERY ─────────────────────
 
 def test_case3_shipment_pickup_delivery():
-    """SHIPMENT: PICKUP 20 → DELIVERY 20 → PASS"""
+    """PlanShipment: PICKUP 20 → DELIVERY 20 → PASS"""
     plan = _make_plan([
         ("S1", StopAction.PICKUP, "TP001"),
         ("S2", StopAction.DELIVER, "TP001"),
     ])
-    orders = _make_orders([
-        ("TP001", OrderType.PICKUP, 20, CargoSource.SHIPMENT),
-    ])
-    # Shipment 的 DELIVERY 也用同一个 orderId
-    orders["TP001-D"] = PlanOrder(
-        orderId="TP001", orderType=OrderType.DELIVERY,
-        stationId="S2", itemCount=20, cargoSource=CargoSource.SHIPMENT,
-    )
+    shipments = {
+        "TP001": PlanShipment(shipmentId="TP001", pickupStationId="S1",
+                              deliveryStationId="S2", quantity=20),
+    }
 
-    valid, reason = validate_cargo_load(plan, orders, cargo_capacity=100)
+    valid, reason = validate_cargo_load(plan, {}, cargo_capacity=100, shipments_by_id=shipments)
     assert valid, f"应 PASS，实际 {reason}"
 
 
-# ── CASE 4: SHIPMENT DELIVERY before PICKUP ───────────────────
+# ── CASE 4: PlanShipment DELIVERY before PICKUP ────────────────
 
 def test_case4_shipment_delivery_before_pickup():
-    """SHIPMENT: DELIVERY 20 → PICKUP 20 → CARGO_LOAD_NEGATIVE"""
+    """PlanShipment: DELIVERY 20 → PICKUP 20 → CARGO_LOAD_NEGATIVE"""
     plan = _make_plan([
         ("S1", StopAction.DELIVER, "TP001"),
         ("S2", StopAction.PICKUP, "TP001"),
     ])
-    orders = _make_orders([
-        ("TP001", OrderType.DELIVERY, 20, CargoSource.SHIPMENT),
-    ])
-    orders["TP001-P"] = PlanOrder(
-        orderId="TP001", orderType=OrderType.PICKUP,
-        stationId="S2", itemCount=20, cargoSource=CargoSource.SHIPMENT,
-    )
+    shipments = {
+        "TP001": PlanShipment(shipmentId="TP001", pickupStationId="S2",
+                              deliveryStationId="S1", quantity=20),
+    }
 
-    valid, reason = validate_cargo_load(plan, orders, cargo_capacity=100)
+    valid, reason = validate_cargo_load(plan, {}, cargo_capacity=100, shipments_by_id=shipments)
     assert not valid
     assert reason == "CARGO_LOAD_NEGATIVE"
 
@@ -143,26 +136,28 @@ def test_case6_backward_compatible():
     assert valid, f"向后兼容应 PASS，实际 {reason}"
 
 
-# ── CASE 7: SHIPMENT 超容量 ───────────────────────────────────
+# ── CASE 7: PlanShipment 超容量 ───────────────────────────────
 
 def test_case7_shipment_over_capacity():
-    """SHIPMENT PICKUP 60 + initialCargo=50 → 110 > 100 → EXCEEDED"""
+    """PlanShipment PICKUP 60 + initialCargo=50 → 110 > 100 → EXCEEDED"""
     plan = _make_plan([
         ("S1", StopAction.PICKUP, "TP001"),
     ])
-    orders = _make_orders([
-        ("TP001", OrderType.PICKUP, 60, CargoSource.SHIPMENT),
-    ])
+    shipments = {
+        "TP001": PlanShipment(shipmentId="TP001", pickupStationId="S1",
+                              deliveryStationId="S2", quantity=60),
+    }
 
-    valid, reason = validate_cargo_load(plan, orders, cargo_capacity=100, initial_cargo_load=50)
+    valid, reason = validate_cargo_load(plan, {}, cargo_capacity=100, initial_cargo_load=50,
+                                        shipments_by_id=shipments)
     assert not valid
     assert reason == "CARGO_CAPACITY_EXCEEDED"
 
 
-# ── CASE 8: 混合 PRELOADED + SHIPMENT ─────────────────────────
+# ── CASE 8: 混合 PRELOADED + PlanShipment ─────────────────────
 
 def test_case8_mixed_sources():
-    """PRELOADED DELIVERY + SHIPMENT PICKUP/DELIVERY 混合。"""
+    """PRELOADED DELIVERY + PlanShipment PICKUP/DELIVERY 混合。"""
     plan = _make_plan([
         ("S1", StopAction.DELIVER, "D1"),     # PRELOADED
         ("S2", StopAction.PICKUP, "TP001"),   # SHIPMENT
@@ -170,14 +165,14 @@ def test_case8_mixed_sources():
     ])
     orders = _make_orders([
         ("D1", OrderType.DELIVERY, 30, CargoSource.PRELOADED),
-        ("TP001", OrderType.PICKUP, 20, CargoSource.SHIPMENT),
     ])
-    orders["TP001-D"] = PlanOrder(
-        orderId="TP001", orderType=OrderType.DELIVERY,
-        stationId="S3", itemCount=20, cargoSource=CargoSource.SHIPMENT,
-    )
+    shipments = {
+        "TP001": PlanShipment(shipmentId="TP001", pickupStationId="S2",
+                              deliveryStationId="S3", quantity=20),
+    }
 
-    valid, reason = validate_cargo_load(plan, orders, cargo_capacity=100, initial_cargo_load=50)
+    valid, reason = validate_cargo_load(plan, orders, cargo_capacity=100, initial_cargo_load=50,
+                                        shipments_by_id=shipments)
     assert valid, f"混合源应 PASS，实际 {reason}"
 
 

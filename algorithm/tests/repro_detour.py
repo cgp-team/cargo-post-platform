@@ -168,9 +168,8 @@ def test_cargo_stop_fields_complete():
         assert stop.servicePoint == stop.stationId
         assert stop.detourDistance is not None
         assert stop.detourDuration is not None
-        # V2-5: passengerImpact = detourDuration（route-level）
-        if stop.detourDuration and stop.detourDuration > 0:
-            assert stop.passengerImpact == stop.detourDuration
+        # 空车：绕行不影响乘客，passengerImpact=None（passenger-level）
+        assert stop.passengerImpact is None
         assert stop.reasonCode is None
 
 

@@ -6,7 +6,7 @@ Solver 负责找到方案，Validator 负责确认方案满足业务。
 
 from __future__ import annotations
 
-from .models import CargoSource, OrderType, PlanOrder, RouteStop, StopAction, VehiclePlan
+from .models import CargoSource, OrderType, PlanOrder, PlanShipment, RouteStop, StopAction, VehiclePlan
 
 # 默认服务时间（秒）
 DEFAULT_BOARD_SECONDS = 30
@@ -67,14 +67,15 @@ def validate_cargo_load(
     orders_by_id: dict[str, PlanOrder],
     cargo_capacity: int,
     initial_cargo_load: int = 0,
+    shipments_by_id: dict[str, PlanShipment] | None = None,
 ) -> tuple[bool, str | None]:
-    """验证货物载荷约束，按 CargoSource 分支处理。
+    """验证车内真实货物量（CargoLoad），与 solver 的 cargo_load_demand 口径一致。
 
-    CargoSource 区分：
-    - PRELOADED DELIVERY：消耗 initialCargoLoad，不产生 current delta
-    - SHIPMENT PICKUP/DELIVERY：PICKUP +quantity, DELIVERY -quantity
-    - standalone PICKUP/DELIVERY：旧 CargoIn/CargoOut 语义
-    - cargoSource=None：向后兼容旧逻辑
+    CargoLoad 只跟踪 PlanShipment（PICKUP +quantity, DELIVERY -quantity）与 initialCargoLoad：
+    - PlanShipment：配对货运，揽收装车 +quantity、送达卸车 -quantity
+    - PRELOADED DELIVERY：消耗 initialCargoLoad（单独统计 preloaded_delivered 校验不超预装）
+    - standalone PICKUP/DELIVERY：不进 CargoLoad，由 CargoOut/CargoIn 维度保证
+    - PlanOrder.cargoSource=SHIPMENT：历史死语义（solver 中与 standalone 行为一致），不参与 CargoLoad
 
     Returns:
         (True, None) if valid
@@ -82,44 +83,29 @@ def validate_cargo_load(
     """
     current = initial_cargo_load
     preloaded_delivered = 0
+    shipments_by_id = shipments_by_id or {}
 
     for stop in plan.stops:
         if not stop.orderId:
             continue
 
-        order = orders_by_id.get(stop.orderId)
-        if not order:
+        # PlanShipment：车内真实货物 PICKUP +quantity, DELIVERY -quantity
+        shipment = shipments_by_id.get(stop.orderId)
+        if shipment is not None:
+            if stop.action == StopAction.PICKUP:
+                current += shipment.quantity
+            elif stop.action == StopAction.DELIVER:
+                current -= shipment.quantity
+            if current < 0:
+                return False, "CARGO_LOAD_NEGATIVE"
+            if current > cargo_capacity:
+                return False, "CARGO_CAPACITY_EXCEEDED"
             continue
 
-        source = order.cargoSource
-
-        if stop.action == StopAction.PICKUP:
-            if source == CargoSource.SHIPMENT:
-                # SHIPMENT PICKUP: +quantity
-                current += order.itemCount
-            elif source is None:
-                # standalone PICKUP (旧逻辑): +quantity
-                current += order.itemCount
-            # PRELOADED PICKUP 不应该存在，忽略
-
-        elif stop.action == StopAction.DELIVER:
-            if source == CargoSource.PRELOADED:
-                # PRELOADED DELIVERY: 消耗 initialCargoLoad
-                preloaded_delivered += order.itemCount
-            elif source == CargoSource.SHIPMENT:
-                # SHIPMENT DELIVERY: -quantity
-                current -= order.itemCount
-            elif source is None:
-                # standalone DELIVERY (旧逻辑): -quantity
-                current -= order.itemCount
-
-        # 检查 cargo load 负值（仅 SHIPMENT，standalone 由 CargoOut/CargoIn 保证）
-        if source == CargoSource.SHIPMENT and current < 0:
-            return False, "CARGO_LOAD_NEGATIVE"
-
-        # 检查超容量
-        if current > cargo_capacity:
-            return False, "CARGO_CAPACITY_EXCEEDED"
+        # PlanOrder：仅 PRELOADED DELIVERY 消耗 initialCargoLoad（其余不进 CargoLoad）
+        order = orders_by_id.get(stop.orderId)
+        if order is not None and stop.action == StopAction.DELIVER and order.cargoSource == CargoSource.PRELOADED:
+            preloaded_delivered += order.itemCount
 
     # 检查 PRELOADED DELIVERY 是否超过 initialCargoLoad
     if preloaded_delivered > initial_cargo_load:
@@ -153,8 +139,11 @@ def validate_order_precedence(
             if actions["BOARD"] >= actions["ALIGHT"]:
                 return False, "BOARD_AFTER_ALIGHT"
 
-        # 货运：PICKUP 必须在 DELIVER 之前（如果有配对）
+        # 货运配对（PlanShipment：同一 shipmentId 有 PICKUP + DELIVER）：PICKUP 必须在 DELIVER 之前
         # 注意：单向揽收（只有 PICKUP）或单向派送（只有 DELIVER）是合法的
+        if "PICKUP" in actions and "DELIVER" in actions:
+            if actions["PICKUP"] >= actions["DELIVER"]:
+                return False, "PICKUP_AFTER_DELIVER"
 
     return True, None
 
@@ -209,6 +198,7 @@ def validate_vehicle_plan(
     plan: VehiclePlan,
     vehicle: any,  # Vehicle model
     orders_by_id: dict[str, PlanOrder],
+    shipments_by_id: dict[str, PlanShipment] | None = None,
 ) -> tuple[bool, str | None]:
     """综合验证一辆车的方案。
 
@@ -225,7 +215,7 @@ def validate_vehicle_plan(
 
     # 2. 货物载荷
     valid, reason = validate_cargo_load(
-        plan, orders_by_id, vehicle.cargoCapacity, vehicle.initialCargoLoad
+        plan, orders_by_id, vehicle.cargoCapacity, vehicle.initialCargoLoad, shipments_by_id
     )
     if not valid:
         return False, reason

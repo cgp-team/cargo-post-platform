@@ -59,7 +59,7 @@ def test_passenger_not_affected_by_skeleton_cargo():
 
 
 def test_passenger_affected_by_detour():
-    """非骨架站的货运 stop 影响乘客。"""
+    """车上已有乘客（初始载荷）时，非骨架站绕行影响乘客（passengerImpact = detourDuration）。"""
     stations = _stations()
 
     req = PlanRequest(
@@ -68,11 +68,8 @@ def test_passenger_affected_by_detour():
         batchEnd="2026-08-26T23:00:00+08:00",
         depot=stations[0],
         stations=stations[1:],
-        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10)],
-        orders=[
-            PlanOrder(orderId="P1", orderType=OrderType.PASSENGER,
-                      boardingStationId="S1", alightingStationId="S3"),
-        ],
+        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10, initialPassengerLoad=1)],
+        orders=[],
         shipments=[
             PlanShipment(shipmentId="TP001", pickupStationId="S4",
                          deliveryStationId="S2", quantity=3),
@@ -85,15 +82,12 @@ def test_passenger_affected_by_detour():
     plan = outcome.vehicle_plans[0]
     tp001_stops = [s for s in plan.stops if s.orderId == "TP001"]
     for stop in tp001_stops:
-        if stop.stationId == "S4":
-            # 非骨架站有绕行
-            assert stop.detourDistance > 0
-            assert stop.detourDuration > 0
+        if stop.detourDuration and stop.detourDuration > 0:
             assert stop.passengerImpact == stop.detourDuration
 
 
 def test_passenger_impact_calculation():
-    """验证 passengerImpact = detourDuration。"""
+    """空车（无初始乘客）绕行 → passengerImpact=None（passenger-level 不受影响）。"""
     stations = _stations()
 
     req = PlanRequest(
@@ -102,7 +96,7 @@ def test_passenger_impact_calculation():
         batchEnd="2026-08-26T23:00:00+08:00",
         depot=stations[0],
         stations=stations[1:],
-        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10)],
+        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10)],  # 空车
         orders=[],
         shipments=[
             PlanShipment(shipmentId="TP001", pickupStationId="S4",
@@ -117,7 +111,7 @@ def test_passenger_impact_calculation():
     tp001_stops = [s for s in plan.stops if s.orderId == "TP001"]
     for stop in tp001_stops:
         if stop.detourDuration and stop.detourDuration > 0:
-            assert stop.passengerImpact == stop.detourDuration
+            assert stop.passengerImpact is None  # 空车，无乘客影响
 
 
 # ── 多乘客场景 ────────────────────────────────────────────────

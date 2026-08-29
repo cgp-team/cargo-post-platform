@@ -3,6 +3,7 @@
 契约见 docs/api/algorithm-api.yaml；与 mock-algorithm 的关系见 README.md。
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,7 +34,9 @@ from .models import (
 )
 from .solver import solve
 
-ALGORITHM_VERSION = "ortools-1.2.0"
+logger = logging.getLogger(__name__)
+
+ALGORITHM_VERSION = "ortools-1.3.0"
 PARAMETER_VERSION = "params-v2"
 
 # 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
@@ -100,7 +103,9 @@ def evict_expired_jobs() -> None:
 def build_result(request: PlanRequest) -> PlanResult:
     warnings = config_warnings(request.algorithmConfig)
     matrix = None
-    if amap_provider is not None and request.orders:
+    # 仅当存在需要求解的任务（orders 或 shipments）才取路网矩阵；
+    # 此前只判 orders，纯 shipments 请求会漏走高德路网、退化为欧氏直线。
+    if amap_provider is not None and (request.orders or request.shipments):
         try:
             matrix = amap_provider.get_matrix([request.depot, *request.stations])
         except AmapUnavailable:
@@ -133,7 +138,9 @@ def build_result(request: PlanRequest) -> PlanResult:
 
 
 def validate_request(request: PlanRequest) -> JSONResponse | None:
-    if len(request.stations) > MAX_STATIONS or len(request.orders) > MAX_ORDERS or len(request.vehicles) > MAX_VEHICLES:
+    # 规模上限：orders 与 shipments 均计入订单数（每个 shipment 展开为 PICKUP+DELIVERY 两节点）
+    total_orders = len(request.orders) + len(request.shipments)
+    if len(request.stations) > MAX_STATIONS or total_orders > MAX_ORDERS or len(request.vehicles) > MAX_VEHICLES:
         return error_response(413, "OVER_LIMIT", "超出规模上限（30 站点 / 25 订单 / 3 车）", request.requestId)
     if not request.vehicles:
         return error_response(400, "INVALID_INPUT", "至少需要一台可用车辆", request.requestId)
@@ -151,6 +158,16 @@ def validate_request(request: PlanRequest) -> JSONResponse | None:
         unknown = [station_id for station_id in refs if station_id not in known_stations]
         if unknown:
             return error_response(400, "INVALID_INPUT", f"订单 {order.orderId} 引用了未知站点 {unknown}", request.requestId)
+
+    # PlanShipment：校验揽收/送达站点引用（未知站点会触发 solver KeyError 崩溃），
+    # 且揽收站与送达站必须不同（配对语义要求）。
+    for shipment in request.shipments:
+        if shipment.pickupStationId == shipment.deliveryStationId:
+            return error_response(400, "INVALID_INPUT", f"货运订单 {shipment.shipmentId} 揽收站与送达站相同", request.requestId)
+        unknown = [station_id for station_id in (shipment.pickupStationId, shipment.deliveryStationId)
+                   if station_id not in known_stations]
+        if unknown:
+            return error_response(400, "INVALID_INPUT", f"货运订单 {shipment.shipmentId} 引用了未知站点 {unknown}", request.requestId)
     return None
 
 
@@ -191,7 +208,13 @@ def create_plan(request: PlanRequest):
     # scenario 为 Mock 专属混沌字段，真实算法接受但忽略（契约标注"真实算法可忽略"）。
     # 本规模求解远低于契约 10 秒时限，同步返回；若未来出现超时，按契约先落 pending
     # 记录并返回 408，业务侧凭 requestId 轮询 /api/v1/result/{requestId}。
-    result = build_result(request)
+    try:
+        result = build_result(request)
+    except Exception as exc:
+        # 求解器异常（如未预见的 KeyError/索引越界）不得裸 500：返回结构化错误，
+        # 后端适配层凭 code=ALGORITHM_INTERNAL_ERROR 识别并降级，而非拿到无业务码的 500。
+        logger.exception("规划求解异常 requestId=%s", request.requestId)
+        return error_response(500, "ALGORITHM_INTERNAL_ERROR", f"算法求解失败：{exc}", request.requestId)
     jobs[request.requestId] = JobRecord(request=request, result=result, created_at=now())
     return result
 
@@ -210,7 +233,7 @@ def get_distance(request: DistanceRequest):
     """两站点间距离/耗时查询（寄货页取货→送达）。
 
     复用高德路网矩阵（AmapDistanceProvider）；未配置 AMAP_KEY 或高德不可用时降级
-    欧氏直线（distanceUnit=degree，durationSeconds 为 null，由业务侧换算/兜底）。
+    欧氏直线估算（恒返回 distanceUnit=km；durationSeconds 按均速估算，非 null）。
     """
     if len(request.stations) != 2:
         return error_response(400, "INVALID_INPUT", "距离查询需要且仅需要 2 个站点", request.requestId)

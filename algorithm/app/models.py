@@ -29,7 +29,9 @@ class OrderType(str, Enum):
 class CargoSource(str, Enum):
     """货物来源：区分预装派送和任务段内揽收-派送配对。"""
     PRELOADED = "PRELOADED"  # 场站预装，消耗 initialCargoLoad
-    SHIPMENT = "SHIPMENT"    # 任务段内 PICKUP→DELIVERY 配对
+    # 历史遗留：配对货运已统一用 PlanShipment 结构表达，此值在 solver 的 CargoLoad 维度
+    # 为死语义（与 standalone 行为一致），保留仅为契约兼容。
+    SHIPMENT = "SHIPMENT"
 
 
 class StopAction(str, Enum):
@@ -56,7 +58,7 @@ class Vehicle(BaseModel):
     # 缺省为 0（空车出发）。必须 < passengerCapacity。
     initialPassengerLoad: int = Field(default=0, ge=0)
     # 初始货物载荷：车辆出发时已有 N 件货物（从场站预装的派送件）。
-    # 缺省为 0（空车出发）。必须 < cargoCapacity。
+    # 缺省为 0（空车出发）。必须 ≤ cargoCapacity（允许满载出发再派送）。
     initialCargoLoad: int = Field(default=0, ge=0)
     # 公交骨架（Mandatory Passenger Service）：车辆必须按顺序经停的站点编号列表（不含场站）。
     # 提供时该车辆按骨架顺序强制停靠，货运/揽收作为绕行插入骨架间隙；缺省为纯 VRP。
@@ -72,7 +74,7 @@ class PlanOrder(BaseModel):
     itemCount: int = Field(default=1, ge=1)
     weightKg: float | None = Field(default=None, ge=0)
     volumeM3: float | None = Field(default=None, ge=0)
-    # 货物来源：PRELOADED=场站预装（消耗 initialCargoLoad），SHIPMENT=任务段内配对
+    # 货物来源：PRELOADED=场站预装（消耗 initialCargoLoad）；SHIPMENT 为历史死语义（配对货运走 PlanShipment）。
     # 缺省为 None，solver 按上下文推断（DELIVERY→PRELOADED，PICKUP→无来源语义）
     cargoSource: CargoSource | None = None
 
@@ -142,7 +144,7 @@ class RouteStop(BaseModel):
     orderId: str | None = None
     action: StopAction
     segmentDistance: float = 0.0
-    # 分段路网行驶秒数（仅高德矩阵路径；欧氏路径为 None，后端按直线÷均速兜底）
+    # 分段行驶秒数（高德矩阵用真实路网秒；欧氏路径用 Haversine 直线÷均速估算，均为数值非 None）
     segmentDuration: float | None = None
     # 算法解释（仅货运/揽收经停 PICKUP/DELIVER 携带，供后台"为什么这样安排"展示）
     accepted: bool = True
