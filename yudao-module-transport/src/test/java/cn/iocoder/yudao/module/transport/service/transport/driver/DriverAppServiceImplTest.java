@@ -370,6 +370,66 @@ class DriverAppServiceImplTest {
         verify(shiftExecutionMapper, never()).updateById(any(ShiftExecutionDO.class));
     }
 
+    @Test
+    void arrive_task_segment_detour_station_allowed() {
+        // 绕行村站：在任务段 plan_item 内但不在班次线路里，应按任务段顺序放行（不再抛 NOT_IN_ROUTE）
+        loginMember();
+        stubLoginDriver();
+        when(shiftMapper.selectById(10L)).thenReturn(ShiftDO.builder().id(10L).routeId(5L).build());
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(0));
+        when(routeStationMapper.selectListByRouteIds(List.of(5L))).thenReturn(List.of(
+                RouteStationDO.builder().routeId(5L).stationId(11L).sequenceNo(1).build(),
+                RouteStationDO.builder().routeId(5L).stationId(22L).sequenceNo(2).build()));
+        // 任务段：绕行村站 99（不在班次线路）visitSequence=1，是期望下一站
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanItemDO.builder().id(9L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(99L).visitSequence(1).status(TaskItemStatusEnum.PENDING.getStatus()).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build()));
+
+        AppDriverArriveReqVO reqVO = new AppDriverArriveReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setShiftId(10L);
+        reqVO.setStationId(99L); // 绕行村站，不在班次线路
+        driverAppService.arrive(reqVO); // 不应抛异常
+
+        ArgumentCaptor<ShiftExecutionDO> captor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
+        verify(shiftExecutionMapper).updateById(captor.capture());
+        assertEquals(99L, captor.getValue().getCurrentStationId());
+        assertEquals(0, captor.getValue().getStatus()); // 非班次终点，仍在途
+    }
+
+    @Test
+    void arrive_task_segment_skip_throws() {
+        // 任务段内但跳过期望下一站（期望 11，直接到 22）→ 抛 ORDER_ILLEGAL
+        loginMember();
+        stubLoginDriver();
+        when(shiftMapper.selectById(10L)).thenReturn(ShiftDO.builder().id(10L).routeId(5L).build());
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(0));
+        when(routeStationMapper.selectListByRouteIds(List.of(5L))).thenReturn(List.of(
+                RouteStationDO.builder().routeId(5L).stationId(11L).sequenceNo(1).build(),
+                RouteStationDO.builder().routeId(5L).stationId(22L).sequenceNo(2).build()));
+        // 任务段：11(seq1 PENDING) 是期望下一站，22(seq2 PENDING) 是其后一站
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanItemDO.builder().id(1L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(11L).visitSequence(1).status(TaskItemStatusEnum.PENDING.getStatus()).build(),
+                DispatchPlanItemDO.builder().id(2L).planId(100L).vehicleId(7L).driverId(DRIVER_ID)
+                        .stationId(22L).visitSequence(2).status(TaskItemStatusEnum.PENDING.getStatus()).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build()));
+
+        AppDriverArriveReqVO reqVO = new AppDriverArriveReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setShiftId(10L);
+        reqVO.setStationId(22L); // 跳过期望下一站 11，直达 22
+        ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.arrive(reqVO));
+
+        assertEquals(DRIVER_STATION_ORDER_ILLEGAL.getCode(), ex.getCode());
+        verify(shiftExecutionMapper, never()).updateById(any(ShiftExecutionDO.class));
+    }
+
     // ==================== 装车 ====================
 
     @Test
