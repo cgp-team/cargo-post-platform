@@ -107,4 +107,11 @@ public class AppDriverController {
         driverAppService.reportLocation(reqVO);
         return success(true);
     }
+
+    @GetMapping("/position")
+    @Operation(summary = "司机车辆当前位置（真实上报 REAL + 模拟引擎 SIMULATED）")
+    @Parameter(name = "driverId", description = "司机编号", required = true)
+    public CommonResult<AppDriverPositionRespVO> position(@RequestParam("driverId") Long driverId) {
+        return success(driverAppService.getPosition(driverId));
+    }
 }

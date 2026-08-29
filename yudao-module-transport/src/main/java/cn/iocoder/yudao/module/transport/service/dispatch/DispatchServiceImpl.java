@@ -33,6 +33,14 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmAdapter;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmResultValidator;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.*;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
+import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
+import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
+import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
+import cn.iocoder.yudao.module.system.api.social.SocialClientApi;
+import cn.iocoder.yudao.module.system.api.social.dto.SocialWxaSubscribeMessageSendReqDTO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
+import lombok.extern.slf4j.Slf4j;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,6 +60,7 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 
 @Service
 @Validated
+@Slf4j
 public class DispatchServiceImpl implements DispatchService {
 
     /** 算法契约时区固定 +08:00，见 docs/api/algorithm-api.yaml */
@@ -79,6 +88,9 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private DepartureCheckMapper departureCheckMapper;
     @Resource private AlgorithmAdapter algorithmAdapter;
     @Resource private DispatchEstimationService dispatchEstimationService;
+    @Resource private SocialClientApi socialClientApi;
+    @Resource private MemberUserApi memberUserApi;
+    @Resource private DriverMapper driverMapper;
 
     @Override
     public PageResult<TransportOrderDO> getOrderPoolPage(DispatchPoolPageReqVO reqVO) {
@@ -320,6 +332,8 @@ public class DispatchServiceImpl implements DispatchService {
             plan.setApprovedBy(SecurityFrameworkUtils.getLoginUserId());
             plan.setApprovedTime(LocalDateTime.now());
             dispatchPlanMapper.updateById(plan);
+            // 派单下发后：给方案涉及车辆司机发微信订阅消息（发送失败不影响派单主流程）
+            notifyDriversOfPlan(plan.getId());
         } else {
             if (StrUtil.isBlank(reqVO.getReason())) {
                 throw exception(BAD_REQUEST);
@@ -331,6 +345,57 @@ public class DispatchServiceImpl implements DispatchService {
                     TransportOrderStatusEnum.ASSIGNED);
         }
         insertPlanLog(plan.getId(), DispatchPlanStatusEnum.PENDING.getStatus(), plan.getStatus(), reqVO.getReason());
+    }
+
+    /**
+     * 派单下发后：给方案涉及车辆司机发微信订阅消息「新派单任务」。
+     *
+     * 【预留项 · 当前未生效】个人主体小程序在微信公众平台看不到订阅消息入口/模板，
+     * 需等小程序换「组织主体」并在公众平台申请订阅消息模板后才能真正推送到司机微信。
+     * 落地条件（TODO）：
+     *   1. 小程序换组织主体（个人主体 → 企业/组织）；
+     *   2. 微信公众平台「功能 → 订阅消息」申请一次性订阅模板，模板标题与此处 templateTitle 对齐；
+     *   3. 后端 wx.miniapp.appid/secret 配成真实小程序（建议走环境变量 WX_MINIAPP_APPID/SECRET，secret 不入库）。
+     *
+     * 发送失败静默降级（未配置 appid/secret 或无 openid 时 sendWxaSubscribeMessage 内部已 warn），不影响派单。
+     * 模板字段 key（thing1/thing2）需与微信公众平台申请的订阅消息模板字段对齐。
+     */
+    private void notifyDriversOfPlan(Long planId) {
+        try {
+            List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                    .eq(DispatchPlanItemDO::getPlanId, planId));
+            Set<Long> vehicleIds = items.stream().map(DispatchPlanItemDO::getVehicleId)
+                    .filter(Objects::nonNull).collect(Collectors.toSet());
+            if (vehicleIds.isEmpty()) {
+                return;
+            }
+            List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
+            for (Long vehicleId : vehicleIds) {
+                Long driverId = bindings.stream()
+                        .filter(b -> Objects.equals(b.getVehicleId(), vehicleId))
+                        .map(DriverVehicleDO::getDriverId).findFirst().orElse(null);
+                if (driverId == null) {
+                    continue;
+                }
+                DriverDO driver = driverMapper.selectById(driverId);
+                if (driver == null || StrUtil.isBlank(driver.getMobile())) {
+                    continue;
+                }
+                MemberUserRespDTO member = memberUserApi.getUserByMobile(driver.getMobile());
+                if (member == null) {
+                    continue;
+                }
+                socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
+                        .setUserId(member.getId())
+                        .setUserType(UserTypeEnum.MEMBER.getValue())
+                        .setTemplateTitle("派单通知")
+                        .setPage("pages/driver/workbench/workbench")
+                        .addMessage("thing1", "新派单任务")
+                        .addMessage("thing2", "请查看司机端工作台"));
+            }
+        } catch (Exception e) {
+            log.warn("[notifyDriversOfPlan][planId={} 发送订阅消息失败，不影响派单]", planId, e);
+        }
     }
 
     @Override

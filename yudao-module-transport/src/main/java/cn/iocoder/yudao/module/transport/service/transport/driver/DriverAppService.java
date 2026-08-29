@@ -48,4 +48,10 @@ public interface DriverAppService {
 
     /** 上报车辆实时位置（按车辆 upsert） */
     void reportLocation(AppDriverLocationReqVO reqVO);
+
+    /**
+     * 司机车辆当前位置：真实上报位置（REAL）与模拟运营引擎位置（SIMULATED）都返回，
+     * 前端按「模拟模式」选择消费哪一路。
+     */
+    AppDriverPositionRespVO getPosition(Long driverId);
 }
