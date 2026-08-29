@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan_item` (
   `service_point_station_id` bigint DEFAULT NULL COMMENT '算法解释-服务点站点编号(替代交接时推荐)',
   `detour_distance_km` decimal(12,3) DEFAULT NULL COMMENT '算法解释-绕行距离(km，相对公交骨架，骨架站为0)',
   `detour_duration_seconds` int DEFAULT NULL COMMENT '算法解释-绕行时长(秒)',
+  `passenger_impact_seconds` int DEFAULT NULL COMMENT '算法解释-乘客影响(秒，绕行对车上乘客额外乘车时长，空车为NULL)',
   `reason_code` varchar(64) DEFAULT NULL COMMENT '算法解释-未接受原因码(ReviewReasonCodeEnum；已接受为NULL)',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '', `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,

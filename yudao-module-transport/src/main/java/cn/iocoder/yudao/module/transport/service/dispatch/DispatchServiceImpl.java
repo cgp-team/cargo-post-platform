@@ -1026,8 +1026,9 @@ public class DispatchServiceImpl implements DispatchService {
                     .orderId(stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null)
                     .visitSequence(i + 1)
                     .actionType(action != null ? action.getAction() : null);
-            // 算法解释（Phase 5）：货运/揽收经停携带服务方式/服务点/绕行/原因码
-            if (Boolean.TRUE.equals(stop.getAccepted()) || stop.getServiceMode() != null || stop.getReasonCode() != null) {
+            // 算法解释（Phase 5）：货运/揽收经停携带服务方式/服务点/绕行/乘客影响/原因码
+            if (Boolean.TRUE.equals(stop.getAccepted()) || stop.getServiceMode() != null || stop.getReasonCode() != null
+                    || stop.getPassengerImpact() != null) {
                 itemBuilder.serviceMode(stop.getServiceMode())
                         .servicePointStationId(stop.getServicePoint() != null
                                 ? Long.valueOf(stop.getServicePoint()) : null)
@@ -1035,6 +1036,8 @@ public class DispatchServiceImpl implements DispatchService {
                                 ? BigDecimal.valueOf(stop.getDetourDistance()) : null)
                         .detourDurationSeconds(stop.getDetourDuration() != null
                                 ? stop.getDetourDuration().intValue() : null)
+                        .passengerImpactSeconds(stop.getPassengerImpact() != null
+                                ? stop.getPassengerImpact().intValue() : null)
                         .reasonCode(stop.getReasonCode());
             }
             dispatchPlanItemMapper.insert(itemBuilder.build());
