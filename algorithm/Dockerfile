@@ -6,7 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --requirement requirements.txt
+# 国内 self-hosted runner 网络差，pip 走清华镜像 + 超时重试，避免 ortools 大 wheel 下载超时失败
+RUN pip install --no-cache-dir --timeout 120 --retries 5 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --requirement requirements.txt
 
 COPY app ./app
 
