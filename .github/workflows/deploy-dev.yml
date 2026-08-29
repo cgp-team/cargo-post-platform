@@ -207,15 +207,72 @@ jobs:
       # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
       # 后端默认仍指向 mock-algorithm(18080)；要真正启用需在服务器 /opt/cargo-post/app.env
       # 设 ALGORITHM_BASE_URL=http://127.0.0.1:18081 并重启 cargo-post（见 docs/deployment.md）。
+      # 失败自动诊断：trap ERR 打印 docker/compose/端口/目录诊断，不裸 exit 1。
       - name: Build & deploy algorithm
         if: steps.changes.outputs.algorithm == 'true'
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
-          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml build algorithm
-          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml up -d algorithm
-          echo "algorithm container deployed:"
-          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml ps algorithm
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+
+          trap 'echo; echo "===== [失败诊断] Build & deploy algorithm 出错，打印诊断信息 =====";
+            echo "--- uname ---"; uname -a 2>&1 || true;
+            echo "--- 磁盘 df -h ---"; df -h 2>&1 | head -15 || true;
+            echo "--- 内存 free -h ---"; free -h 2>&1 || true;
+            echo "--- docker version ---"; docker version 2>&1 | head -25 || true;
+            echo "--- docker compose version ---"; docker compose version 2>&1 || true;
+            echo "--- docker info ---"; docker info 2>&1 | head -40 || true;
+            echo "--- 端口 18081 监听(ss) ---"; ss -lntp 2>/dev/null | grep ":18081" || echo "(ss 未发现 18081 监听)";
+            echo "--- 端口 18081 容器(docker ps) ---"; docker ps --format "{{.ID}} {{.Names}} {{.Ports}}" 2>/dev/null | grep "18081" || echo "(无容器占用 18081)";
+            echo "--- algorithm 目录/Dockerfile ---"; ls -la algorithm/ 2>&1 | head -20 || true; test -f algorithm/Dockerfile && echo "Dockerfile 存在" || echo "Dockerfile 缺失";
+            echo "--- compose config ---"; "${COMPOSE[@]}" config 2>&1 | head -60 || true;
+            echo "--- 现有 cargo-post/algorithm 镜像 ---"; docker images cargo-post/algorithm 2>&1 || true;
+            echo "--- 现有 algorithm 容器 ---"; "${COMPOSE[@]}" ps algorithm 2>&1 || true;
+            echo "===== 诊断结束 =====";' ERR
+
+          echo "===== [前置诊断] 环境 ====="
+          uname -a || true
+          df -h | head -10 || true
+          free -h || true
+          docker version || true
+          docker compose version || true
+
+          echo "===== [前置诊断] 目录与文件 ====="
+          test -f algorithm/Dockerfile && echo "algorithm/Dockerfile 存在" || { echo "ERROR: algorithm/Dockerfile 缺失"; exit 1; }
+          test -f algorithm/requirements.txt && echo "algorithm/requirements.txt 存在" || { echo "ERROR: algorithm/requirements.txt 缺失"; exit 1; }
+          ls -la algorithm/ | head -20
+
+          echo "===== [前置诊断] 端口 18081 ====="
+          ss -lntp 2>/dev/null | grep ':18081' || echo "18081 未被监听"
+          docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' 2>/dev/null | grep '18081' || echo "无容器占用 18081"
+
+          echo "===== [前置诊断] compose config 校验 ====="
+          "${COMPOSE[@]}" config >/dev/null && echo "compose config 校验通过"
+
+          echo "===== [前置诊断] 现有镜像/容器 ====="
+          docker images cargo-post/algorithm || true
+          "${COMPOSE[@]}" ps algorithm || true
+
+          echo "===== 构建 algorithm 镜像（--progress=plain，最多 3 次重试） ====="
+          for attempt in 1 2 3; do
+            if "${COMPOSE[@]}" build --progress=plain algorithm; then
+              echo "构建成功（第 ${attempt} 次尝试）"
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "ERROR: algorithm 镜像 3 次构建尝试均失败"
+              exit 1
+            fi
+            echo "构建失败（第 ${attempt} 次），15 秒后重试..."
+            sleep 15
+          done
+
+          echo "===== 启动 algorithm 容器 ====="
+          "${COMPOSE[@]}" up -d algorithm
+
+          echo "===== 验证部署结果 ====="
+          "${COMPOSE[@]}" ps algorithm
+          echo "algorithm 部署完成"
 
       - name: Deploy backend and restart
         if: steps.changes.outputs.backend == 'true'
