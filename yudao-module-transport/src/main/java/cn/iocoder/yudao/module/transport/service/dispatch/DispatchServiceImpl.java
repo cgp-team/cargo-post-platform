@@ -748,6 +748,12 @@ public class DispatchServiceImpl implements DispatchService {
             case AlgorithmPlanRespDTO.REASON_OVER_CAPACITY -> "运力不足（订单总需求超出可用车辆总容量）";
             case AlgorithmPlanRespDTO.REASON_TIMING_CONFLICT -> "客运上/下车时序冲突，无法排程";
             case AlgorithmPlanRespDTO.REASON_PARTIAL_ONLY -> "当前订单组合只能部分完成，无法生成完整方案";
+            // 自研算法服务（ortools）扩展原因码：契约仅约定上三者，以下为 V2 优化新增的细分原因
+            case "TIME_WINDOW_EXCEEDED" -> "任务超出批次时间窗，无法在指定时段内完成";
+            case "PRELOAD_INSUFFICIENT" -> "场站预装货物不足，无法完成派送";
+            case "DISTANCE_MATRIX_INCOMPLETE" -> "路网距离矩阵不完整，暂无法规划";
+            case "ROUTE_DURATION_UNAVAILABLE" -> "路网行驶时长缺失，暂无法规划";
+            case "VEHICLE_NOT_FOUND" -> "方案引用的车辆不存在";
             default -> reasonCode;
         };
     }
