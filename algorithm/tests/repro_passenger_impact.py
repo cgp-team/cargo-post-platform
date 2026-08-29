@@ -11,8 +11,8 @@ from app.models import OrderType, PlanOrder, PlanRequest, Station, StopAction, V
 from app.solver import solve
 
 
-def test_passenger_impact_equals_detour_duration():
-    """V2-5: passengerImpact = detourDuration（route-level）。"""
+def test_passenger_impact_empty_vehicle_none():
+    """passenger-level：空车（无乘客订单、无初始载荷）绕行不影响乘客 → passengerImpact=None。"""
     stations = [
         Station(stationId=f"S{i}", longitude=104.0 + i * 0.05, latitude=30.0 + i * 0.05)
         for i in range(5)
@@ -46,9 +46,5 @@ def test_passenger_impact_equals_detour_duration():
     plan = outcome.vehicle_plans[0]
     for stop in plan.stops:
         if stop.orderId and stop.action in (StopAction.PICKUP, StopAction.DELIVER):
-            if stop.detourDuration and stop.detourDuration > 0:
-                # V2-5: passengerImpact = detourDuration（route-level）
-                assert stop.passengerImpact == stop.detourDuration
-            else:
-                # 骨架站：detour=0，passengerImpact=None
-                assert stop.passengerImpact is None
+            # 空车：绕行不影响乘客，passengerImpact=None（passenger-level）
+            assert stop.passengerImpact is None

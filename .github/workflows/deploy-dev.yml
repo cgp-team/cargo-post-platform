@@ -108,6 +108,7 @@ jobs:
           set -euo pipefail
           backend=true
           frontend=true
+          algorithm=true
           if [[ -n "${BEFORE}" && "${BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
             # 修正对比基准：若上次成功部署晚于 BEFORE（前序部署被取消、本次仅间隔文档 push），
             # 以"最近一次成功部署的 commit"为基准，避免被挤压的构建永远丢失（2026-08-23 实战踩坑）
@@ -125,13 +126,14 @@ jobs:
               "https://api.github.com/repos/${REPO}/compare/${BEFORE}...${AFTER}" || echo '')
             if [[ -n "${RESP}" ]]; then
               # 解析脚本以 base64 内嵌，规避 YAML 块标量缩进与引号转义问题
-              echo 'aW1wb3J0IGpzb24sIHN5cwpkID0ganNvbi5sb2FkKHN5cy5zdGRpbikKZmlsZXMgPSBbZi5nZXQoJ2ZpbGVuYW1lJywgJycpIGZvciBmIGluIGQuZ2V0KCdmaWxlcycsIFtdKV0KRlJPTlRFTkQgPSAneXVkYW8tdWkveXVkYW8tdWktYWRtaW4tdnVlMy8nCkJBQ0tFTkRfUFJFRklYRVMgPSAoJ3l1ZGFvLXNlcnZlci8nLCAneXVkYW8tZnJhbWV3b3JrLycsICd5dWRhby1kZXBlbmRlbmNpZXMvJywgJ3l1ZGFvLW1vZHVsZS0nKQpkZWYgaXNfZnJvbnRlbmQocCk6IHJldHVybiBwLnN0YXJ0c3dpdGgoRlJPTlRFTkQpCmRlZiBpc19iYWNrZW5kKHApOiByZXR1cm4gcCA9PSAncG9tLnhtbCcgb3IgcC5zdGFydHN3aXRoKEJBQ0tFTkRfUFJFRklYRVMpCmlmIG5vdCBmaWxlczoKICAgIHByaW50KCd0cnVlIHRydWUnKQplbHNlOgogICAgcHJpbnQoJ3RydWUnIGlmIGFueShpc19iYWNrZW5kKHApIGZvciBwIGluIGZpbGVzKSBlbHNlICdmYWxzZScsCiAgICAgICAgICAndHJ1ZScgaWYgYW55KGlzX2Zyb250ZW5kKHApIGZvciBwIGluIGZpbGVzKSBlbHNlICdmYWxzZScpCg==' | base64 -d > /tmp/parse_compare.py
-              read -r backend frontend <<<"$(printf '%s' "${RESP}" | python3 /tmp/parse_compare.py)"
+              echo 'aW1wb3J0IGpzb24sIHN5cwpkID0ganNvbi5sb2FkKHN5cy5zdGRpbikKZmlsZXMgPSBbZi5nZXQoJ2ZpbGVuYW1lJywgJycpIGZvciBmIGluIGQuZ2V0KCdmaWxlcycsIFtdKV0KRlJPTlRFTkQgPSAneXVkYW8tdWkveXVkYW8tdWktYWRtaW4tdnVlMy8nCkJBQ0tFTkRfUFJFRklYRVMgPSAoJ3l1ZGFvLXNlcnZlci8nLCAneXVkYW8tZnJhbWV3b3JrLycsICd5dWRhby1kZXBlbmRlbmNpZXMvJywgJ3l1ZGFvLW1vZHVsZS0nKQpBTEdPUklUSE1fUFJFRklYRVMgPSAoJ2FsZ29yaXRobS8nLCkKZGVmIGlzX2Zyb250ZW5kKHApOiByZXR1cm4gcC5zdGFydHN3aXRoKEZST05URU5EKQpkZWYgaXNfYmFja2VuZChwKTogcmV0dXJuIHAgPT0gJ3BvbS54bWwnIG9yIHAuc3RhcnRzd2l0aChCQUNLRU5EX1BSRUZJWEVTKQpkZWYgaXNfYWxnb3JpdGhtKHApOiByZXR1cm4gcC5zdGFydHN3aXRoKEFMR09SSVRITV9QUkVGSVhFUykKaWYgbm90IGZpbGVzOgogICAgcHJpbnQoJ3RydWUgdHJ1ZSB0cnVlJykKZWxzZToKICAgIHByaW50KCd0cnVlJyBpZiBhbnkoaXNfYmFja2VuZChwKSBmb3IgcCBpbiBmaWxlcykgZWxzZSAnZmFsc2UnLAogICAgICAgICAgJ3RydWUnIGlmIGFueShpc19mcm9udGVuZChwKSBmb3IgcCBpbiBmaWxlcykgZWxzZSAnZmFsc2UnLAogICAgICAgICAgJ3RydWUnIGlmIGFueShpc19hbGdvcml0aG0ocCkgZm9yIHAgaW4gZmlsZXMpIGVsc2UgJ2ZhbHNlJykK' | base64 -d > /tmp/parse_compare.py
+              read -r backend frontend algorithm <<<"$(printf '%s' "${RESP}" | python3 /tmp/parse_compare.py)"
             fi
           fi
           echo "backend=${backend}" >> "${GITHUB_OUTPUT}"
           echo "frontend=${frontend}" >> "${GITHUB_OUTPUT}"
-          echo "changed areas: backend=${backend} frontend=${frontend}"
+          echo "algorithm=${algorithm}" >> "${GITHUB_OUTPUT}"
+          echo "changed areas: backend=${backend} frontend=${frontend} algorithm=${algorithm}"
 
       # 测试已在 ci.yml 的 PR 门禁中执行，这里只打包
       # 服务器本机 JDK 21 + Maven，依赖走 ~/.m2/settings.xml 的阿里云镜像
@@ -201,6 +203,19 @@ jobs:
             fi
           done
           echo "All migrations applied."
+
+      # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
+      # 后端默认仍指向 mock-algorithm(18080)；要真正启用需在服务器 /opt/cargo-post/app.env
+      # 设 ALGORITHM_BASE_URL=http://127.0.0.1:18081 并重启 cargo-post（见 docs/deployment.md）。
+      - name: Build & deploy algorithm
+        if: steps.changes.outputs.algorithm == 'true'
+        run: |
+          set -euo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml build algorithm
+          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml up -d algorithm
+          echo "algorithm container deployed:"
+          docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml ps algorithm
 
       - name: Deploy backend and restart
         if: steps.changes.outputs.backend == 'true'

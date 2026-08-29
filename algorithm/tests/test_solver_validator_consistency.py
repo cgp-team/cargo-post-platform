@@ -229,3 +229,35 @@ def test_consistency_backward_compatible():
 
     valid, reason = _validate_all_plans(outcome, req)
     assert valid, f"Validator 应 PASS，实际 {reason}"
+
+
+def test_order_precedence_shipment_pair():
+    """PlanShipment 配对：同一 shipmentId 的 PICKUP 必须在 DELIVER 之前。"""
+    from app.models import RouteStop, VehiclePlan
+    from app.validators import validate_order_precedence
+
+    def plan_with(stops_order):
+        return VehiclePlan(
+            vehicleId=1,
+            stops=[
+                RouteStop(stationId="S0", action=StopAction.DEPART),
+                *stops_order,
+                RouteStop(stationId="S0", action=StopAction.RETURN),
+            ],
+            totalDistance=0.0,
+        )
+
+    # 合法：PICKUP 在 DELIVER 前
+    ok, reason = validate_order_precedence(plan_with([
+        RouteStop(stationId="S1", orderId="SHP1", action=StopAction.PICKUP),
+        RouteStop(stationId="S2", orderId="SHP1", action=StopAction.DELIVER),
+    ]))
+    assert ok, f"应 PASS，实际 {reason}"
+
+    # 非法：DELIVER 在 PICKUP 前
+    ok, reason = validate_order_precedence(plan_with([
+        RouteStop(stationId="S2", orderId="SHP1", action=StopAction.DELIVER),
+        RouteStop(stationId="S1", orderId="SHP1", action=StopAction.PICKUP),
+    ]))
+    assert not ok
+    assert reason == "PICKUP_AFTER_DELIVER"
