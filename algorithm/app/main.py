@@ -176,8 +176,16 @@ def health() -> dict[str, str]:
     return {"status": "UP", "algorithmVersion": ALGORITHM_VERSION}
 
 
+# 就绪状态：本服务为 OR-Tools 求解器、无模型加载，import 成功即就绪（恒 True）。
+# 契约 Q11 要求「未就绪返回 503」，本实现无模型加载故 503 分支不触发；
+# 保留该标志供未来引入模型/依赖加载时切换为「加载完成前置 False」。
+_ready = True
+
+
 @app.get("/ready")
-def ready() -> dict[str, str]:
+def ready():
+    if not _ready:
+        return JSONResponse(status_code=503, content={"status": "NOT_READY", "algorithmVersion": ALGORITHM_VERSION})
     return {"status": "READY", "algorithmVersion": ALGORITHM_VERSION}
 
 

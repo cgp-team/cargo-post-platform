@@ -51,7 +51,7 @@ public class AlgorithmRouteStopDTO {
     /** 绕行时长(秒) */
     private Long detourDuration;
 
-    /** 乘客影响（分钟，暂为 0，随骨架时序细化） */
+    /** 乘客影响(秒)：绕行对车上乘客的额外乘车时长（passenger-level，空车绕行为 null） */
     private Double passengerImpact;
 
     /** 未接受原因码（ReviewReasonCodeEnum.code；接受时为 null） */
