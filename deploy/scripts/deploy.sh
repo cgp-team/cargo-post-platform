@@ -23,6 +23,7 @@ compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 "${compose[@]}" config --quiet
 "${compose[@]}" pull --ignore-buildable
 "${compose[@]}" build mock-algorithm
+"${compose[@]}" build algorithm
 "${compose[@]}" up -d --remove-orphans
 
 CHECK_BACKEND="${CHECK_BACKEND:-false}" ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/deploy/scripts/health-check.sh"
