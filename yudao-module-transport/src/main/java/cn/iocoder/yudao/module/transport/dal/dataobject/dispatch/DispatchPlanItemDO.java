@@ -48,6 +48,8 @@ public class DispatchPlanItemDO extends TenantBaseDO {
     private BigDecimal detourDistanceKm;
     /** 算法解释-绕行时长(秒) */
     private Integer detourDurationSeconds;
+    /** 算法解释-乘客影响(秒)：绕行对车上乘客的额外乘车时长（passenger-level，空车绕行为 null） */
+    private Integer passengerImpactSeconds;
     /** 算法解释-未接受原因码（ReviewReasonCodeEnum.code；已接受为 null） */
     private String reasonCode;
 }
