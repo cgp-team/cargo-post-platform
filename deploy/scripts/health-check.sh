@@ -27,6 +27,9 @@ echo "Checking Redis..."
 echo "Checking Mock algorithm..."
 curl --fail --silent --show-error "http://127.0.0.1:${MOCK_ALGORITHM_PORT:-18080}/health" >/dev/null
 
+echo "Checking Algorithm..."
+curl --fail --silent --show-error "http://127.0.0.1:${ALGORITHM_PORT:-18081}/health" >/dev/null
+
 if [[ "${CHECK_BACKEND:-true}" == "true" ]]; then
   echo "Checking business backend..."
   curl --fail --silent --show-error "${BACKEND_HEALTH_URL:-http://127.0.0.1:${BACKEND_PORT:-48080}/actuator/health}" >/dev/null
