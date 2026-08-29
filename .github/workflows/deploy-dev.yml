@@ -156,7 +156,7 @@ jobs:
 
       - name: Run database migration
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           # .env 不提交仓库，且 runner 工作区每次 checkout 都会清理，无法存放。
           # 从服务器持久检出的仓库根目录加载（见 docs/deployment.md「服务器一次性配置」），
@@ -170,11 +170,23 @@ jobs:
           source "${ENV_FILE}"
           set +a
 
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          # 失败自动诊断：输出 MySQL 容器状态/日志/表结构，保留原始 exit code，不打印密码
+          trap 'rc=$?; echo; echo "===== [失败诊断] 数据库迁移失败（exit ${rc}） =====";
+            echo "--- docker compose ps mysql ---"; "${COMPOSE[@]}" ps mysql 2>&1 || true;
+            echo "--- mysql 容器日志 tail 200 ---"; "${COMPOSE[@]}" logs --tail=200 mysql 2>&1 | tail -200 || true;
+            echo "--- mysqladmin ping ---"; "${COMPOSE[@]}" exec -T mysql mysqladmin ping -u root -p"${DB_PASSWORD}" --silent 2>&1 || true;
+            echo "--- SHOW COLUMNS transport_dispatch_plan_item ---"; "${MYSQL_EXEC[@]}" "${DB_NAME}" -e "SHOW COLUMNS FROM transport_dispatch_plan_item" 2>&1 || true;
+            echo "--- SHOW CREATE TABLE transport_dispatch_plan_item ---"; "${MYSQL_EXEC[@]}" "${DB_NAME}" -e "SHOW CREATE TABLE transport_dispatch_plan_item" 2>&1 || true;
+            echo "--- SELECT DATABASE(), VERSION() ---"; "${MYSQL_EXEC[@]}" -e "SELECT DATABASE(), VERSION()" 2>&1 || true;
+            echo "===== 诊断结束 ====="; exit ${rc};' ERR
+
           echo "MySQL ready check (DB: ${DB_NAME})..."
           mysql_ready=0
           for attempt in $(seq 1 10); do
-            if docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
-                mysqladmin ping -u root -p"${DB_PASSWORD}" --silent 2>/dev/null; then
+            if "${COMPOSE[@]}" exec -T mysql mysqladmin ping -u root -p"${DB_PASSWORD}" --silent 2>/dev/null; then
               echo "MySQL is ready (attempt ${attempt})."
               mysql_ready=1
               break
@@ -184,11 +196,6 @@ jobs:
           done
           if [[ "${mysql_ready}" -ne 1 ]]; then
             echo "ERROR: MySQL 容器不可达（10 次探测均失败）。" >&2
-            echo "--- docker compose ps（检查 mysql 容器状态）---" >&2
-            docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml ps >&2 || true
-            echo "--- 复现 ping 错误（观察真实报错）---" >&2
-            docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
-              mysqladmin ping -u root -p"${DB_PASSWORD}" --silent >&2 || true
             exit 1
           fi
 
@@ -197,8 +204,7 @@ jobs:
               echo "Applying ${f}.sql..."
               # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
               # 不显式指定会把 UTF-8 SQL 按 latin1 误读，中文双重编码入库
-              docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml exec -T mysql \
-                mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
               echo "${f}.sql done."
             fi
           done
