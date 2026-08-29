@@ -386,8 +386,10 @@ PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ---------- 调度明细乘客影响：transport_dispatch_plan_item.passenger_impact_seconds ----------
 -- 绕行对车上乘客的额外乘车时长（passenger-level，空车绕行为 NULL）
+-- 注意：不加 AFTER 子句（依赖 detour_duration_seconds 等前置列存在，旧表列漂移时 ALTER 会失败），
+-- 直接追加到表末尾，幂等安全。
 SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='passenger_impact_seconds');
 SET @ddl := IF(@col_exists = 0,
-  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `passenger_impact_seconds` int DEFAULT NULL COMMENT ''乘客影响(秒，绕行对车上乘客额外乘车时长，空车为NULL)'' AFTER `detour_duration_seconds`', 'SELECT 1');
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `passenger_impact_seconds` int DEFAULT NULL COMMENT ''乘客影响(秒，绕行对车上乘客额外乘车时长，空车为NULL)''', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
