@@ -44,6 +44,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -115,6 +116,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
     @Resource private AlgorithmClient algorithmClient;
+    @Resource private SimulationEngine simulationEngine;
 
     @Override
     public AppDriverProfileRespVO profile() {
@@ -489,19 +491,32 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (execution == null) {
             throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
         }
-        // 站点归属与顺序校验：站点必须属于班次线路，且按 sequence 顺序推进（防跳站）
+        // 站点归属与顺序校验（双模式）：
+        // ① 目标站属于司机当前已下发任务段（plan_item，含绕行村站）→ 按任务段 visit_sequence 校验（放行绕行站）
+        // ② 目标站不在任务段 → 按班次线路 sequence_no 逐站校验（向后兼容纯班次模式）
         List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId()));
         RouteStationDO target = routeStations.stream()
                 .filter(rs -> Objects.equals(rs.getStationId(), reqVO.getStationId()))
-                .findFirst()
-                .orElseThrow(() -> exception(DRIVER_STATION_NOT_IN_ROUTE));
-        int currentSeq = sequenceNoOf(routeStations, execution.getCurrentStationId());
-        int targetSeq = target.getSequenceNo() != null ? target.getSequenceNo() : 0;
-        if (targetSeq < currentSeq || targetSeq > currentSeq + 1) {
+                .findFirst().orElse(null);
+        int targetSeq = target != null && target.getSequenceNo() != null ? target.getSequenceNo() : 0;
+
+        Boolean taskCheck = taskSequenceCheck(driver.getId(), reqVO.getStationId(), execution.getCurrentStationId());
+        if (taskCheck == null) {
+            // 非任务段：必须属于班次线路 + 按 sequence 顺序推进（防跳站）
+            if (target == null) {
+                throw exception(DRIVER_STATION_NOT_IN_ROUTE);
+            }
+            int currentSeq = sequenceNoOf(routeStations, execution.getCurrentStationId());
+            if (targetSeq < currentSeq || targetSeq > currentSeq + 1) {
+                throw exception(DRIVER_STATION_ORDER_ILLEGAL);
+            }
+        } else if (!taskCheck) {
+            // 任务段内但非期望下一站（跳站）
             throw exception(DRIVER_STATION_ORDER_ILLEGAL);
         }
+        // taskCheck == true：任务段期望下一站，放行
         execution.setCurrentStationId(reqVO.getStationId());
-        // 到达线路终点站（route_station 最大 sequence_no）：执行记录置已完成
+        // 到达线路终点站（route_station 最大 sequence_no）：执行记录置已完成（绕行村站 targetSeq=0 不触发）
         int maxSeq = routeStations.stream().map(RouteStationDO::getSequenceNo)
                 .filter(Objects::nonNull).max(Integer::compareTo).orElse(0);
         if (targetSeq >= maxSeq) {
@@ -568,6 +583,60 @@ public class DriverAppServiceImpl implements DriverAppService {
                 .filter(rs -> Objects.equals(rs.getStationId(), stationId))
                 .map(rs -> rs.getSequenceNo() != null ? rs.getSequenceNo() : 0)
                 .findFirst().orElse(0);
+    }
+
+    /**
+     * 任务段顺序检查（到站双模式校验的第一分支）。
+     * 返回 null = 目标站不在司机任何已下发任务段内（走班次线路校验）；
+     *       true = 目标站是任务段期望下一站（放行）；
+     *       false = 目标站在任务段内但非期望下一站（跳站，报 DRIVER_STATION_ORDER_ILLEGAL）。
+     *
+     * 期望下一站 = 该方案中 visitSequence 紧随 currentStationId 之后的首个经停；
+     * 未到过任务段站（currentStationId 为空或不在任务段）时取 visitSequence 最小的首个经停。
+     */
+    private Boolean taskSequenceCheck(Long driverId, Long stationId, Long currentStationId) {
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getDriverId, driverId)
+                .orderByAsc(DispatchPlanItemDO::getVisitSequence));
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        Map<Long, Integer> planStatusMap = planStatusMap(items.stream().map(DispatchPlanItemDO::getPlanId)
+                .collect(Collectors.toSet()));
+        // 目标站所属的已下发方案
+        DispatchPlanItemDO anchor = items.stream()
+                .filter(i -> Objects.equals(i.getStationId(), stationId))
+                .filter(i -> isIssued(planStatusMap.get(i.getPlanId())))
+                .findFirst().orElse(null);
+        if (anchor == null) {
+            return null;
+        }
+        // 该方案内按 visitSequence 排序的经停
+        List<DispatchPlanItemDO> planItems = items.stream()
+                .filter(i -> Objects.equals(i.getPlanId(), anchor.getPlanId()))
+                .filter(i -> isIssued(planStatusMap.get(i.getPlanId())))
+                .sorted(Comparator.comparing(i -> i.getVisitSequence() == null ? Integer.MAX_VALUE : i.getVisitSequence()))
+                .collect(Collectors.toList());
+        // 期望下一站：currentStationId 之后（visitSequence 更大）的首个经停；未到过任务段站时取首个
+        DispatchPlanItemDO expect = null;
+        if (currentStationId != null) {
+            Integer currentSeq = planItems.stream()
+                    .filter(i -> Objects.equals(i.getStationId(), currentStationId))
+                    .map(DispatchPlanItemDO::getVisitSequence)
+                    .findFirst().orElse(null);
+            if (currentSeq != null) {
+                expect = planItems.stream()
+                        .filter(i -> i.getVisitSequence() != null && i.getVisitSequence() > currentSeq)
+                        .findFirst().orElse(null);
+            }
+        }
+        if (expect == null) {
+            expect = planItems.isEmpty() ? null : planItems.get(0);
+        }
+        if (expect == null) {
+            return false;
+        }
+        return Objects.equals(expect.getStationId(), stationId);
     }
 
     @Override
@@ -789,6 +858,42 @@ public class DriverAppServiceImpl implements DriverAppService {
                     .reportTime(reportTime)
                     .build());
         }
+    }
+
+    @Override
+    public AppDriverPositionRespVO getPosition(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        Long vehicleId = resolveVehicleId(driver.getId());
+        AppDriverPositionRespVO vo = new AppDriverPositionRespVO();
+        // 真实上报位置（司机 GPS）
+        VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
+        if (loc != null && loc.getLongitude() != null && loc.getLatitude() != null) {
+            vo.setLongitude(loc.getLongitude().doubleValue());
+            vo.setLatitude(loc.getLatitude().doubleValue());
+        }
+        // 模拟运营引擎位置（管理端模拟驱动；simulationEnabled=false 时 tick 返回 null）
+        SimulationEngine.SimTick sim = simulationEngine.tick(vehicleId);
+        if (sim != null) {
+            vo.setSimRunning(true);
+            vo.setSimLongitude(sim.getLongitude());
+            vo.setSimLatitude(sim.getLatitude());
+            vo.setCurrentStationName(sim.getStationName());
+            vo.setArrived(sim.isArrived());
+            vo.setSimSeconds(sim.getSimSeconds());
+            SimulationEngine.SimRun run = simulationEngine.getRun(vehicleId);
+            if (run != null) {
+                vo.setTotalSimSeconds(run.getTotalSimSeconds());
+            }
+        }
+        // 当前生效源：REAL 优先，其次 SIMULATED，否则 NONE
+        if (vo.getLongitude() != null) {
+            vo.setDataSource("REAL");
+        } else if (Boolean.TRUE.equals(vo.getSimRunning())) {
+            vo.setDataSource("SIMULATED");
+        } else {
+            vo.setDataSource("NONE");
+        }
+        return vo;
     }
 
     /**

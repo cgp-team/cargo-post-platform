@@ -15,7 +15,7 @@ from app.distance import (
     AmapUnavailable,
     EuclideanDistanceProvider,
 )
-from app.models import OrderType, PlanOrder, PlanRequest, Station, Vehicle
+from app.models import OrderType, PlanOrder, PlanRequest, PlanShipment, Station, Vehicle
 from app.solver import solve
 
 DEPOT = Station(stationId="S0", longitude=104.000, latitude=30.000)
@@ -264,7 +264,7 @@ def test_build_result_with_key_returns_km_unit(monkeypatch: pytest.MonkeyPatch) 
     result = main.build_result(make_request())
     assert result.status == "feasible"
     assert result.distanceUnit == "km"
-    assert result.algorithmVersion == "ortools-1.2.0"
+    assert result.algorithmVersion == "ortools-1.3.0"
     assert result.parameterVersion == "params-v2"
     assert not any("降级" in warning for warning in result.warnings)
     for plan in result.vehiclePlans:
@@ -302,7 +302,7 @@ def test_plan_endpoint_with_key_returns_km_unit(monkeypatch: pytest.MonkeyPatch)
     assert response.status_code == 200
     body = response.json()
     assert body["distanceUnit"] == "km"
-    assert body["algorithmVersion"] == "ortools-1.2.0"
+    assert body["algorithmVersion"] == "ortools-1.3.0"
     assert body["parameterVersion"] == "params-v2"
 
 
@@ -315,3 +315,16 @@ def test_plan_endpoint_without_key_returns_degree_unit(monkeypatch: pytest.Monke
     body = response.json()
     assert body["distanceUnit"] == "degree"
     assert body["warnings"] == []
+
+
+def test_shipment_only_request_uses_amap_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """纯 shipments 请求（无 orders）也应走矩阵，返回 distanceUnit=km 而非 degree。"""
+    client = FakeAmapClient(meters=10000)
+    monkeypatch.setattr(main, "amap_provider", AmapDistanceProvider(key="test-key", client=client))
+    request = make_request(orders=[])  # 无 orders，仅 shipments
+    request.shipments = [
+        PlanShipment(shipmentId="SHP1", pickupStationId="S1", deliveryStationId="S2", quantity=1),
+    ]
+    result = main.build_result(request)
+    assert result.status == "feasible"
+    assert result.distanceUnit == "km"

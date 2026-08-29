@@ -130,7 +130,7 @@ def test_case3_detour_exceeds_duration_threshold():
 # ── CASE 4: passengerImpact 超阈值 ────────────────────────────
 
 def test_case4_passenger_impact_exceeds_threshold():
-    """passengerImpact > maxPassengerImpactSeconds → accepted=False"""
+    """车上有乘客（初始载荷）且绕行超乘客影响阈值 → accepted=False"""
     stations = _stations()
 
     req = PlanRequest(
@@ -139,7 +139,7 @@ def test_case4_passenger_impact_exceeds_threshold():
         batchEnd="2026-08-26T23:00:00+08:00",
         depot=stations[0],
         stations=stations[1:],
-        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10)],
+        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10, initialPassengerLoad=1)],
         orders=[],
         shipments=[
             PlanShipment(shipmentId="TP001", pickupStationId="S4",
@@ -358,3 +358,36 @@ def test_case10_shipment_pair_preserved():
     pickup_pos = next(i for i, s in enumerate(plan.stops) if s.orderId == "TP001" and s.action == StopAction.PICKUP)
     delivery_pos = next(i for i, s in enumerate(plan.stops) if s.orderId == "TP001" and s.action == StopAction.DELIVER)
     assert pickup_pos < delivery_pos
+
+
+# ── CASE 11: 绕行超阈值 → 真正改派到最近骨架站并重求解 ────────
+
+def test_case11_reroute_over_threshold_to_nearest_skeleton():
+    """有骨架车辆 + 偏远货运站 + 极小阈值 → 站点应改派到最近骨架站（而非只标注不行动）。"""
+    depot = Station(stationId="D", longitude=104.0, latitude=30.0)
+    s1 = Station(stationId="S1", longitude=104.0, latitude=30.1)
+    s2 = Station(stationId="S2", longitude=104.0, latitude=30.2)
+    far = Station(stationId="F", longitude=104.4, latitude=30.1)  # 离骨架约 36km
+
+    req = PlanRequest(
+        requestId="reroute-1",
+        batchStart="2026-08-26T08:00:00+08:00",
+        batchEnd="2026-08-26T23:00:00+08:00",
+        depot=depot,
+        stations=[s1, s2, far],
+        vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10,
+                          skeleton=["S1", "S2"])],
+        orders=[PlanOrder(orderId="D1", orderType=OrderType.DELIVERY,
+                          stationId="F", itemCount=1)],
+        algorithmConfig=AlgorithmConfig(maxDetourDistanceKm=1.0),
+    )
+
+    outcome = solve(req)
+    assert outcome.status == "feasible"
+
+    plan = outcome.vehicle_plans[0]
+    deliver_stops = [s for s in plan.stops if s.action == StopAction.DELIVER]
+    assert len(deliver_stops) == 1
+    # F(104.4, 30.1) 与 S1(104.0, 30.1) 同纬度，最近骨架站应为 S1
+    assert deliver_stops[0].stationId == "S1"
+    assert deliver_stops[0].stationId != "F"
