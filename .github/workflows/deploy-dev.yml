@@ -211,8 +211,9 @@ jobs:
           echo "All migrations applied."
 
       # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
-      # 后端默认仍指向 mock-algorithm(18080)；要真正启用需在服务器 /opt/cargo-post/app.env
-      # 设 ALGORITHM_BASE_URL=http://127.0.0.1:18081 并重启 cargo-post（见 docs/deployment.md）。
+      # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
+      # 的 yudao.transport.algorithm.base-url=http://127.0.0.1:18081（外部化 yaml 优先级高于 app.env 的
+      # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）；mock-algorithm(18080) 仅保留做混沌测试。
       # 失败自动诊断：trap ERR 打印 docker/compose/端口/目录诊断，不裸 exit 1。
       - name: Build & deploy algorithm
         if: steps.changes.outputs.algorithm == 'true'

@@ -73,7 +73,8 @@ services:
       retries: 10
 
   # 编程组自研路线规划算法服务（生产候选，ortools-1.1.0）。mock-algorithm 保留做适配层混沌测试。
-  # 上线切换：业务后端 ALGORITHM_BASE_URL 指向 http://algorithm:8000
+  # 业务后端已于 2026-08-30 切到本服务：application-dev.yaml base-url=http://127.0.0.1:18081（宿主端口）。
+  # mock-algorithm 保留做适配层混沌测试。
   algorithm:
     build:
       context: ../algorithm

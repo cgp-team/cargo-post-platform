@@ -119,8 +119,12 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
   适配层对 422 的兼容兜底保留。
 - ACO 超参数（`algorithmConfig`）：全部接受但不参与求解（求解器为 OR-Tools），超出建议范围时响应
   带 `warnings` 不拒绝（Q8 口径不变）；默认值与参数变更记录于 `algorithm/CHANGELOG.md`。
-- 切换方式：业务后端 `ALGORITHM_BASE_URL=http://algorithm:8000` 即指向本服务（compose 已内置
-  `algorithm` 服务，端口仅绑 127.0.0.1）；`mock-algorithm` 服务保留，继续用于适配层混沌测试。
+- 切换方式（已于 2026-08-30 在 dev 服务器完成切换）：后端跑在宿主机，须指向 compose 映射的宿主端口
+  `http://127.0.0.1:18081`（docker 网络主机名 `http://algorithm:8000` 仅容器内可达，宿主机不可解析）。
+  生效链路：服务器 `/opt/cargo-post/config/application-dev.yaml` 的 `yudao.transport.algorithm.base-url`
+  为外部化字面量配置，优先级高于打包 `application.yaml` 的 `${ALGORITHM_BASE_URL:...}` 占位符——只改
+  `.env`/`app.env` 不会生效，必须改该 yaml（或直接设 `YUDAO_TRANSPORT_ALGORITHM_BASEURL` 环境变量）。
+  `mock-algorithm` 服务保留，继续用于适配层混沌测试。
 
 ## 待算法组澄清
 
