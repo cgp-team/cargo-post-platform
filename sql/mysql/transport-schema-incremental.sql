@@ -509,3 +509,378 @@ DELETE FROM system_menu WHERE id = 6921;
 -- 6. 超级管理员角色授权
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6920);
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6922);
+
+-- ---------- V010：修复 transport_cargo_order schema drift ----------
+-- 问题：CargoOrderDO 定义了 review_status 等5个字段，但 transport-schema.sql 的
+--       CREATE TABLE IF NOT EXISTS 不会给已有表补列，导致生产数据库缺少这些列。
+--       查询时 MyBatis Plus SELECT * 报 Unknown column，订单列表返回500。
+-- 修复：幂等补齐5个缺失列。
+-- 幂等：information_schema 守卫，已存在则跳过。
+
+-- review_status 承运审核结果
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'review_status'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `review_status` tinyint NOT NULL DEFAULT 0 COMMENT ''承运审核结果(ReviewStatusEnum)：0待审 1通过 2需客户操作 3需人工 4拒运'' AFTER `reject_reason`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- review_reason_codes 承运审核原因码
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'review_reason_codes'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `review_reason_codes` varchar(255) NOT NULL DEFAULT '''' COMMENT ''承运审核原因码(ReviewReasonCodeEnum，逗号分隔多个)'' AFTER `review_status`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- pickup_service_mode 取货服务方式
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'pickup_service_mode'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `pickup_service_mode` varchar(32) NOT NULL DEFAULT '''' COMMENT ''取货服务方式(ServiceModeEnum)'' AFTER `review_reason_codes`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- delivery_service_mode 送达服务方式
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'delivery_service_mode'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `delivery_service_mode` varchar(32) NOT NULL DEFAULT '''' COMMENT ''送达服务方式(ServiceModeEnum)'' AFTER `pickup_service_mode`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- service_point_station_id 建议服务站点编号
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'service_point_station_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `service_point_station_id` bigint DEFAULT NULL COMMENT ''建议服务站点编号(替代交接：客户送站/最近站点时推荐)'' AFTER `delivery_service_mode`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- Schema drift repair：transport_dispatch_plan 估算与任务段窗口 ----------
+-- 来源：sql/incremental/V010__dispatch_estimation.sql + V014__task_segment_model.sql
+--      （原为注释，未被 deploy-dev.yml 自动执行，生产缺列会导致 SELECT * 报 Unknown column）。
+-- 幂等：information_schema 守卫。
+
+-- est_duration_minutes 预计耗时
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'est_duration_minutes'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `est_duration_minutes` int DEFAULT NULL COMMENT ''预计耗时(分钟，估算)'' AFTER `total_distance`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- est_revenue 预计收入
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'est_revenue'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `est_revenue` decimal(12,2) DEFAULT NULL COMMENT ''预计收入(元，按计价规则估算)'' AFTER `est_duration_minutes`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- est_cost 预计成本
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'est_cost'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `est_cost` decimal(12,2) DEFAULT NULL COMMENT ''预计成本(元，按计价规则估算)'' AFTER `est_revenue`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- task_window_start 任务段窗口开始
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'task_window_start'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `task_window_start` datetime DEFAULT NULL COMMENT ''任务段窗口开始(该方案车辆运营起始时刻，默认=批次开始)'' AFTER `approved_time`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- task_window_end 任务段窗口结束
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan'
+    AND COLUMN_NAME = 'task_window_end'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `task_window_end` datetime DEFAULT NULL COMMENT ''任务段窗口结束(默认=开始+预计耗时，方案完成后回写实际终点时刻)'' AFTER `task_window_start`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- Schema drift repair：transport_dispatch_plan_item 任务段模型 + 算法解释 ----------
+-- 来源：sql/incremental/V012__dispatch_plan_item_segment.sql + V014__task_segment_model.sql
+--      + V015__plan_item_explanation.sql
+--      （原为注释，未被 deploy-dev.yml 自动执行，生产缺列会导致 SELECT * 报 Unknown column）。
+-- 幂等：information_schema 守卫。
+
+-- segment_duration_seconds 分段行驶秒数
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'segment_duration_seconds'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `segment_duration_seconds` int DEFAULT NULL COMMENT ''分段路网行驶秒数(上一站→本站；高德真实时长或直线÷均速估算)'' AFTER `estimated_arrival_time`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- segment_distance_km 分段里程
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'segment_distance_km'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `segment_distance_km` decimal(12,3) DEFAULT NULL COMMENT ''分段里程(km；高德路网公里或 Haversine 直线公里)'' AFTER `segment_duration_seconds`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- planned_departure_time 计划离站时间
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'planned_departure_time'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `planned_departure_time` datetime DEFAULT NULL COMMENT ''计划离站时间(=预计到达+本站作业时长)'' AFTER `segment_distance_km`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- service_duration_seconds 本站作业时长
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'service_duration_seconds'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `service_duration_seconds` int DEFAULT NULL COMMENT ''本站作业时长(秒，接/送/派/揽计停站作业)'' AFTER `planned_departure_time`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- quantity 数量
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'quantity'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `quantity` int DEFAULT NULL COMMENT ''数量(BOARD/ALIGHT=人数，PICKUP/DELIVERY=件数)'' AFTER `service_duration_seconds`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- status 任务段明细状态
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'status'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `status` tinyint NOT NULL DEFAULT 0 COMMENT ''任务段明细状态(TaskItemStatusEnum)：0待执行 1行驶中 2已到站 3上车中 4下车中 5揽收中 6派送中 7已完成 8失败'' AFTER `quantity`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- service_mode 算法解释-服务方式
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'service_mode'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `service_mode` varchar(32) NOT NULL DEFAULT '''' COMMENT ''算法解释-服务方式(ServiceModeEnum，仅货运/揽收经停)'' AFTER `status`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- service_point_station_id (plan_item) 算法解释-服务点站点编号
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'service_point_station_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `service_point_station_id` bigint DEFAULT NULL COMMENT ''算法解释-服务点站点编号(替代交接时推荐)'' AFTER `service_mode`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- detour_distance_km 算法解释-绕行距离
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'detour_distance_km'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `detour_distance_km` decimal(12,3) DEFAULT NULL COMMENT ''算法解释-绕行距离(km，相对公交骨架，骨架站为0)'' AFTER `service_point_station_id`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- detour_duration_seconds 算法解释-绕行时长
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'detour_duration_seconds'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `detour_duration_seconds` int DEFAULT NULL COMMENT ''算法解释-绕行时长(秒)'' AFTER `detour_distance_km`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- reason_code 算法解释-未接受原因码
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_dispatch_plan_item'
+    AND COLUMN_NAME = 'reason_code'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `reason_code` varchar(64) DEFAULT NULL COMMENT ''算法解释-未接受原因码(ReviewReasonCodeEnum；已接受为NULL)'' AFTER `detour_duration_seconds`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- Schema drift repair：transport_vehicle 保险到期日 ----------
+-- 来源：sql/incremental/V011__vehicle_insurance_expiry.sql
+--      （原为注释，未被 deploy-dev.yml 自动执行，生产缺列会导致到期预警报错）。
+-- 幂等：information_schema 守卫。
+
+-- insurance_expire_date 保险到期日
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_vehicle'
+    AND COLUMN_NAME = 'insurance_expire_date'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_vehicle` ADD COLUMN `insurance_expire_date` date DEFAULT NULL COMMENT ''保险到期日'' AFTER `cargo_capacity`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
