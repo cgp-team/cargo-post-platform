@@ -447,25 +447,27 @@ WHERE driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 
 -- 1. 开发者中心页面（父菜单：客货邮管理 6800）
 --    type=2（页面）：点击直接打开开发者中心。
---    visible=b'0'：普通用户默认不可见，需有 transport:developer:access 权限才显示。
+--    visible=b'1'：侧边栏可见（权限由 transport:developer:access 控制）。
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
     component, component_name, status, visible, keep_alive, always_show,
     creator, create_time, updater, update_time, deleted)
 SELECT 6920, '开发者中心', 'transport:developer:access', 2, 15, 6800, 'developer', 'ep:setting',
-    'transport/developer/index', 'TransportDeveloper', 0, b'0', b'1', b'0',
+    'transport/developer/index', 'TransportDeveloper', 0, b'1', b'1', b'1',
     '1', NOW(), '1', NOW(), b'0'
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6920);
 
--- 1b. 修复已部署的 6920：旧版 V009 曾以 type=1（目录）创建，需升级为 type=2（页面）。
---     幂等：只有 type=1 且 component 为空时才更新。
+-- 1b. 修复已部署的 6920：升级 type、设置 component、确保可见。
+--     幂等：只更新需要修复的记录。
 UPDATE system_menu
 SET type = 2,
     component = 'transport/developer/index',
     component_name = 'TransportDeveloper',
+    visible = b'1',
+    always_show = b'1',
     updater = 'admin',
     update_time = NOW()
-WHERE id = 6920 AND type = 1 AND (component IS NULL OR component = '');
+WHERE id = 6920 AND (type = 1 OR visible = b'0' OR component IS NULL OR component = '');
 
 -- 2. 模拟运营页面（父菜单：开发者中心 6920）
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
