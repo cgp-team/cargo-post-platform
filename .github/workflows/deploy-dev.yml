@@ -210,6 +210,65 @@ jobs:
           done
           echo "All migrations applied."
 
+      - name: Validate schema drift columns
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          set -a; source "${ENV_FILE}"; set +a
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          # 只读检查：所有 Java DO 使用的字段必须在生产表中存在。
+          # 来源：transport-schema-incremental.sql 的 Schema drift repair 区块。
+          MISSING=""
+          CHECK_COL() {
+            local tbl="$1" col="$2"
+            local cnt
+            cnt=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+              "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${DB_NAME}' AND TABLE_NAME='${tbl}' AND COLUMN_NAME='${col}'")
+            if [ "${cnt}" != "1" ]; then
+              MISSING="${MISSING}  ${tbl}.${col}\n"
+            fi
+          }
+
+          # transport_cargo_order (5)
+          CHECK_COL transport_cargo_order review_status
+          CHECK_COL transport_cargo_order review_reason_codes
+          CHECK_COL transport_cargo_order pickup_service_mode
+          CHECK_COL transport_cargo_order delivery_service_mode
+          CHECK_COL transport_cargo_order service_point_station_id
+
+          # transport_dispatch_plan (5)
+          CHECK_COL transport_dispatch_plan est_duration_minutes
+          CHECK_COL transport_dispatch_plan est_revenue
+          CHECK_COL transport_dispatch_plan est_cost
+          CHECK_COL transport_dispatch_plan task_window_start
+          CHECK_COL transport_dispatch_plan task_window_end
+
+          # transport_dispatch_plan_item (11)
+          CHECK_COL transport_dispatch_plan_item segment_duration_seconds
+          CHECK_COL transport_dispatch_plan_item segment_distance_km
+          CHECK_COL transport_dispatch_plan_item planned_departure_time
+          CHECK_COL transport_dispatch_plan_item service_duration_seconds
+          CHECK_COL transport_dispatch_plan_item quantity
+          CHECK_COL transport_dispatch_plan_item status
+          CHECK_COL transport_dispatch_plan_item service_mode
+          CHECK_COL transport_dispatch_plan_item service_point_station_id
+          CHECK_COL transport_dispatch_plan_item detour_distance_km
+          CHECK_COL transport_dispatch_plan_item detour_duration_seconds
+          CHECK_COL transport_dispatch_plan_item reason_code
+
+          # transport_vehicle (1)
+          CHECK_COL transport_vehicle insurance_expire_date
+
+          if [ -n "${MISSING}" ]; then
+            echo "===== SCHEMA DRIFT DETECTED — missing columns ====="
+            echo -e "${MISSING}"
+            echo "Fix: ensure transport-schema-incremental.sql has ADD COLUMN for these."
+            exit 1
+          fi
+          echo "Schema drift validation PASS: all22 columns present."
+
       # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
       # 的 yudao.transport.algorithm.base-url=http://127.0.0.1:18081（外部化 yaml 优先级高于 app.env 的
