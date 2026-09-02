@@ -477,15 +477,21 @@ SELECT 6921, '模拟运营', 'transport:simulation:view', 2, 1, 6920, 'simulatio
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6921);
 
--- 3. 模拟控制按钮权限（父菜单：模拟运营 6921）
+-- 3. 模拟控制按钮权限（父菜单：模拟运营 6915）
+--    6921 已删除（与6915重复），6922 挂载到6915。
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
     component, component_name, status, visible, keep_alive, always_show,
     creator, create_time, updater, update_time, deleted)
-SELECT 6922, '模拟控制', 'transport:simulation:control', 3, 1, 6921, '', '',
+SELECT 6922, '模拟控制', 'transport:simulation:control', 3, 1, 6915, '', '',
     '', NULL, 0, b'1', b'1', b'1',
     '1', NOW(), '1', NOW(), b'0'
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6922);
+
+-- 3b. 修复已部署的6922：parent_id 从6921改为6915（6921已删除，与6915重复）。
+UPDATE system_menu
+SET parent_id = 6915, updater = 'admin', update_time = NOW()
+WHERE id = 6922 AND parent_id = 6921;
 
 -- 4. 更新旧模拟菜单权限：从 transport:dispatch:smart-plan 改为 transport:simulation:view
 --    菜单 6915 是原有「车辆监控→模拟运营」入口，迁移后权限独立。
@@ -493,7 +499,11 @@ UPDATE system_menu
 SET permission = 'transport:simulation:view', updater = 'admin', update_time = NOW()
 WHERE id = 6915 AND permission = 'transport:dispatch:smart-plan';
 
--- 5. 超级管理员角色授权
+-- 5. 删除6921（与6915重复，同为模拟运营页面，同 permission、同 component）。
+--    幂等：已不存在则跳过。
+DELETE FROM system_role_menu WHERE menu_id = 6921;
+DELETE FROM system_menu WHERE id = 6921;
+
+-- 6. 超级管理员角色授权
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6920);
-INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6921);
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6922);
