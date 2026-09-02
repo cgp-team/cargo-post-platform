@@ -509,3 +509,90 @@ DELETE FROM system_menu WHERE id = 6921;
 -- 6. 超级管理员角色授权
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6920);
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6922);
+
+-- ---------- V010：修复 transport_cargo_order schema drift ----------
+-- 问题：CargoOrderDO 定义了 review_status 等5个字段，但 transport-schema.sql 的
+--       CREATE TABLE IF NOT EXISTS 不会给已有表补列，导致生产数据库缺少这些列。
+--       查询时 MyBatis Plus SELECT * 报 Unknown column，订单列表返回500。
+-- 修复：幂等补齐5个缺失列。
+-- 幂等：information_schema 守卫，已存在则跳过。
+
+-- review_status 承运审核结果
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'review_status'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `review_status` tinyint NOT NULL DEFAULT 0 COMMENT ''承运审核结果(ReviewStatusEnum)：0待审 1通过 2需客户操作 3需人工 4拒运'' AFTER `reject_reason`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- review_reason_codes 承运审核原因码
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'review_reason_codes'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `review_reason_codes` varchar(255) NOT NULL DEFAULT '''' COMMENT ''承运审核原因码(ReviewReasonCodeEnum，逗号分隔多个)'' AFTER `review_status`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- pickup_service_mode 取货服务方式
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'pickup_service_mode'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `pickup_service_mode` varchar(32) NOT NULL DEFAULT '''' COMMENT ''取货服务方式(ServiceModeEnum)'' AFTER `review_reason_codes`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- delivery_service_mode 送达服务方式
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'delivery_service_mode'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `delivery_service_mode` varchar(32) NOT NULL DEFAULT '''' COMMENT ''送达服务方式(ServiceModeEnum)'' AFTER `pickup_service_mode`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- service_point_station_id 建议服务站点编号
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_cargo_order'
+    AND COLUMN_NAME = 'service_point_station_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `service_point_station_id` bigint DEFAULT NULL COMMENT ''建议服务站点编号(替代交接：客户送站/最近站点时推荐)'' AFTER `delivery_service_mode`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
