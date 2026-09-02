@@ -152,8 +152,8 @@ export const generateRoute = (routes: AppCustomRouteRecordRaw[]): AppRouteRecord
       childrenData.component = modules[modulesRoutesKeys[index]]
       data.children = [childrenData]
     } else {
-      // 目录
-      if (route.children?.length) {
+      // 目录：只有自身没有 component 的菜单才当作目录；有 component 的即使有 children 也按页面处理。
+      if (route.children?.length && !route.component) {
         // 顶级目录承载后台整体框架；非顶级目录只作为 router-view 占位，避免多级菜单嵌套 Layout。
         data.component = Number(route.parentId) === 0 ? Layout : getParentLayout()
         data.redirect = getRedirect(route.path, route.children)
@@ -188,7 +188,8 @@ export const generateRoute = (routes: AppCustomRouteRecordRaw[]): AppRouteRecord
           : modulesRoutesKeys.findIndex((ev) => ev.includes(route.path))
         data.component = modules[modulesRoutesKeys[index]]
       }
-      if (route.children) {
+      // 有 component 的页面型菜单不处理 children（避免子路由挂载到没有 RouterView 的页面组件上）
+      if (route.children && !route.component) {
         data.children = generateRoute(route.children)
         // Vue Router 要求路由 name 全局唯一；后端菜单可能生成父子同名，例如 /mall/trade/delivery/express。
         // 父级只有一个同名默认页时才折叠；存在兄弟节点时必须保留子菜单，例如商城装修下的装修模板。
