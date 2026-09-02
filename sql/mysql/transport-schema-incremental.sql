@@ -393,3 +393,20 @@ SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @ddl := IF(@col_exists = 0,
   'ALTER TABLE `transport_dispatch_plan_item` ADD COLUMN `passenger_impact_seconds` int DEFAULT NULL COMMENT ''乘客影响(秒，绕行对车上乘客额外乘车时长，空车为NULL)''', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ---------- V007：修复生产环境文件配置 domain ----------
+-- 问题：初始数据 id=4 的 domain=http://127.0.0.1:48080（本地开发地址）
+-- 修复：更新为生产服务器地址 http://1.15.29.107
+-- 幂等：使用 JSON_SET 只修改 domain 字段，只有旧地址存在时才更新
+
+UPDATE infra_file_config
+SET
+    config = JSON_SET(
+        config,
+        '$.domain',
+        'http://1.15.29.107'
+    ),
+    updater = 'admin',
+    update_time = NOW()
+WHERE id = 4
+  AND JSON_EXTRACT(config, '$.domain') = 'http://127.0.0.1:48080';
