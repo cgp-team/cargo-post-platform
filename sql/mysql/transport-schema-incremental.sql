@@ -457,6 +457,16 @@ SELECT 6920, '开发者中心', 'transport:developer:access', 2, 15, 6800, 'deve
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6920);
 
+-- 1b. 修复已部署的 6920：旧版 V009 曾以 type=1（目录）创建，需升级为 type=2（页面）。
+--     幂等：只有 type=1 且 component 为空时才更新。
+UPDATE system_menu
+SET type = 2,
+    component = 'transport/developer/index',
+    component_name = 'TransportDeveloper',
+    updater = 'admin',
+    update_time = NOW()
+WHERE id = 6920 AND type = 1 AND (component IS NULL OR component = '');
+
 -- 2. 模拟运营页面（父菜单：开发者中心 6920）
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
     component, component_name, status, visible, keep_alive, always_show,
