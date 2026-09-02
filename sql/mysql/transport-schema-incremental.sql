@@ -440,3 +440,50 @@ WHERE driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 --   SELECT COUNT(*) AS bad_count FROM transport_cargo_order
 --   WHERE photo_url LIKE 'http://127.0.0.1:48080/%' OR driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 -- 预期结果：两个查询均返回 0
+
+-- ---------- V009：开发者模式 + 模拟运营权限体系 ----------
+-- 新增开发者中心菜单与独立模拟权限，解除对 transport:dispatch:smart-plan 的复用。
+-- 幂等：INSERT ... SELECT ... WHERE NOT EXISTS。
+
+-- 1. 开发者中心页面（父菜单：客货邮管理 6800）
+--    type=2（页面）：点击直接打开开发者中心。
+--    visible=b'0'：普通用户默认不可见，需有 transport:developer:access 权限才显示。
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
+    component, component_name, status, visible, keep_alive, always_show,
+    creator, create_time, updater, update_time, deleted)
+SELECT 6920, '开发者中心', 'transport:developer:access', 2, 15, 6800, 'developer', 'ep:setting',
+    'transport/developer/index', 'TransportDeveloper', 0, b'0', b'1', b'0',
+    '1', NOW(), '1', NOW(), b'0'
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6920);
+
+-- 2. 模拟运营页面（父菜单：开发者中心 6920）
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
+    component, component_name, status, visible, keep_alive, always_show,
+    creator, create_time, updater, update_time, deleted)
+SELECT 6921, '模拟运营', 'transport:simulation:view', 2, 1, 6920, 'simulation', 'ep:video-play',
+    'transport/simulation/index', 'TransportSimulation', 0, b'1', b'1', b'1',
+    '1', NOW(), '1', NOW(), b'0'
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6921);
+
+-- 3. 模拟控制按钮权限（父菜单：模拟运营 6921）
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon,
+    component, component_name, status, visible, keep_alive, always_show,
+    creator, create_time, updater, update_time, deleted)
+SELECT 6922, '模拟控制', 'transport:simulation:control', 3, 1, 6921, '', '',
+    '', NULL, 0, b'1', b'1', b'1',
+    '1', NOW(), '1', NOW(), b'0'
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6922);
+
+-- 4. 更新旧模拟菜单权限：从 transport:dispatch:smart-plan 改为 transport:simulation:view
+--    菜单 6915 是原有「车辆监控→模拟运营」入口，迁移后权限独立。
+UPDATE system_menu
+SET permission = 'transport:simulation:view', updater = 'admin', update_time = NOW()
+WHERE id = 6915 AND permission = 'transport:dispatch:smart-plan';
+
+-- 5. 超级管理员角色授权
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6920);
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6921);
+INSERT IGNORE INTO system_role_menu (role_id, menu_id) VALUES (1, 6922);
