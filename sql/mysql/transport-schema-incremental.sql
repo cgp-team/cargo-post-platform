@@ -410,3 +410,33 @@ SET
     update_time = NOW()
 WHERE id = 4
   AND JSON_EXTRACT(config, '$.domain') = 'http://127.0.0.1:48080';
+
+-- ---------- V008：修复历史文件 URL ----------
+-- 问题：V007 修复了 infra_file_config.domain，但历史上传时 URL 已写死到 infra_file.url
+--       和业务表 transport_cargo_order.photo_url / driver_photo_url。
+--       这些 URL 仍指向 http://127.0.0.1:48080，浏览器直接请求该地址会 ERR_CONNECTION_REFUSED。
+-- 修复：将 URL 前缀从 http://127.0.0.1:48080 替换为 http://1.15.29.107
+-- 幂等：WHERE 子句只匹配旧 URL，已修复的行不受影响（REPLACE 结果相同，但 WHERE 过滤后 0 rows）
+
+-- 1. infra_file.url：文件访问地址
+UPDATE infra_file
+SET url = REPLACE(url, 'http://127.0.0.1:48080', 'http://1.15.29.107')
+WHERE url LIKE 'http://127.0.0.1:48080/%';
+
+-- 2. transport_cargo_order.photo_url：村民寄货货物照片
+UPDATE transport_cargo_order
+SET photo_url = REPLACE(photo_url, 'http://127.0.0.1:48080', 'http://1.15.29.107')
+WHERE photo_url LIKE 'http://127.0.0.1:48080/%';
+
+-- 3. transport_cargo_order.driver_photo_url：司机收件装车照片
+UPDATE transport_cargo_order
+SET driver_photo_url = REPLACE(driver_photo_url, 'http://127.0.0.1:48080', 'http://1.15.29.107')
+WHERE driver_photo_url LIKE 'http://127.0.0.1:48080/%';
+
+-- ========== 部署后验证 SQL（只 SELECT，不执行） ==========
+-- 验证 infra_file 坏 URL 已清零：
+--   SELECT COUNT(*) AS bad_count FROM infra_file WHERE url LIKE 'http://127.0.0.1:48080/%';
+-- 验证 transport_cargo_order 坏 URL 已清零：
+--   SELECT COUNT(*) AS bad_count FROM transport_cargo_order
+--   WHERE photo_url LIKE 'http://127.0.0.1:48080/%' OR driver_photo_url LIKE 'http://127.0.0.1:48080/%';
+-- 预期结果：两个查询均返回 0
