@@ -145,7 +145,7 @@ const handleDisable = async () => {
 
 /** 进入模拟运营 */
 const goSimulation = () => {
-  push('/transport/simulation')
+  push('/transport/monitoring/simulation')
 }
 
 // ========== 计算状态标签 ==========
