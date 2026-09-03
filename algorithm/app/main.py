@@ -36,8 +36,8 @@ from .solver import solve
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "haco-cps-1.2.0"
-PARAMETER_VERSION = "haco-cps-default-v1.2"
+ALGORITHM_VERSION = "haco-cps-1.3.0"
+PARAMETER_VERSION = "haco-cps-default-v1.3"
 BASELINE_VERSION = "ortools-1.3.0"
 
 # 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时

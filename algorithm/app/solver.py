@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 BASELINE_ALGORITHM_VERSION = "ortools-1.3.0"
 HACO_1_0_VERSION = "haco-cps-1.0.0"
 HACO_1_1_VERSION = "haco-cps-1.1.0"
-ALGORITHM_VERSION = "haco-cps-1.2.0"
+HACO_1_2_VERSION = "haco-cps-1.2.0"
+ALGORITHM_VERSION = "haco-cps-1.3.0"
 
 
 @dataclass

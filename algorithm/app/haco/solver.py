@@ -55,8 +55,8 @@ from .route_state import RouteState
 logger = logging.getLogger(__name__)
 
 # 版本信息
-HACO_VERSION = "haco-cps-1.2.0"
-HACO_PARAMETER_VERSION = "haco-cps-default-v1.2"
+HACO_VERSION = "haco-cps-1.3.0"
+HACO_PARAMETER_VERSION = "haco-cps-default-v1.3"
 BASELINE_VERSION = "ortools-1.3.0"
 
 # 距离缩放
@@ -118,11 +118,20 @@ def solve_haco(
         repair_names=["greedy", "regret2", "regret3", "gap_best"],
     )
 
-    # 生成初始解
+    # 生成初始解（贪婪最近邻 + ACO）
+    from .construction import construct_greedy_solution
+    greedy_states = construct_greedy_solution(tasks, route_templates, station_map, matrix, rng)
+    greedy_obj = evaluate_route_states(greedy_states, station_map, matrix)
+
     initial_states = construct_ant_solution(
         tasks, route_templates, pheromone, station_map, matrix, config, rng
     )
     initial_obj = evaluate_route_states(initial_states, station_map, matrix)
+
+    # 选择更好的初始解
+    if greedy_obj < initial_obj:
+        initial_states = greedy_states
+        initial_obj = greedy_obj
 
     if initial_obj.normalized_cost() > 0:
         pheromone.initialize_tau0(initial_obj.normalized_cost())

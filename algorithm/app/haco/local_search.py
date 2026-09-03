@@ -39,6 +39,15 @@ def local_search(
     for _ in range(config.local_search_rounds):
         improved = False
 
+        # Gap-internal reordering（关键优化：重新排列同一 gap 内的任务顺序）
+        new_states = _gap_reorder(best, station_map, matrix, config, rng)
+        if new_states:
+            new_obj = evaluate_route_states(new_states, station_map, matrix)
+            if new_obj < best_obj:
+                best = new_states
+                best_obj = new_obj
+                improved = True
+
         # Relocate
         new_states = _relocate(best, station_map, matrix, config, rng)
         if new_states:
@@ -80,6 +89,64 @@ def local_search(
             break
 
     return best
+
+
+def _gap_reorder(states, station_map, matrix, config, rng) -> list[RouteState] | None:
+    """Gap-internal reordering：重新排列同一 gap 内的任务顺序以减少距离。
+
+    这是解决 HACO 不会合并同一站点附近任务的关键优化。
+    """
+    best_states = [s.copy() for s in states]
+    best_obj = evaluate_route_states(best_states, station_map, matrix)
+    improved = False
+
+    for state in states:
+        for gap in state.gaps:
+            gap_tasks = state.get_tasks_in_gap(gap.gap_index)
+            if len(gap_tasks) < 2:
+                continue
+
+            # 尝试所有排列（小规模）或随机扰动（大规模）
+            if len(gap_tasks) <= 6:
+                # 穷举所有排列
+                from itertools import permutations
+                for perm in permutations(gap_tasks):
+                    new_states = [s.copy() for s in states]
+                    new_state = new_states[states.index(state)]
+                    # 移除所有 gap 任务
+                    for t in gap_tasks:
+                        new_state.remove_task(t.task_id)
+                    # 按新顺序插入
+                    for t in perm:
+                        new_state.insert_task(t, gap.gap_index)
+
+                    new_obj = evaluate_route_states(new_states, station_map, matrix)
+                    if new_obj < best_obj:
+                        best_states = new_states
+                        best_obj = new_obj
+                        improved = True
+            else:
+                # 随机扰动
+                for _ in range(config.ls_max_moves):
+                    new_states = [s.copy() for s in states]
+                    new_state = new_states[states.index(state)]
+                    gap_tasks_copy = list(gap_tasks)
+                    rng.shuffle(gap_tasks_copy)
+
+                    # 移除所有 gap 任务
+                    for t in gap_tasks:
+                        new_state.remove_task(t.task_id)
+                    # 按新顺序插入
+                    for t in gap_tasks_copy:
+                        new_state.insert_task(t, gap.gap_index)
+
+                    new_obj = evaluate_route_states(new_states, station_map, matrix)
+                    if new_obj < best_obj:
+                        best_states = new_states
+                        best_obj = new_obj
+                        improved = True
+
+    return best_states if improved else None
 
 
 def _relocate(states, station_map, matrix, config, rng) -> list[RouteState] | None:
