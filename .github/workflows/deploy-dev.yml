@@ -479,48 +479,30 @@ jobs:
           rm -f "$TMP_HTML"
 
       # 部署后算法黑盒验收：自动验证算法服务所有端点
+      # 输出同时写入 artifacts/blackbox-output.txt 和 $GITHUB_STEP_SUMMARY，
+      # 即使脚本最终 exit 1 也必须落盘摘要，方便用户在 Actions UI 直接查看。
       - name: Algorithm black-box verification
         if: always()
         run: |
-          set -uo pipefail
+          set -Eeuo pipefail
+
           mkdir -p artifacts
-          BB_OUTPUT="artifacts/blackbox-output.txt"
-          BB_RC=0
 
-          # 等待算法服务就绪
-          echo "Waiting for algorithm service..."
-          READY=0
-          for i in $(seq 1 20); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
-              echo "Algorithm is ready (attempt ${i})"
-              READY=1
-              break
-            fi
-            sleep 3
-          done
+          set +e
+          bash "${GITHUB_WORKSPACE}/deploy/scripts/algorithm-blackbox-test.sh" \
+            http://127.0.0.1:18081 2>&1 | tee artifacts/blackbox-output.txt
+          RC=${PIPESTATUS[0]}
+          set -e
 
-          if [[ "$READY" -ne 1 ]]; then
-            echo "Algorithm service not ready after 60s" | tee "$BB_OUTPUT"
-            echo "## Algorithm Black-Box Test: NOT READY" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat "$BB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          {
+            echo "## Algorithm Black-Box Verification"
+            echo
+            echo '```text'
+            cat artifacts/blackbox-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          # 运行黑盒测试，捕获输出
-          bash "${GITHUB_WORKSPACE}/deploy/scripts/algorithm-blackbox-test.sh" http://127.0.0.1:18081 2>&1 | tee "$BB_OUTPUT" || BB_RC=$?
-
-          # 写入 Step Summary
-          echo "## Algorithm Black-Box Test" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat "$BB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$BB_RC" -ne 0 ]]; then
-            echo "::error::Algorithm black-box test failed (exit $BB_RC)"
-            exit 1
-          fi
+          exit "$RC"
 
       # 生成算法验收报告并上传
       - name: Generate algorithm verification report
@@ -532,10 +514,11 @@ jobs:
 
       - name: Upload algorithm verification report
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: algorithm-verification
           path: |
             artifacts/algorithm-verification.json
             artifacts/blackbox-output.txt
-          if-no-files-found: ignore
+          if-no-files-found: warn

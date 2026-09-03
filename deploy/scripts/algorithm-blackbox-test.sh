@@ -43,11 +43,17 @@ check_status() {
     local desc="$1" url="$2" expected="$3" method="${4:-GET}" data="${5:-}"
     local actual
     if [[ "$method" == "POST" && -n "$data" ]]; then
-        actual=$(curl -sf -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "$data" "$url" 2>/dev/null || echo "000")
+        actual=$(curl -sS -o /dev/null -w "%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -d "$data" \
+          "$url" 2>/dev/null || echo "000")
     elif [[ "$method" == "POST" ]]; then
-        actual=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "$url" 2>/dev/null || echo "000")
+        actual=$(curl -sS -o /dev/null -w "%{http_code}" \
+          -X POST "$url" 2>/dev/null || echo "000")
     else
-        actual=$(curl -sf -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+        actual=$(curl -sS -o /dev/null -w "%{http_code}" \
+          "$url" 2>/dev/null || echo "000")
     fi
     if [[ "$actual" == "$expected" ]]; then
         pass "$desc (HTTP $actual)"
