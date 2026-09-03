@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.transport.controller.admin.simulation;
 
 import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.module.transport.service.developer.DeveloperSimulationGuard;
+import cn.iocoder.yudao.module.transport.service.simulation.SimulationRuntimeService;
 import cn.iocoder.yudao.module.transport.service.simulation.SimulationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,14 +21,17 @@ class SimulationControllerTest {
 
     private SimulationController controller;
     private SimulationService simulationService;
+    private SimulationRuntimeService runtimeService;
     private DeveloperSimulationGuard guard;
 
     @BeforeEach
     void setUp() {
         simulationService = mock(SimulationService.class);
+        runtimeService = mock(SimulationRuntimeService.class);
         guard = mock(DeveloperSimulationGuard.class);
         controller = new SimulationController();
         ReflectionTestUtils.setField(controller, "simulationService", simulationService);
+        ReflectionTestUtils.setField(controller, "runtimeService", runtimeService);
         ReflectionTestUtils.setField(controller, "guard", guard);
     }
 
