@@ -44,4 +44,7 @@ public class AlgorithmOrderDTO {
     /** 保留字段，算法不校验 */
     private Double volumeM3;
 
+    /** 货源类型：PRELOADED（场站预装）/ SHIPMENT（配对揽派，历史兼容）；省略时算法按上下文推断 */
+    private String cargoSource;
+
 }

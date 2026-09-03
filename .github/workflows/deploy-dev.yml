@@ -269,6 +269,53 @@ jobs:
           fi
           echo "Schema drift validation PASS: all22 columns present."
 
+      - name: Validate historical URL repair
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          set -a; source "${ENV_FILE}"; set +a
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          # 只读检查：历史 URL 修复是否生效。
+          FAIL=0
+
+          # 1. 不应再存在 127.0.0.1:48080 URL
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://127.0.0.1:48080/%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: infra_file still has ${CNT} rows with 127.0.0.1:48080 URL"
+            FAIL=1
+          fi
+
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM system_users WHERE avatar LIKE 'http://127.0.0.1:48080/%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: system_users still has ${CNT} rows with 127.0.0.1:48080 avatar"
+            FAIL=1
+          fi
+
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM transport_cargo_order WHERE photo_url LIKE 'http://127.0.0.1:48080/%' OR driver_photo_url LIKE 'http://127.0.0.1:48080/%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: transport_cargo_order still has ${CNT} rows with 127.0.0.1:48080 URL"
+            FAIL=1
+          fi
+
+          # 2. 不应再存在 example.com 测试 URL
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM transport_cargo_order WHERE photo_url LIKE 'http://example.com/%' OR driver_photo_url LIKE 'http://example.com/%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: transport_cargo_order still has ${CNT} rows with example.com URL"
+            FAIL=1
+          fi
+
+          if [ "${FAIL}" = "1" ]; then
+            echo "Historical URL validation FAILED."
+            exit 1
+          fi
+          echo "Historical URL validation PASS: no legacy/test URLs found."
+
       # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
       # 的 yudao.transport.algorithm.base-url=http://127.0.0.1:18081（外部化 yaml 优先级高于 app.env 的
@@ -392,3 +439,39 @@ jobs:
             exit 1
           fi
           rm -f "$TMP_HTML"
+
+      # 部署后算法黑盒验收：自动验证算法服务所有端点
+      - name: Algorithm black-box verification
+        run: |
+          set -euo pipefail
+          # 等待算法服务就绪
+          echo "Waiting for algorithm service..."
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
+              echo "Algorithm is ready (attempt ${i})"
+              break
+            fi
+            if [[ $i -eq 20 ]]; then
+              echo "Algorithm service not ready after 20 attempts, skipping black-box test"
+              exit 1
+            fi
+            sleep 3
+          done
+          # 运行黑盒测试
+          bash "${GITHUB_WORKSPACE}/deploy/scripts/algorithm-blackbox-test.sh" http://127.0.0.1:18081
+
+      # 生成算法验收报告并上传
+      - name: Generate algorithm verification report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          bash "${GITHUB_WORKSPACE}/deploy/scripts/generate-algorithm-report.sh" http://127.0.0.1:18081 || true
+
+      - name: Upload algorithm verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algorithm-verification
+          path: artifacts/algorithm-verification.json
+          if-no-files-found: ignore

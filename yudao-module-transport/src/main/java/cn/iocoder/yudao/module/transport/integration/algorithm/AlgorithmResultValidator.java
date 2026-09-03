@@ -10,7 +10,8 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ALGORIT
 
 /**
  * 算法结果合法性校验（适配层责任第 5 条）：
- * 车辆、站点、订单均属于原快照；容量与时序不越界；所有订单只出现一次。
+ * 车辆、站点、订单均属于原快照；容量与时序不越界；所有订单只出现一次；
+ * PASS 经停合法；Skeleton 顺序正确；配对货运（shipment）完整覆盖。
  * 校验不通过一律抛 {@link cn.iocoder.yudao.framework.common.exception.ServiceException}，不落库。
  */
 public final class AlgorithmResultValidator {
@@ -58,10 +59,19 @@ public final class AlgorithmResultValidator {
         Map<String, AlgorithmOrderDTO> orderMap = new HashMap<>();
         request.getOrders().forEach(order -> orderMap.put(order.getOrderId(), order));
 
+        // 构建 shipment 映射
+        Map<String, AlgorithmShipmentDTO> shipmentMap = new HashMap<>();
+        if (!CollectionUtils.isEmpty(request.getShipments())) {
+            request.getShipments().forEach(s -> shipmentMap.put(s.getShipmentId(), s));
+        }
+
         Map<String, Integer> orderStopCount = new HashMap<>();
+        Map<String, Integer> shipmentPickupCount = new HashMap<>();
+        Map<String, Integer> shipmentDeliveryCount = new HashMap<>();
         Set<Long> usedVehicleIds = new HashSet<>();
         for (AlgorithmVehiclePlanDTO plan : nullSafe(response.getVehiclePlans())) {
-            validateVehiclePlan(request, plan, stationIds, vehicleMap, orderMap, orderStopCount);
+            validateVehiclePlan(request, plan, stationIds, vehicleMap, orderMap, shipmentMap,
+                    orderStopCount, shipmentPickupCount, shipmentDeliveryCount);
             if (!usedVehicleIds.add(plan.getVehicleId())) {
                 throw exception(ALGORITHM_RESULT_INVALID, "车辆 " + plan.getVehicleId() + " 出现多份方案");
             }
@@ -76,11 +86,30 @@ public final class AlgorithmResultValidator {
                         "订单 " + order.getOrderId() + " 出现 " + actual + " 次，期望 " + expected + " 次");
             }
         }
+
+        // 所有 shipment 必须被完整覆盖：PICKUP + DELIVERY 各一次
+        for (AlgorithmShipmentDTO shipment : nullSafe(request.getShipments())) {
+            int pickups = shipmentPickupCount.getOrDefault(shipment.getShipmentId(), 0);
+            int deliveries = shipmentDeliveryCount.getOrDefault(shipment.getShipmentId(), 0);
+            if (pickups != 1 || deliveries != 1) {
+                throw exception(ALGORITHM_RESULT_INVALID,
+                        "shipment " + shipment.getShipmentId() + " 覆盖不完整：PICKUP=" + pickups + " DELIVERY=" + deliveries);
+            }
+        }
+
+        // 距离校验
+        if (response.getTotalDistance() != null && response.getTotalDistance() < 0) {
+            throw exception(ALGORITHM_RESULT_INVALID, "总里程为负值：" + response.getTotalDistance());
+        }
     }
 
     private static void validateVehiclePlan(AlgorithmPlanReqDTO request, AlgorithmVehiclePlanDTO plan,
                                             Set<String> stationIds, Map<Long, AlgorithmVehicleDTO> vehicleMap,
-                                            Map<String, AlgorithmOrderDTO> orderMap, Map<String, Integer> orderStopCount) {
+                                            Map<String, AlgorithmOrderDTO> orderMap,
+                                            Map<String, AlgorithmShipmentDTO> shipmentMap,
+                                            Map<String, Integer> orderStopCount,
+                                            Map<String, Integer> shipmentPickupCount,
+                                            Map<String, Integer> shipmentDeliveryCount) {
         AlgorithmVehicleDTO vehicle = vehicleMap.get(plan.getVehicleId());
         if (vehicle == null) {
             throw exception(ALGORITHM_RESULT_INVALID, "方案引用了快照外的车辆 " + plan.getVehicleId());
@@ -100,15 +129,20 @@ public final class AlgorithmResultValidator {
             throw exception(ALGORITHM_RESULT_INVALID, "车辆 " + plan.getVehicleId() + " 未返回场站");
         }
 
+        // 初始载荷
+        int passengers = vehicle.getInitialPassengerLoad() != null ? vehicle.getInitialPassengerLoad() : 0;
+        int cargo = vehicle.getInitialCargoLoad() != null ? vehicle.getInitialCargoLoad() : 0;
+
         // 静态闭环：派送件在场站装车，出发时即占用货仓容量
-        int passengers = 0;
-        int cargo = 0;
         for (AlgorithmRouteStopDTO stop : stops) {
             if (AlgorithmOrderDTO.TYPE_DELIVERY.equals(orderTypeOf(stop, orderMap))) {
                 cargo += itemCountOf(stop, orderMap);
             }
         }
         Map<String, Integer> passengerActionIndex = new HashMap<>();
+
+        // Skeleton 验证：收集 PASS 站点，检查顺序
+        List<String> passStops = new ArrayList<>();
 
         for (int i = 0; i < stops.size(); i++) {
             AlgorithmRouteStopDTO stop = stops.get(i);
@@ -128,11 +162,25 @@ public final class AlgorithmResultValidator {
                 }
                 continue;
             }
+            // PASS 动作：不关联订单，不参与覆盖统计，不增减载荷
+            if (AlgorithmRouteStopDTO.ACTION_PASS.equals(action)) {
+                if (stop.getOrderId() != null) {
+                    throw exception(ALGORITHM_RESULT_INVALID, "PASS 经停不得关联订单");
+                }
+                passStops.add(stop.getStationId());
+                continue;
+            }
+            // 非 PASS 动作需要关联订单
             AlgorithmOrderDTO order = orderMap.get(stop.getOrderId());
             if (order == null) {
-                throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单 " + stop.getOrderId());
+                // 检查是否为 shipment 的 orderId
+                if (!shipmentMap.containsKey(stop.getOrderId())) {
+                    throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单 " + stop.getOrderId());
+                }
             }
-            orderStopCount.merge(order.getOrderId(), 1, Integer::sum);
+            if (order != null) {
+                orderStopCount.merge(order.getOrderId(), 1, Integer::sum);
+            }
             switch (action) {
                 case AlgorithmRouteStopDTO.ACTION_BOARD -> {
                     requirePassengerStop(order, stop, order.getBoardingStationId(), plan);
@@ -153,12 +201,42 @@ public final class AlgorithmResultValidator {
                     }
                 }
                 case AlgorithmRouteStopDTO.ACTION_DELIVER -> {
-                    requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_DELIVERY, plan);
-                    cargo -= itemCountOf(stop, orderMap);
+                    if (order != null) {
+                        requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_DELIVERY, plan);
+                        cargo -= itemCountOf(stop, orderMap);
+                    } else {
+                        // Shipment DELIVERY
+                        String sid = stop.getOrderId();
+                        AlgorithmShipmentDTO shipment = shipmentMap.get(sid);
+                        if (shipment == null) {
+                            throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单/shipment " + sid);
+                        }
+                        if (!Objects.equals(shipment.getDeliveryStationId(), stop.getStationId())) {
+                            throw exception(ALGORITHM_RESULT_INVALID,
+                                    "shipment " + sid + " DELIVERY 站点不匹配：期望 " + shipment.getDeliveryStationId());
+                        }
+                        cargo -= shipment.getQuantity() != null ? shipment.getQuantity() : 1;
+                        shipmentDeliveryCount.merge(sid, 1, Integer::sum);
+                    }
                 }
                 case AlgorithmRouteStopDTO.ACTION_PICKUP -> {
-                    requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_PICKUP, plan);
-                    cargo += itemCountOf(stop, orderMap);
+                    if (order != null) {
+                        requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_PICKUP, plan);
+                        cargo += itemCountOf(stop, orderMap);
+                    } else {
+                        // Shipment PICKUP
+                        String sid = stop.getOrderId();
+                        AlgorithmShipmentDTO shipment = shipmentMap.get(sid);
+                        if (shipment == null) {
+                            throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单/shipment " + sid);
+                        }
+                        if (!Objects.equals(shipment.getPickupStationId(), stop.getStationId())) {
+                            throw exception(ALGORITHM_RESULT_INVALID,
+                                    "shipment " + sid + " PICKUP 站点不匹配：期望 " + shipment.getPickupStationId());
+                        }
+                        cargo += shipment.getQuantity() != null ? shipment.getQuantity() : 1;
+                        shipmentPickupCount.merge(sid, 1, Integer::sum);
+                    }
                 }
                 default -> throw exception(ALGORITHM_RESULT_INVALID, "未知经停动作 " + action);
             }
@@ -171,15 +249,45 @@ public final class AlgorithmResultValidator {
                         "车辆 " + plan.getVehicleId() + " 容量越界（载客 " + passengers + "/" + passengerCapacity
                                 + "，载货 " + cargo + "/" + cargoCapacity + "）");
             }
+            // 段距离校验
+            if (stop.getSegmentDistance() != null && stop.getSegmentDistance() < 0) {
+                throw exception(ALGORITHM_RESULT_INVALID,
+                        "车辆 " + plan.getVehicleId() + " 段距离为负值：" + stop.getSegmentDistance());
+            }
+        }
+
+        // Skeleton 顺序校验
+        validateSkeleton(vehicle, passStops, plan);
+    }
+
+    /**
+     * Skeleton 顺序校验：骨架站点必须在 PASS 动作中按原顺序出现，允许货运站点插入其间。
+     */
+    private static void validateSkeleton(AlgorithmVehicleDTO vehicle, List<String> passStops,
+                                         AlgorithmVehiclePlanDTO plan) {
+        List<String> skeleton = vehicle.getSkeleton();
+        if (CollectionUtils.isEmpty(skeleton)) {
+            return;
+        }
+        int skeletonIndex = 0;
+        for (String passStationId : passStops) {
+            if (skeletonIndex < skeleton.size() && Objects.equals(passStationId, skeleton.get(skeletonIndex))) {
+                skeletonIndex++;
+            }
+        }
+        if (skeletonIndex < skeleton.size()) {
+            throw exception(ALGORITHM_RESULT_INVALID,
+                    "车辆 " + plan.getVehicleId() + " 未按骨架顺序经停：缺少 " + skeleton.get(skeletonIndex)
+                            + "（已匹配 " + skeletonIndex + "/" + skeleton.size() + "）");
         }
     }
 
     private static void requirePassengerStop(AlgorithmOrderDTO order, AlgorithmRouteStopDTO stop,
                                              String expectedStationId, AlgorithmVehiclePlanDTO plan) {
-        if (!AlgorithmOrderDTO.TYPE_PASSENGER.equals(order.getOrderType())
+        if (order == null || !AlgorithmOrderDTO.TYPE_PASSENGER.equals(order.getOrderType())
                 || !Objects.equals(expectedStationId, stop.getStationId())) {
             throw exception(ALGORITHM_RESULT_INVALID,
-                    "车辆 " + plan.getVehicleId() + " 中订单 " + order.getOrderId() + " 的上下车站点与快照不符");
+                    "车辆 " + plan.getVehicleId() + " 中订单 " + stop.getOrderId() + " 的上下车站点与快照不符");
         }
     }
 
