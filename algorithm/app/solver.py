@@ -4,7 +4,8 @@
 Fallback：HACO 失败/超时时回退到 OR-Tools baseline（在 warnings 中标注）
 
 算法版本：
-- HACO: haco-cps-1.0.0
+- HACO 1.1: haco-cps-1.1.0 (真正路线构造)
+- HACO 1.0: haco-cps-1.0.0 (OR-Tools 驱动)
 - Baseline: ortools-1.3.0
 """
 
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 # 版本常量
 BASELINE_ALGORITHM_VERSION = "ortools-1.3.0"
-ALGORITHM_VERSION = "haco-cps-1.0.0"
+HACO_1_0_VERSION = "haco-cps-1.0.0"
+ALGORITHM_VERSION = "haco-cps-1.1.0"
 
 
 @dataclass
