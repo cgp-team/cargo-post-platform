@@ -479,24 +479,30 @@ jobs:
           rm -f "$TMP_HTML"
 
       # 部署后算法黑盒验收：自动验证算法服务所有端点
+      # 输出同时写入 artifacts/blackbox-output.txt 和 $GITHUB_STEP_SUMMARY，
+      # 即使脚本最终 exit 1 也必须落盘摘要，方便用户在 Actions UI 直接查看。
       - name: Algorithm black-box verification
+        if: always()
         run: |
-          set -euo pipefail
-          # 等待算法服务就绪
-          echo "Waiting for algorithm service..."
-          for i in $(seq 1 20); do
-            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
-              echo "Algorithm is ready (attempt ${i})"
-              break
-            fi
-            if [[ $i -eq 20 ]]; then
-              echo "Algorithm service not ready after 20 attempts, skipping black-box test"
-              exit 1
-            fi
-            sleep 3
-          done
-          # 运行黑盒测试
-          bash "${GITHUB_WORKSPACE}/deploy/scripts/algorithm-blackbox-test.sh" http://127.0.0.1:18081
+          set -Eeuo pipefail
+
+          mkdir -p artifacts
+
+          set +e
+          bash "${GITHUB_WORKSPACE}/deploy/scripts/algorithm-blackbox-test.sh" \
+            http://127.0.0.1:18081 2>&1 | tee artifacts/blackbox-output.txt
+          RC=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Algorithm Black-Box Verification"
+            echo
+            echo '```text'
+            cat artifacts/blackbox-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$RC"
 
       # 生成算法验收报告并上传
       - name: Generate algorithm verification report
@@ -508,8 +514,11 @@ jobs:
 
       - name: Upload algorithm verification report
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: algorithm-verification
-          path: artifacts/algorithm-verification.json
-          if-no-files-found: ignore
+          path: |
+            artifacts/algorithm-verification.json
+            artifacts/blackbox-output.txt
+          if-no-files-found: warn
