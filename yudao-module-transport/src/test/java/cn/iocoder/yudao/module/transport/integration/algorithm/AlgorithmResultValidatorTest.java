@@ -12,7 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * 结果校验：车辆/站点/订单归属原快照、容量与时序不越界、订单只出现一次。
+ * 结果校验：车辆/站点/订单归属原快照、容量与时序不越界、订单只出现一次；
+ * PASS 经停合法；Skeleton 顺序正确；配对货运（shipment）完整覆盖。
  */
 class AlgorithmResultValidatorTest {
 
@@ -140,6 +141,231 @@ class AlgorithmResultValidatorTest {
                 .requestId("req-test-1").status(AlgorithmPlanRespDTO.STATUS_INFEASIBLE)
                 .reasonCode(AlgorithmPlanRespDTO.REASON_TIMING_CONFLICT).build();
         assertDoesNotThrow(() -> AlgorithmResultValidator.validate(baseRequest(), result));
+    }
+
+    // ========== PASS 经停验证 ==========
+
+    @Test
+    void pass_stop_accepted() {
+        // PASS 不关联订单，不参与覆盖统计
+        AlgorithmPlanReqDTO request = baseRequest();
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        // 在 BOARD 之前插入 PASS
+        stops.add(1, stop("S1", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void pass_stop_with_order_rejected() {
+        // PASS 不得关联订单
+        AlgorithmPlanReqDTO request = baseRequest();
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        stops.add(1, stop("S1", "O-P001", AlgorithmRouteStopDTO.ACTION_PASS));
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void multiple_pass_stops_accepted() {
+        // 允许多个 PASS
+        AlgorithmPlanReqDTO request = baseRequest();
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        stops.add(1, stop("S1", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        stops.add(2, stop("S2", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    // ========== Skeleton 验证 ==========
+
+    @Test
+    void skeleton_order_respected() {
+        // 骨架站点按顺序出现
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setSkeleton(List.of("S1", "S2"));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        // 在 DEPART 后插入 PASS S1，在 ALIGHT 后插入 PASS S2
+        stops.add(1, stop("S1", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        stops.add(4, stop("S2", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void skeleton_order_violation_rejected() {
+        // 骨架顺序颠倒
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setSkeleton(List.of("S1", "S2"));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        // PASS S2 在 PASS S1 之前（顺序颠倒）
+        stops.add(1, stop("S2", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        stops.add(2, stop("S1", null, AlgorithmRouteStopDTO.ACTION_PASS));
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void skeleton_missing_station_rejected() {
+        // 骨架站点缺失
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setSkeleton(List.of("S1", "S2"));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        // 没有 PASS 动作，skeleton 未满足
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    // ========== Shipment 验证 ==========
+
+    @Test
+    void shipment_pickup_delivery_accepted() {
+        // 完整的 shipment PICKUP + DELIVERY
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.setShipments(List.of(
+                AlgorithmShipmentDTO.builder().shipmentId("TP001").pickupStationId("S1")
+                        .deliveryStationId("S2").quantity(2).build()));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        stops.add(stops.size() - 1, stop("S1", "TP001", AlgorithmRouteStopDTO.ACTION_PICKUP));
+        stops.add(stops.size() - 1, stop("S2", "TP001", AlgorithmRouteStopDTO.ACTION_DELIVER));
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void shipment_missing_delivery_rejected() {
+        // 只有 PICKUP 没有 DELIVERY
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.setShipments(List.of(
+                AlgorithmShipmentDTO.builder().shipmentId("TP001").pickupStationId("S1")
+                        .deliveryStationId("S2").quantity(2).build()));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        stops.add(stops.size() - 1, stop("S1", "TP001", AlgorithmRouteStopDTO.ACTION_PICKUP));
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void shipment_wrong_station_rejected() {
+        // PICKUP 站点不匹配
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.setShipments(List.of(
+                AlgorithmShipmentDTO.builder().shipmentId("TP001").pickupStationId("S1")
+                        .deliveryStationId("S2").quantity(2).build()));
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        List<AlgorithmRouteStopDTO> stops = result.getVehiclePlans().get(0).getStops();
+        stops.add(stops.size() - 1, stop("S2", "TP001", AlgorithmRouteStopDTO.ACTION_PICKUP)); // 错误：应该是 S1
+        stops.add(stops.size() - 1, stop("S2", "TP001", AlgorithmRouteStopDTO.ACTION_DELIVER));
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    // ========== 初始载荷验证 ==========
+
+    @Test
+    void initial_passenger_load_respected() {
+        // 初始载客 3 人，再上 2 人（共 5 人，未超容量）
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setInitialPassengerLoad(3);
+        request.getVehicles().get(0).setPassengerCapacity(5);
+        // 只保留 2 个客运订单
+        request.setOrders(List.of(
+                AlgorithmOrderDTO.builder().orderId("O-P001").orderType(AlgorithmOrderDTO.TYPE_PASSENGER)
+                        .boardingStationId("S1").alightingStationId("S2").build(),
+                AlgorithmOrderDTO.builder().orderId("O-P002").orderType(AlgorithmOrderDTO.TYPE_PASSENGER)
+                        .boardingStationId("S1").alightingStationId("S2").build()));
+        AlgorithmPlanRespDTO result = AlgorithmPlanRespDTO.builder()
+                .requestId(request.getRequestId())
+                .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
+                .algorithmVersion("test-v1")
+                .parameterVersion("p-v1")
+                .totalDistance(1.0)
+                .vehiclePlans(new ArrayList<>(List.of(AlgorithmVehiclePlanDTO.builder()
+                        .vehicleId(1001L).stops(new ArrayList<>(List.of(
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_DEPART),
+                                stop("S1", "O-P001", AlgorithmRouteStopDTO.ACTION_BOARD),
+                                stop("S1", "O-P002", AlgorithmRouteStopDTO.ACTION_BOARD),
+                                stop("S2", "O-P001", AlgorithmRouteStopDTO.ACTION_ALIGHT),
+                                stop("S2", "O-P002", AlgorithmRouteStopDTO.ACTION_ALIGHT),
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_RETURN))))
+                        .totalDistance(1.0).build())))
+                .computedAt(OffsetDateTime.parse("2026-08-09T08:00:05+08:00"))
+                .build();
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void initial_passenger_load_overflow_rejected() {
+        // 初始载客 4 人，再上 2 人（共 6 人，超容量 5）
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setInitialPassengerLoad(4);
+        request.getVehicles().get(0).setPassengerCapacity(5);
+        request.setOrders(List.of(
+                AlgorithmOrderDTO.builder().orderId("O-P001").orderType(AlgorithmOrderDTO.TYPE_PASSENGER)
+                        .boardingStationId("S1").alightingStationId("S2").build(),
+                AlgorithmOrderDTO.builder().orderId("O-P002").orderType(AlgorithmOrderDTO.TYPE_PASSENGER)
+                        .boardingStationId("S1").alightingStationId("S2").build()));
+        AlgorithmPlanRespDTO result = AlgorithmPlanRespDTO.builder()
+                .requestId(request.getRequestId())
+                .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
+                .algorithmVersion("test-v1")
+                .parameterVersion("p-v1")
+                .totalDistance(1.0)
+                .vehiclePlans(new ArrayList<>(List.of(AlgorithmVehiclePlanDTO.builder()
+                        .vehicleId(1001L).stops(new ArrayList<>(List.of(
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_DEPART),
+                                stop("S1", "O-P001", AlgorithmRouteStopDTO.ACTION_BOARD),
+                                stop("S1", "O-P002", AlgorithmRouteStopDTO.ACTION_BOARD),
+                                stop("S2", "O-P001", AlgorithmRouteStopDTO.ACTION_ALIGHT),
+                                stop("S2", "O-P002", AlgorithmRouteStopDTO.ACTION_ALIGHT),
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_RETURN))))
+                        .totalDistance(1.0).build())))
+                .computedAt(OffsetDateTime.parse("2026-08-09T08:00:05+08:00"))
+                .build();
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void initial_cargo_load_respected() {
+        // 初始载货 3 件，再派送 1 件（共 4 件，未超容量）
+        AlgorithmPlanReqDTO request = baseRequest();
+        request.getVehicles().get(0).setInitialCargoLoad(3);
+        request.getVehicles().get(0).setCargoCapacity(4);
+        // 只保留 1 个派送订单
+        request.setOrders(List.of(
+                AlgorithmOrderDTO.builder().orderId("O-D001").orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
+                        .stationId("S2").itemCount(1).build()));
+        AlgorithmPlanRespDTO result = AlgorithmPlanRespDTO.builder()
+                .requestId(request.getRequestId())
+                .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
+                .algorithmVersion("test-v1")
+                .parameterVersion("p-v1")
+                .totalDistance(1.0)
+                .vehiclePlans(new ArrayList<>(List.of(AlgorithmVehiclePlanDTO.builder()
+                        .vehicleId(1001L).stops(new ArrayList<>(List.of(
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_DEPART),
+                                stop("S2", "O-D001", AlgorithmRouteStopDTO.ACTION_DELIVER),
+                                stop("S0", null, AlgorithmRouteStopDTO.ACTION_RETURN))))
+                        .totalDistance(1.0).build())))
+                .computedAt(OffsetDateTime.parse("2026-08-09T08:00:05+08:00"))
+                .build();
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    // ========== 距离验证 ==========
+
+    @Test
+    void negative_total_distance_rejected() {
+        AlgorithmPlanReqDTO request = baseRequest();
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        result.setTotalDistance(-1.0);
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
+    }
+
+    @Test
+    void negative_segment_distance_rejected() {
+        AlgorithmPlanReqDTO request = baseRequest();
+        AlgorithmPlanRespDTO result = feasibleResult(request);
+        result.getVehiclePlans().get(0).getStops().get(1).setSegmentDistance(-0.5);
+        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(request, result));
     }
 
     // ========== 测试数据 ==========
