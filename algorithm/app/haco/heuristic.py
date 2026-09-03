@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import math
+from math import hypot
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -37,22 +38,26 @@ def _haversine_km(a, b) -> float:
 
 
 def compute_distance(a, b, matrix=None) -> float:
-    """计算两站距离（km 或 度，取决于 matrix）。"""
+    """计算两站距离（km 或 度，取决于 matrix）。
+    无矩阵时使用欧氏度（与 baseline 口径一致）。"""
     if matrix is not None:
         key = (a.stationId, b.stationId)
         if key in matrix:
             return matrix[key][0]
-    return _haversine_km(a, b)
+    # 使用欧氏度（与 baseline 口径一致）
+    return hypot(a.longitude - b.longitude, a.latitude - b.latitude)
 
 
 def compute_duration(a, b, matrix=None) -> float:
-    """计算两站行驶时间（秒）。"""
+    """计算两站行驶时间（秒）。
+    无矩阵时使用欧氏度估算（与 baseline 口径一致）。"""
     if matrix is not None:
         key = (a.stationId, b.stationId)
         if key in matrix:
             return matrix[key][1] or 0.0
-    km = _haversine_km(a, b)
-    return km / 25.0 * 3600
+    # 使用欧氏度估算（与 baseline 口径一致）
+    dist = hypot(a.longitude - b.longitude, a.latitude - b.latitude)
+    return dist / 25.0 * 3600
 
 
 def compute_insertion_score(
