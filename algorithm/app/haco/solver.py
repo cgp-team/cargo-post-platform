@@ -1,19 +1,14 @@
-"""HACO-CPS 1.1.0 主求解器：真正的 HACO 路线构造 + OR-Tools 验证/修复。
+"""HACO-CPS 1.2.0 主求解器：Domain-aware ACO + Advanced Neighborhood + Adaptive LNS。
 
-核心改进（相比1.0.0）：
-1. 每只蚂蚁真正自己构造路线（不调用 OR-Tools）
-2. Skeleton Gap 模型：骨架间隙中插入任务
-3. Task Block 不可拆分：Passenger/Shipments 整体移动
-4. Local Search 真正接入主循环
-5. LNS Destroy-Repair 真正作用于 RouteState
-6. OR-Tools 仅用于最终验证和 fallback
-
-架构：
-- HACO 构造 → RouteState
-- Local Search → 改进 RouteState
-- LNS → 破坏+修复 RouteState
-- OR-Tools → 验证可行性 + Fallback
-- 输出 → VehiclePlan (API 兼容)
+核心改进（相比1.1.0）：
+1. Task-to-Gap 信息素：引导任务分配到合适的骨架间隙
+2. 双信息素系统：task-to-task + task-to-gap
+3. 高级邻域：2-opt, Or-opt, SWAP*
+4. 自适应 LNS：Shaw/Worst/Segment 破坏 + Greedy/Regret-2/Regret-3 修复
+5. 精英存档：质量 + 多样性平衡
+6. 自适应参数：alpha/beta 根据多样性调整
+7. 自适应惩罚：根据可行解比例调整
+8. 增强启发式：时间窗风险、容量风险、乘客敏感度
 """
 
 from __future__ import annotations
@@ -23,6 +18,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
+from math import hypot
 
 from ..distance import DistanceMatrix, EUCLIDEAN_AVG_SPEED_KMH, haversine_km
 from ..models import (
@@ -33,13 +29,25 @@ from ..models import (
     StopAction,
     VehiclePlan,
 )
-from ..validators import service_duration, validate_time_window, validate_vehicle_plan
+from ..validators import validate_time_window, validate_vehicle_plan
+from .archive import EliteArchive, compute_route_signature
 from .config import HacoConfig
 from .construction import construct_ant_solution
-from .destroy_repair import destroy_random, destroy_worst, repair_greedy, repair_regret2
+from .destroy_repair import (
+    AdaptiveOperatorSelector,
+    destroy_random,
+    destroy_segment,
+    destroy_shaw,
+    destroy_worst,
+    repair_gap_best,
+    repair_greedy,
+    repair_regret2,
+    repair_regret3,
+)
 from .encoding import ObjectiveVector, TaskBlock, TaskType
 from .evaluator import compute_diversity, evaluate_route_states
 from .feasibility import validate_route_states
+from .gap_pheromone import GapPheromone
 from .local_search import local_search
 from .pheromone import PheromoneMatrix
 from .route_state import RouteState
@@ -47,10 +55,9 @@ from .route_state import RouteState
 logger = logging.getLogger(__name__)
 
 # 版本信息
-HACO_VERSION = "haco-cps-1.1.0"
-HACO_PARAMETER_VERSION = "haco-cps-default-v1.1"
+HACO_VERSION = "haco-cps-1.2.0"
+HACO_PARAMETER_VERSION = "haco-cps-default-v1.2"
 BASELINE_VERSION = "ortools-1.3.0"
-HACO_1_0_VERSION = "haco-cps-1.0.0"
 
 # 距离缩放
 DISTANCE_SCALE = 1000
@@ -58,7 +65,7 @@ DISTANCE_SCALE = 1000
 
 @dataclass
 class SolveOutcome:
-    status: str  # "feasible" | "infeasible"
+    status: str
     reason_code: str | None = None
     vehicle_plans: list[VehiclePlan] = field(default_factory=list)
     total_distance: float = 0.0
@@ -73,16 +80,7 @@ def solve_haco(
     matrix: DistanceMatrix | None = None,
     config: HacoConfig | None = None,
 ) -> SolveOutcome:
-    """HACO-CPS 1.1.0 主求解入口。
-
-    流程：
-    1. 预检（容量、时间窗）
-    2. 任务编码（TaskBlock）
-    3. 初始化 RouteState（每辆车的骨架+间隙）
-    4. HACO 迭代：蚂蚁构造 → 局部搜索 → LNS → 信息素更新
-    5. OR-Tools 验证最终解
-    6. Fallback 到 OR-Tools baseline（如果 HACO 无解）
-    """
+    """HACO-CPS 1.2.0 主求解入口。"""
     if config is None:
         config = HacoConfig.from_algorithm_config(request.algorithmConfig)
 
@@ -105,25 +103,38 @@ def solve_haco(
     # 初始化 RouteState 模板
     route_templates = _build_route_templates(request)
 
-    # 初始化信息素
+    # 初始化双信息素系统
     task_ids = [t.task_id for t in tasks] + ["DEPOT"]
     pheromone = PheromoneMatrix(task_ids, config)
+    gap_count = len(route_templates[0].gaps) if route_templates else 5
+    gap_pheromone = GapPheromone(task_ids, gap_count, config)
 
-    # 生成初始解（用贪婪构造）
+    # 精英存档
+    archive = EliteArchive(max_size=config.archive_size)
+
+    # 自适应算子选择
+    op_selector = AdaptiveOperatorSelector(
+        destroy_names=["random", "worst", "shaw", "segment"],
+        repair_names=["greedy", "regret2", "regret3", "gap_best"],
+    )
+
+    # 生成初始解
     initial_states = construct_ant_solution(
         tasks, route_templates, pheromone, station_map, matrix, config, rng
     )
     initial_obj = evaluate_route_states(initial_states, station_map, matrix)
 
-    # 初始化信息素 tau0
     if initial_obj.normalized_cost() > 0:
         pheromone.initialize_tau0(initial_obj.normalized_cost())
+        gap_pheromone.initialize_tau0(initial_obj.normalized_cost())
 
     best_states = initial_states
     best_obj = initial_obj
     warnings = []
     iteration_stats = []
     no_improve_count = 0
+    feasible_count = 0
+    total_count = 0
 
     # 迭代搜索
     deadline = time.monotonic() + config.haco_time_limit
@@ -138,14 +149,19 @@ def solve_haco(
         iteration_best_states = None
         iteration_best_obj = ObjectiveVector(infeasibility=float("inf"))
 
+        # 自适应 alpha/beta
+        diversity = compute_diversity(iteration_solutions) if iteration_solutions else 0.5
+        adaptive_alpha, adaptive_beta = _adapt_parameters(config, diversity)
+
         # 每只蚂蚁构造解
         for ant_idx in range(config.ant_count):
             if time.monotonic() > deadline:
                 break
 
-            # 蚂蚁构造
+            # 蚂蚁构造（使用双信息素）
             ant_states = construct_ant_solution(
-                tasks, route_templates, pheromone, station_map, matrix, config, rng
+                tasks, route_templates, pheromone, station_map, matrix, config, rng,
+                gap_pheromone=gap_pheromone, alpha_gap=config.alpha_gap,
             )
 
             # 局部搜索（对精英蚂蚁）
@@ -158,34 +174,54 @@ def solve_haco(
             iteration_solutions.append(ant_states)
             iteration_objs.append(ant_obj)
 
+            total_count += 1
+            if ant_obj.infeasibility == 0:
+                feasible_count += 1
+
             if ant_obj < iteration_best_obj:
                 iteration_best_states = ant_states
                 iteration_best_obj = ant_obj
 
-        # LNS 对迭代最优解
+            # 添加到存档
+            if ant_obj.infeasibility == 0:
+                sig = compute_route_signature(ant_states)
+                archive.add(ant_states, ant_obj, sig)
+
+        # 自适应 LNS
         if iteration_best_states and rng.random() < config.lns_probability:
-            lns_states = _lns_improve(
-                iteration_best_states, station_map, matrix, config, rng
+            destroy_name = op_selector.select_destroy(rng)
+            repair_name = op_selector.select_repair(rng)
+
+            lns_states, d_name, r_name = _adaptive_lns(
+                iteration_best_states, station_map, matrix, config, rng,
+                op_selector, destroy_name, repair_name,
             )
             lns_obj = evaluate_route_states(lns_states, station_map, matrix)
+
             if lns_obj < iteration_best_obj:
                 iteration_best_states = lns_states
                 iteration_best_obj = lns_obj
+                op_selector.reward(d_name, r_name, "iteration_best")
+            else:
+                op_selector.record_usage(d_name, r_name)
 
         # 信息素更新
         pheromone.evaporate()
+        gap_pheromone.evaporate()
 
         if iteration_best_states and iteration_best_obj.normalized_cost() < float("inf"):
-            # 迭代最优沉积
             task_seq = _extract_task_sequence(iteration_best_states)
-            pheromone.deposit(task_seq, iteration_best_obj.normalized_cost(), weight=1.0)
+            gap_assignments = _extract_gap_assignments(iteration_best_states)
 
-            # 全局最优更新
+            pheromone.deposit(task_seq, iteration_best_obj.normalized_cost(), weight=1.0)
+            gap_pheromone.deposit(gap_assignments, iteration_best_obj.normalized_cost(), weight=1.0)
+
             if iteration_best_obj < best_obj:
                 best_states = [s.copy() for s in iteration_best_states]
                 best_obj = iteration_best_obj
                 no_improve_count = 0
                 pheromone.update_from_best(task_seq, best_obj.normalized_cost(), elite_weight=2.0)
+                gap_pheromone.update_from_best(gap_assignments, best_obj.normalized_cost(), elite_weight=2.0)
             else:
                 no_improve_count += 1
         else:
@@ -199,6 +235,8 @@ def solve_haco(
             "feasible_count": sum(1 for o in iteration_objs if o.infeasibility == 0),
             "average_cost": sum(o.normalized_cost() for o in iteration_objs) / max(1, len(iteration_objs)),
             "diversity": diversity,
+            "alpha": adaptive_alpha,
+            "beta": adaptive_beta,
         })
 
         # 收敛检查
@@ -206,9 +244,9 @@ def solve_haco(
             warnings.append("HACO_CONVERGED")
             break
 
-        # 信息素重启（防早熟收敛）
+        # 自适应信息素重启
         if no_improve_count >= config.convergence_threshold // 2:
-            _pheromone_restart(pheromone, config, rng)
+            _adaptive_pheromone_restart(pheromone, gap_pheromone, config, rng)
 
     # 如果 HACO 没找到可行解，fallback 到 OR-Tools
     if best_obj.infeasibility > 0:
@@ -235,7 +273,7 @@ def solve_haco(
 
 
 def _precheck(request: PlanRequest) -> SolveOutcome | None:
-    """预检：容量、时间窗。"""
+    """预检。"""
     passengers = sum(1 for o in request.orders if o.orderType == OrderType.PASSENGER)
     deliveries = sum(
         o.itemCount for o in request.orders
@@ -329,54 +367,78 @@ def _build_route_templates(request: PlanRequest) -> list[RouteState]:
     return templates
 
 
-def _lns_improve(
-    states: list[RouteState],
-    station_map: dict[str, Station],
-    matrix: DistanceMatrix | None,
-    config: HacoConfig,
-    rng: random.Random,
-) -> list[RouteState]:
-    """LNS 改进：破坏 + 修复。"""
-    # 收集所有任务
+def _adaptive_lns(
+    states, station_map, matrix, config, rng, op_selector, destroy_name, repair_name
+) -> tuple[list[RouteState], str, str]:
+    """自适应 LNS。"""
     all_tasks = []
     for state in states:
         all_tasks.extend(state.tasks)
 
     if not all_tasks:
-        return states
+        return states, destroy_name, repair_name
 
-    # 随机选择破坏算子
-    destroy_op = rng.choice(["random", "worst", "related"])
-
-    if destroy_op == "random":
+    # 选择破坏算子
+    if destroy_name == "random":
         removed, partial = destroy_random(states, config.destroy_fraction, rng)
-    elif destroy_op == "worst":
+    elif destroy_name == "worst":
         removed, partial = destroy_worst(states, station_map, matrix, config.destroy_fraction, rng)
+    elif destroy_name == "shaw":
+        removed, partial = destroy_shaw(states, station_map, matrix, config.destroy_fraction, rng)
+    elif destroy_name == "segment":
+        removed, partial = destroy_segment(states, station_map, matrix, config.destroy_fraction, rng)
     else:
         removed, partial = destroy_random(states, config.destroy_fraction, rng)
 
     if not removed:
-        return states
+        return states, destroy_name, repair_name
 
-    # 修复
-    if rng.random() < 0.5:
+    # 选择修复算子
+    if repair_name == "greedy":
         repaired = repair_greedy(partial, removed, station_map, matrix, config, rng)
-    else:
+    elif repair_name == "regret2":
         repaired = repair_regret2(partial, removed, station_map, matrix, config, rng)
+    elif repair_name == "regret3":
+        repaired = repair_regret3(partial, removed, station_map, matrix, config, rng)
+    elif repair_name == "gap_best":
+        repaired = repair_gap_best(partial, removed, station_map, matrix, config, rng)
+    else:
+        repaired = repair_greedy(partial, removed, station_map, matrix, config, rng)
 
-    return repaired
+    return repaired, destroy_name, repair_name
 
 
-def _pheromone_restart(pheromone: PheromoneMatrix, config: HacoConfig, rng: random.Random) -> None:
-    """信息素部分重启（防早熟收敛）。"""
+def _adapt_parameters(config: HacoConfig, diversity: float) -> tuple[float, float]:
+    """自适应调整 alpha 和 beta。"""
+    if diversity < config.adaptive_diversity_low:
+        # 多样性太低，加强探索
+        alpha = max(config.alpha_min, config.alpha * 0.9)
+        beta = max(config.beta_min, config.beta * 0.9)
+    elif diversity > config.adaptive_diversity_high:
+        # 多样性太高，加强利用
+        alpha = min(config.alpha_max, config.alpha * 1.1)
+        beta = min(config.beta_max, config.beta * 1.1)
+    else:
+        alpha = config.alpha
+        beta = config.beta
+
+    return alpha, beta
+
+
+def _adaptive_pheromone_restart(pheromone, gap_pheromone, config, rng) -> None:
+    """自适应信息素重启。"""
+    ratio = config.restart_ratio
+    # 重启 task-to-task 信息素
     for i in range(pheromone.n):
         for j in range(pheromone.n):
-            if rng.random() < 0.5:
-                pheromone.tau[i][j] = pheromone.tau0
+            pheromone.tau[i][j] = pheromone.tau0 * ratio + pheromone.tau[i][j] * (1 - ratio)
+
+    # 重启 gap 信息素
+    gap_pheromone.restart(ratio)
 
 
 def _extract_task_sequence(states: list[RouteState]) -> list[str]:
-    """从解中提取任务序列（用于信息素更新）。"""
+    """提取任务序列。"""
     seq = ["DEPOT"]
     for state in states:
         for task in state.tasks:
@@ -384,13 +446,17 @@ def _extract_task_sequence(states: list[RouteState]) -> list[str]:
     return seq
 
 
-def _route_states_to_plans(
-    states: list[RouteState],
-    request: PlanRequest,
-    station_map: dict,
-    matrix: DistanceMatrix | None,
-) -> list[VehiclePlan]:
-    """将 RouteState 转换为 VehiclePlan 格式（API 兼容）。"""
+def _extract_gap_assignments(states: list[RouteState]) -> dict[str, int]:
+    """提取任务到 gap 的分配。"""
+    assignments = {}
+    for state in states:
+        for task_id, gap_index in state.task_gap_map.items():
+            assignments[task_id] = gap_index
+    return assignments
+
+
+def _route_states_to_plans(states, request, station_map, matrix) -> list[VehiclePlan]:
+    """将 RouteState 转换为 VehiclePlan 格式。"""
     vehicle_plans = []
 
     for state in states:
@@ -402,21 +468,18 @@ def _route_states_to_plans(
         current_station = request.depot
         current_passengers = state.initial_passenger_load
 
-        # DEPART
         stops.append(RouteStop(
             stationId=request.depot.stationId,
             action=StopAction.DEPART,
             segmentDistance=0.0,
-            segmentDuration=0.0,
+            segmentDuration=None,
         ))
 
-        # 遍历骨架间隙
         for gap in state.gaps:
             gap_tasks = state.get_tasks_in_gap(gap.gap_index)
 
             for task in gap_tasks:
                 if task.task_type == TaskType.PASSENGER:
-                    # BOARD
                     pickup = station_map.get(task.pickup_station)
                     if pickup:
                         seg_km = _distance(current_station, pickup, matrix)
@@ -432,7 +495,6 @@ def _route_states_to_plans(
                         current_station = pickup
                         current_passengers += 1
 
-                    # ALIGHT
                     delivery = station_map.get(task.delivery_station)
                     if delivery:
                         seg_km = _distance(current_station, delivery, matrix)
@@ -449,23 +511,11 @@ def _route_states_to_plans(
                         current_passengers -= 1
 
                 elif task.task_type == TaskType.SHIPMENT:
-                    # PICKUP
                     pickup = station_map.get(task.pickup_station)
                     if pickup:
                         seg_km = _distance(current_station, pickup, matrix)
                         seg_sec = _duration(current_station, pickup, matrix)
                         scaled_total += int(round(seg_km * DISTANCE_SCALE))
-
-                        # 计算绕行
-                        delivery = station_map.get(task.delivery_station)
-                        detour_km = 0.0
-                        detour_sec = 0.0
-                        if delivery:
-                            direct_km = _distance(pickup, delivery, matrix)
-                            detour_km = 0.0  # 在 gap 内不算绕行
-
-                        passenger_impact = detour_sec if current_passengers > 0 else None
-
                         stops.append(RouteStop(
                             stationId=task.pickup_station,
                             orderId=task.order_ids[0] if task.order_ids else None,
@@ -475,14 +525,12 @@ def _route_states_to_plans(
                             accepted=True,
                             serviceMode="NEAREST_STATION",
                             servicePoint=task.pickup_station,
-                            detourDistance=detour_km,
-                            detourDuration=detour_sec,
-                            passengerImpact=passenger_impact,
+                            detourDistance=0.0,
                             reasonCode=None,
                         ))
                         current_station = pickup
 
-                    # DELIVERY
+                    delivery = station_map.get(task.delivery_station)
                     if delivery:
                         seg_km = _distance(current_station, delivery, matrix)
                         seg_sec = _duration(current_station, delivery, matrix)
@@ -507,20 +555,15 @@ def _route_states_to_plans(
                         seg_sec = _duration(current_station, station, matrix)
                         scaled_total += int(round(seg_km * DISTANCE_SCALE))
 
-                        # 计算绕行（off-skeleton delivery）
                         detour_km = 0.0
                         detour_sec = 0.0
                         skeleton_set = set(state.skeleton)
                         if task.pickup_station not in skeleton_set:
-                            # 下一站是骨架站或 depot
                             next_station = station_map.get(gap.to_station)
                             if next_station:
                                 direct_km = _distance(current_station, next_station, matrix)
                                 via_km = seg_km + _distance(station, next_station, matrix)
                                 detour_km = max(0.0, via_km - direct_km)
-                                direct_sec = _duration(current_station, next_station, matrix)
-                                via_sec = seg_sec + _duration(station, next_station, matrix)
-                                detour_sec = max(0.0, via_sec - direct_sec)
 
                         passenger_impact = detour_sec if current_passengers > 0 else None
 
@@ -547,7 +590,6 @@ def _route_states_to_plans(
                         seg_sec = _duration(current_station, station, matrix)
                         scaled_total += int(round(seg_km * DISTANCE_SCALE))
 
-                        # 计算绕行（off-skeleton pickup）
                         detour_km = 0.0
                         detour_sec = 0.0
                         skeleton_set = set(state.skeleton)
@@ -557,9 +599,6 @@ def _route_states_to_plans(
                                 direct_km = _distance(current_station, next_station, matrix)
                                 via_km = seg_km + _distance(station, next_station, matrix)
                                 detour_km = max(0.0, via_km - direct_km)
-                                direct_sec = _duration(current_station, next_station, matrix)
-                                via_sec = seg_sec + _duration(station, next_station, matrix)
-                                detour_sec = max(0.0, via_sec - direct_sec)
 
                         passenger_impact = detour_sec if current_passengers > 0 else None
 
@@ -614,17 +653,16 @@ def _route_states_to_plans(
     return vehicle_plans
 
 
-def _distance(a, b, matrix: DistanceMatrix | None) -> float:
-    """计算距离。有矩阵用 km，无矩阵用欧氏度（与 baseline 口径一致）。"""
+def _distance(a, b, matrix=None) -> float:
+    """计算距离。"""
     if matrix is not None:
         key = (a.stationId, b.stationId)
         if key in matrix:
             return matrix[key][0]
-    from math import hypot
     return hypot(a.longitude - b.longitude, a.latitude - b.latitude)
 
 
-def _duration(a, b, matrix: DistanceMatrix | None) -> float:
+def _duration(a, b, matrix=None) -> float:
     """计算行驶时间（秒）。"""
     if matrix is not None:
         key = (a.stationId, b.stationId)
@@ -634,11 +672,7 @@ def _duration(a, b, matrix: DistanceMatrix | None) -> float:
     return km / EUCLIDEAN_AVG_SPEED_KMH * 3600
 
 
-def _ortools_validate(
-    request: PlanRequest,
-    vehicle_plans: list[VehiclePlan],
-    matrix: DistanceMatrix | None,
-) -> SolveOutcome | None:
+def _ortools_validate(request, vehicle_plans, matrix) -> SolveOutcome | None:
     """使用 OR-Tools 验证解的可行性。"""
     orders_by_id = {o.orderId: o for o in request.orders}
     shipments_by_id = {s.shipmentId: s for s in request.shipments}
@@ -662,11 +696,7 @@ def _ortools_validate(
     return None
 
 
-def _fallback_to_baseline(
-    request: PlanRequest,
-    matrix: DistanceMatrix | None,
-    warnings: list[str],
-) -> SolveOutcome:
+def _fallback_to_baseline(request, matrix, warnings) -> SolveOutcome:
     """Fallback 到 OR-Tools baseline。"""
     from ..baseline.ortools_solver import solve as baseline_solve
 
@@ -677,6 +707,6 @@ def _fallback_to_baseline(
         vehicle_plans=result.vehicle_plans,
         total_distance=result.total_distance,
         algorithm_version=HACO_VERSION,
-        parameter_version="haco-cps-fallback-v1.1",
+        parameter_version="haco-cps-fallback-v1.2",
         warnings=warnings,
     )

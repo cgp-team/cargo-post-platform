@@ -42,6 +42,8 @@ def construct_ant_solution(
     matrix: DistanceMatrix | None,
     config: HacoConfig,
     rng: random.Random,
+    gap_pheromone=None,
+    alpha_gap: float = 0.5,
 ) -> list[RouteState]:
     """一只蚂蚁构建一个完整解。
 
@@ -65,12 +67,11 @@ def construct_ant_solution(
         )
 
         if not candidates:
-            # 无法插入，跳过
             unassigned.remove(task)
             continue
 
         # 基于信息素和启发式选择最佳插入
-        selected = _select_insertion(candidates, pheromone, config, rng)
+        selected = _select_insertion(candidates, pheromone, config, rng, gap_pheromone, alpha_gap)
 
         # 执行插入
         target_state = working_states[selected.vehicle_index]
@@ -211,6 +212,8 @@ def _select_insertion(
     pheromone: PheromoneMatrix,
     config: HacoConfig,
     rng: random.Random,
+    gap_pheromone=None,
+    alpha_gap: float = 0.5,
 ) -> CandidateInsertion:
     """基于信息素和启发式选择最佳插入（轮盘赌）。"""
     if len(candidates) == 1:
@@ -219,9 +222,14 @@ def _select_insertion(
     # 计算每个候选的转移概率
     probs = []
     for cand in candidates:
-        tau = pheromone.get("DEPOT", cand.task_id)
+        tau_task = pheromone.get("DEPOT", cand.task_id)
         eta = cand.heuristic_score
-        prob = (tau ** config.alpha) * ((1.0 / (eta + EPSILON)) ** config.beta)
+        # 双信息素：task-to-task + task-to-gap
+        if gap_pheromone is not None:
+            tau_gap = gap_pheromone.get(cand.task_id, cand.gap_index)
+            prob = (tau_task ** config.alpha) * (tau_gap ** alpha_gap) * ((1.0 / (eta + EPSILON)) ** config.beta)
+        else:
+            prob = (tau_task ** config.alpha) * ((1.0 / (eta + EPSILON)) ** config.beta)
         probs.append(prob)
 
     # 归一化
