@@ -316,7 +316,7 @@ jobs:
           fi
           echo "Historical URL validation PASS: no legacy/test URLs found."
 
-      # 自研算法服务（algorithm/，OR-Tools）：代码更新时重建镜像并重启容器。
+      # 自研算法服务（algorithm/，HACO-CPS）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
       # 的 yudao.transport.algorithm.base-url=http://127.0.0.1:18081（外部化 yaml 优先级高于 app.env 的
       # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）；mock-algorithm(18080) 仅保留做混沌测试。
@@ -326,29 +326,36 @@ jobs:
         run: |
           set -Eeuo pipefail
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
-          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
+          COMPOSE=(docker compose --progress=plain --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          COMPOSE_NO_PROGRESS=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
 
-          trap 'echo; echo "===== [失败诊断] Build & deploy algorithm 出错，打印诊断信息 =====";
+          trap 'echo; echo "===== [失败诊断] Build & deploy algorithm 出错 =====";
+            echo "--- exit code ---"; echo "退出码: $?";
             echo "--- uname ---"; uname -a 2>&1 || true;
             echo "--- 磁盘 df -h ---"; df -h 2>&1 | head -15 || true;
             echo "--- 内存 free -h ---"; free -h 2>&1 || true;
             echo "--- docker version ---"; docker version 2>&1 | head -25 || true;
             echo "--- docker compose version ---"; docker compose version 2>&1 || true;
-            echo "--- docker info ---"; docker info 2>&1 | head -40 || true;
+            echo "--- docker buildx version ---"; docker buildx version 2>&1 || true;
+            echo "--- docker info (builder) ---"; docker info 2>&1 | grep -A5 -i builder || true;
             echo "--- 端口 18081 监听(ss) ---"; ss -lntp 2>/dev/null | grep ":18081" || echo "(ss 未发现 18081 监听)";
             echo "--- 端口 18081 容器(docker ps) ---"; docker ps --format "{{.ID}} {{.Names}} {{.Ports}}" 2>/dev/null | grep "18081" || echo "(无容器占用 18081)";
             echo "--- algorithm 目录/Dockerfile ---"; ls -la algorithm/ 2>&1 | head -20 || true; test -f algorithm/Dockerfile && echo "Dockerfile 存在" || echo "Dockerfile 缺失";
-            echo "--- compose config ---"; "${COMPOSE[@]}" config 2>&1 | head -60 || true;
+            echo "--- compose config ---"; "${COMPOSE_NO_PROGRESS[@]}" config 2>&1 | head -60 || true;
             echo "--- 现有 cargo-post/algorithm 镜像 ---"; docker images cargo-post/algorithm 2>&1 || true;
-            echo "--- 现有 algorithm 容器 ---"; "${COMPOSE[@]}" ps algorithm 2>&1 || true;
+            echo "--- 现有 algorithm 容器 ---"; "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true;
+            echo "--- docker ps -a (最近) ---"; docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" 2>&1 | head -10 || true;
+            echo "--- algorithm 容器日志 ---"; "${COMPOSE_NO_PROGRESS[@]}" logs --tail=50 algorithm 2>&1 || true;
             echo "===== 诊断结束 =====";' ERR
 
           echo "===== [前置诊断] 环境 ====="
           uname -a || true
           df -h | head -10 || true
           free -h || true
-          docker version || true
+          docker version 2>&1 | head -20 || true
           docker compose version || true
+          docker buildx version 2>&1 || true
 
           echo "===== [前置诊断] 目录与文件 ====="
           test -f algorithm/Dockerfile && echo "algorithm/Dockerfile 存在" || { echo "ERROR: algorithm/Dockerfile 缺失"; exit 1; }
@@ -360,31 +367,62 @@ jobs:
           docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' 2>/dev/null | grep '18081' || echo "无容器占用 18081"
 
           echo "===== [前置诊断] compose config 校验 ====="
-          "${COMPOSE[@]}" config >/dev/null && echo "compose config 校验通过"
+          "${COMPOSE_NO_PROGRESS[@]}" config >/dev/null && echo "compose config 校验通过"
 
           echo "===== [前置诊断] 现有镜像/容器 ====="
-          docker images cargo-post/algorithm || true
-          "${COMPOSE[@]}" ps algorithm || true
+          docker images cargo-post/algorithm 2>&1 || true
+          "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true
 
-          echo "===== 构建 algorithm 镜像（--progress=plain，最多 3 次重试） ====="
+          echo "===== 构建 algorithm 镜像（最多 3 次重试） ====="
+          BUILD_RC=0
           for attempt in 1 2 3; do
-            if "${COMPOSE[@]}" build --progress=plain algorithm; then
+            echo "--- 构建尝试 ${attempt}/3 ---"
+            "${COMPOSE[@]}" build algorithm && BUILD_RC=$? || BUILD_RC=$?
+            if [ "$BUILD_RC" -eq 0 ]; then
               echo "构建成功（第 ${attempt} 次尝试）"
               break
             fi
+            echo "构建失败（第 ${attempt} 次，退出码 ${BUILD_RC}）"
             if [ "$attempt" -eq 3 ]; then
-              echo "ERROR: algorithm 镜像 3 次构建尝试均失败"
+              echo "ERROR: algorithm 镜像 3 次构建尝试均失败（退出码 ${BUILD_RC}）"
+              echo "--- 最后一次构建日志 ---"
+              "${COMPOSE_NO_PROGRESS[@]}" logs --tail=100 algorithm 2>&1 || true
               exit 1
             fi
-            echo "构建失败（第 ${attempt} 次），15 秒后重试..."
+            echo "15 秒后重试..."
             sleep 15
           done
 
           echo "===== 启动 algorithm 容器 ====="
-          "${COMPOSE[@]}" up -d algorithm
+          "${COMPOSE_NO_PROGRESS[@]}" up -d algorithm
+
+          echo "===== 等待 algorithm 就绪（最多 60 秒） ====="
+          READY=0
+          for i in $(seq 1 20); do
+            sleep 3
+            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
+              echo "algorithm 就绪（第 ${i} 次探测）"
+              READY=1
+              break
+            fi
+            echo "等待 algorithm 就绪... (${i}/20)"
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "ERROR: algorithm 服务 60 秒内未就绪"
+            echo "--- docker ps ---"
+            docker ps -a --format "{{.ID}} {{.Names}} {{.Status}} {{.Ports}}" 2>&1 | head -10 || true
+            echo "--- algorithm 容器状态 ---"
+            "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true
+            echo "--- algorithm 容器日志 ---"
+            "${COMPOSE_NO_PROGRESS[@]}" logs --tail=200 algorithm 2>&1 || true
+            exit 1
+          fi
 
           echo "===== 验证部署结果 ====="
-          "${COMPOSE[@]}" ps algorithm
+          "${COMPOSE_NO_PROGRESS[@]}" ps algorithm
+          HEALTH=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>/dev/null || echo "unreachable")
+          echo "algorithm health: ${HEALTH}"
           echo "algorithm 部署完成"
 
       - name: Deploy backend and restart
