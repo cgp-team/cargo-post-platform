@@ -559,18 +559,17 @@ class GenomeEvaluation:
     direction_reversals: int = 0
     normalized_cost: float = float("inf")
 
+    def key(self):
+        return (
+            not self.feasible,  # False < True, so feasible < infeasible
+            self.vehicle_count,
+            round(self.passenger_total_impact, 3),
+            round(self.backtracking_ratio, 4),
+            round(self.cargo_detour, 3),
+            round(self.total_distance, 3),
+            round(self.total_duration, 1),
+        )
+
     def __lt__(self, other: GenomeEvaluation) -> bool:
         """分层比较。"""
-        if self.feasible != other.feasible:
-            return self.feasible
-        if self.vehicle_count != other.vehicle_count:
-            return self.vehicle_count < other.vehicle_count
-        if abs(self.passenger_total_impact - other.passenger_total_impact) > 0.1:
-            return self.passenger_total_impact < other.passenger_total_impact
-        if abs(self.backtracking_ratio - other.backtracking_ratio) > 0.01:
-            return self.backtracking_ratio < other.backtracking_ratio
-        if abs(self.cargo_detour - other.cargo_detour) > 0.001:
-            return self.cargo_detour < other.cargo_detour
-        if abs(self.total_distance - other.total_distance) > 0.001:
-            return self.total_distance < other.total_distance
-        return self.total_duration < other.total_duration
+        return self.key() < other.key()
