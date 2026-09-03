@@ -14,7 +14,7 @@ from math import hypot
 from typing import TYPE_CHECKING
 
 from .encoding import TaskBlock, TaskType
-from .route_genome import GlobalGlobalRouteGenome
+from .route_genome import GlobalRouteGenome
 
 if TYPE_CHECKING:
     from .config import HacoConfig
@@ -33,11 +33,17 @@ def construct_global_solution(
     matrix: DistanceMatrix | None,
     config: HacoConfig,
     rng: random.Random,
+    alpha: float | None = None,
+    beta: float | None = None,
 ) -> GlobalRouteGenome:
     """构造一个完整的全局解。
 
     策略：Passenger-first + Cargo insertion。
+    alpha/beta 可由调用方传入（自适应），否则使用 config 默认值。
     """
+    _alpha = alpha if alpha is not None else config.alpha
+    _beta = beta if beta is not None else config.beta
+
     genome = genome_template.copy()
 
     # 分离乘客和货运任务
@@ -45,10 +51,10 @@ def construct_global_solution(
     cargo_tasks = [t for t in tasks if t.task_type != TaskType.PASSENGER]
 
     # Phase 1: 构造乘客骨架
-    _construct_passenger_backbone(passenger_tasks, genome, pheromone, station_map, matrix, config, rng)
+    _construct_passenger_backbone(passenger_tasks, genome, pheromone, station_map, matrix, config, rng, _alpha, _beta)
 
     # Phase 2: 插入货运任务
-    _insert_cargo_tasks(cargo_tasks, genome, pheromone, station_map, matrix, config, rng)
+    _insert_cargo_tasks(cargo_tasks, genome, pheromone, station_map, matrix, config, rng, _alpha, _beta)
 
     return genome
 
@@ -152,6 +158,8 @@ def _construct_passenger_backbone(
     matrix: DistanceMatrix | None,
     config: HacoConfig,
     rng: random.Random,
+    alpha: float = 1.0,
+    beta: float = 3.0,
 ) -> None:
     """构造乘客骨架。"""
     if not passenger_tasks:
@@ -162,7 +170,7 @@ def _construct_passenger_backbone(
 
     while unassigned:
         # 选择下一个乘客任务
-        task = _select_next_passenger(unassigned, genome, vi, pheromone, station_map, matrix, config, rng)
+        task = _select_next_passenger(unassigned, genome, vi, pheromone, station_map, matrix, config, rng, alpha, beta)
         if task is None:
             break
 
@@ -180,6 +188,8 @@ def _insert_cargo_tasks(
     matrix: DistanceMatrix | None,
     config: HacoConfig,
     rng: random.Random,
+    alpha: float = 1.0,
+    beta: float = 3.0,
 ) -> None:
     """将货运任务插入到已有路线的最佳位置。"""
     if not cargo_tasks:
@@ -197,7 +207,7 @@ def _insert_cargo_tasks(
             for vi in genome.vehicle_routes.keys():
                 route = genome.get_route(vi)
                 for pos in range(len(route) + 1):
-                    score = _cargo_insertion_score(task, vi, pos, genome, station_map, matrix, config)
+                    score = _cargo_insertion_score(task, vi, pos, genome, station_map, matrix, config, alpha, beta)
                     if score < best_score:
                         best_score = score
                         best_task = task
@@ -220,6 +230,8 @@ def _select_next_passenger(
     matrix: DistanceMatrix | None,
     config: HacoConfig,
     rng: random.Random,
+    alpha: float = 1.0,
+    beta: float = 3.0,
 ) -> TaskBlock | None:
     """选择下一个乘客任务。"""
     if not unassigned:
@@ -253,7 +265,7 @@ def _select_next_passenger(
             dist = _distance(depot, pickup, matrix) if depot else 10.0
 
         eta = 1.0 / (dist + EPSILON)
-        score = (tau ** config.alpha) * (eta ** config.beta)
+        score = (tau ** alpha) * (eta ** beta)
         task_scores.append((task, score))
 
     if not task_scores:
@@ -345,6 +357,8 @@ def _cargo_insertion_score(
     station_map: dict,
     matrix: DistanceMatrix | None,
     config: HacoConfig,
+    alpha: float = 1.0,
+    beta: float = 3.0,
 ) -> float:
     """计算货运任务插入得分。"""
     delta_dist = _position_score(task, vi, pos, genome, station_map, matrix)
