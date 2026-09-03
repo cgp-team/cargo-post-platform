@@ -40,6 +40,9 @@ public class AlgorithmPlanReqDTO {
     /** 乘客+包裹订单合计不超过 25 */
     private List<AlgorithmOrderDTO> orders;
 
+    /** 配对货运订单（揽收→派送），每个 shipment 展开为 PICKUP + DELIVERY 两个节点；合计不超过 25 */
+    private List<AlgorithmShipmentDTO> shipments;
+
     /** ACO 超参数，全部可选，不传用算法默认值 */
     private Map<String, Object> algorithmConfig;
 

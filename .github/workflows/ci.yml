@@ -18,6 +18,7 @@ jobs:
       backend: ${{ steps.detect.outputs.backend }}
       frontend: ${{ steps.detect.outputs.frontend }}
       mock: ${{ steps.detect.outputs.mock }}
+      algorithm: ${{ steps.detect.outputs.algorithm }}
       container: ${{ steps.detect.outputs.container }}
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +45,8 @@ jobs:
           echo "backend=$(has '^(yudao-[^/]+/|pom\.xml|sql/)')" >> "${GITHUB_OUTPUT}"
           echo "frontend=$(has '^yudao-ui/')" >> "${GITHUB_OUTPUT}"
           echo "mock=$(has '^mock-algorithm/')" >> "${GITHUB_OUTPUT}"
+          # 自研算法：algorithm/ 目录下任意文件变更
+          echo "algorithm=$(has '^algorithm/')" >> "${GITHUB_OUTPUT}"
           # 容器校验：compose/部署配置/算法与 mock 镜像
           echo "container=$(has '^(deploy/|algorithm/|mock-algorithm/|\.env\.example)')" >> "${GITHUB_OUTPUT}"
 
@@ -121,6 +124,36 @@ jobs:
         run: pip install --requirement requirements.txt
       - name: Test
         run: python -m pytest -q
+      - name: Import application
+        run: python -c "from app.main import app; assert app.title"
+
+  # 自研算法（HACO-CPS）：pytest 单元测试 + 契约测试 + benchmark + 消融 + 可复现性
+  algorithm:
+    needs: changes
+    if: needs.changes.outputs.algorithm == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: algorithm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: algorithm/requirements.txt
+      - name: Install dependencies
+        run: pip install --requirement requirements.txt
+      - name: Unit tests
+        run: python -m pytest tests/ -q --ignore=tests/benchmarks --tb=short
+      - name: Contract tests (TestClient)
+        run: python -m pytest tests/contract -q --tb=short
+      - name: HACO reproducibility tests
+        run: python -m pytest tests/test_haco_reproducibility.py -q --tb=short
+      - name: Ablation tests
+        run: python -m pytest tests/test_ablation.py -q --tb=short
+      - name: Benchmark tests
+        run: python -m pytest tests/benchmarks -q --tb=short -x
       - name: Import application
         run: python -c "from app.main import app; assert app.title"
 
