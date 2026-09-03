@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 模拟运营引擎（SimulationEngine）。
@@ -50,6 +51,14 @@ public class SimulationEngine {
     /** 每车一条模拟运行（key=vehicleId） */
     private final Map<Long, SimRun> runs = new ConcurrentHashMap<>();
 
+    /** 每车一把锁，保证同一车辆的所有操作串行执行 */
+    private final ConcurrentHashMap<Long, ReentrantLock> vehicleLocks = new ConcurrentHashMap<>();
+
+    /** 获取或创建车辆锁 */
+    private ReentrantLock getVehicleLock(Long vehicleId) {
+        return vehicleLocks.computeIfAbsent(vehicleId, k -> new ReentrantLock());
+    }
+
     /** 任务段内一段（到达某经停前经过的 polyline 段 + 到站用时） */
     @Getter
     public static class SimSegment {
@@ -84,6 +93,33 @@ public class SimulationEngine {
         }
     }
 
+    /** 运行时状态：场景/异常注入影响引擎行为的参数。
+     *
+     * 数学语义：
+     * - trafficFactor: 影响旅行时间。travelDuration = baseTravelDuration * trafficFactor
+     * - speedFactor: 影响模拟速度。effectiveMultiplier = multiplier * speedFactor
+     * - delaySeconds: 在当前段到达前增加额外等待时间（不跳变，实际暂停推进 delaySeconds 模拟秒）
+     * - gpsAvailable: 只影响 VehicleLocationProvider 输出，不影响 Engine 推进
+     * - vehicleFault: 停止 Engine 推进
+     * - driverOnline: 标记状态，不影响 Engine（业务语义：司机离线不自动停车）
+     */
+    @Getter
+    @Setter
+    public static class SimRuntimeState {
+        /** 交通因子：>1 表示拥堵，旅行时间延长。travelDuration = baseTravelDuration * trafficFactor */
+        private volatile double trafficFactor = 1.0;
+        /** 速度因子：>1 加速，<1 减速。effectiveMultiplier = multiplier * speedFactor */
+        private volatile double speedFactor = 1.0;
+        /** 延迟剩余秒数：每 tick 消耗，消耗完前不推进模拟时间 */
+        private volatile long delayRemainingSeconds = 0;
+        /** GPS 是否可用（只影响 VehicleLocationProvider，不影响 Engine 推进） */
+        private volatile boolean gpsAvailable = true;
+        /** 车辆是否故障（true=停止 Engine 推进） */
+        private volatile boolean vehicleFault = false;
+        /** 司机是否在线（标记状态，不影响 Engine 推进） */
+        private volatile boolean driverOnline = true;
+    }
+
     /** 一辆车的模拟运行 */
     @Getter
     public static class SimRun {
@@ -95,8 +131,19 @@ public class SimulationEngine {
         private volatile int status = STATUS_STOPPED;
         private volatile double multiplier = DEFAULT_MULTIPLIER;
         private volatile LocalDateTime wallStart;      // RUNNING 时的墙钟起点
-        private volatile LocalDateTime pausedSimAt;    // PAUSED 时的模拟时刻（相对任务窗口）
+        private volatile LocalDateTime pausedSimAt;    // PAUSED/FAULT 时的模拟时刻（相对任务窗口）
         private volatile LocalDateTime lastTickAt;
+
+        // 事件去重状态：跟踪已发射的事件避免重复
+        private volatile int lastEmittedSegmentIndex = -1;
+        private volatile boolean lastEmittedArrived = false;
+        private volatile boolean emittedStart = false;
+        private volatile boolean emittedCompleted = false;
+        private volatile boolean lastFaultState = false;
+        private volatile boolean lastGpsState = true;
+
+        // 运行时状态（场景/异常注入）
+        private final SimRuntimeState runtimeState = new SimRuntimeState();
 
         SimRun(Long planId, Long vehicleId, LocalDateTime taskWindowStart,
                List<SimSegment> segments) {
@@ -107,12 +154,28 @@ public class SimulationEngine {
             this.totalSimSeconds = segments.isEmpty() ? 0 : segments.get(segments.size() - 1).arrivalSimSeconds;
         }
 
-        /** 当前模拟时刻（相对任务窗口的模拟秒数） */
+        /**
+         * 当前模拟时刻（相对任务窗口的模拟秒数）。
+         *
+         * 数学公式：
+         * effectiveMultiplier = multiplier * speedFactor / trafficFactor
+         * simSeconds = wallElapsed * effectiveMultiplier
+         *
+         * 其中 trafficFactor 影响的是"模拟时间相对于墙钟的流逝速度"：
+         * trafficFactor=1.5 → 模拟时间流逝变慢（需要更多墙钟时间才能推进相同的模拟时间）
+         * 这等价于"旅行时间延长 50%"。
+         *
+         * delayRemainingSeconds：每 tick 消耗，消耗完前模拟时间不推进。
+         */
         public long currentSimSeconds() {
             if (status == STATUS_STOPPED) {
                 return 0;
             }
             if (status == STATUS_PAUSED) {
+                return pausedSimAt != null ? Duration.between(taskWindowStart, pausedSimAt).getSeconds() : 0;
+            }
+            // 故障时暂停在故障时刻
+            if (runtimeState.isVehicleFault()) {
                 return pausedSimAt != null ? Duration.between(taskWindowStart, pausedSimAt).getSeconds() : 0;
             }
             if (status == STATUS_COMPLETED) {
@@ -122,81 +185,396 @@ public class SimulationEngine {
                 return 0;
             }
             long wallElapsed = Duration.between(wallStart, LocalDateTime.now()).getSeconds();
-            return Math.min(totalSimSeconds, (long) Math.floor(wallElapsed * multiplier));
+
+            // 延迟消耗：每秒墙钟消耗 1 秒延迟
+            if (runtimeState.getDelayRemainingSeconds() > 0) {
+                long delayConsumed = Math.min(wallElapsed, runtimeState.getDelayRemainingSeconds());
+                runtimeState.setDelayRemainingSeconds(runtimeState.getDelayRemainingSeconds() - delayConsumed);
+                wallElapsed -= delayConsumed;
+            }
+
+            // 速度因子和交通因子共同影响模拟时间推进
+            // effectiveMultiplier = multiplier * speedFactor / trafficFactor
+            double effectiveMultiplier = multiplier * runtimeState.getSpeedFactor() / runtimeState.getTrafficFactor();
+            long simSeconds = (long) Math.floor(wallElapsed * effectiveMultiplier);
+            return Math.min(totalSimSeconds, simSeconds);
         }
+    }
+
+    /**
+     * 模拟事件类型常量
+     */
+    public static final String EVENT_START = "START";
+    public static final String EVENT_ROUTE_START = "ROUTE_START";
+    public static final String EVENT_STATION_ARRIVE = "STATION_ARRIVE";
+    public static final String EVENT_STATION_DEPART = "STATION_DEPART";
+    public static final String EVENT_COMPLETED = "COMPLETED";
+    public static final String EVENT_PAUSED = "PAUSED";
+    public static final String EVENT_RESUMED = "RESUMED";
+    public static final String EVENT_RESET = "RESET";
+
+    /**
+     * tick 产生的状态变化事件
+     */
+    @Getter
+    public static class SimEvent {
+        private final String eventType;
+        private final int severity;  // 0=info, 1=warning, 2=critical
+        private final String title;
+        private final String content;
+        private final Long stationId;
+        private final String stationName;
+        private final long simSeconds;
+
+        public SimEvent(String eventType, int severity, String title, String content,
+                        Long stationId, String stationName, long simSeconds) {
+            this.eventType = eventType;
+            this.severity = severity;
+            this.title = title;
+            this.content = content;
+            this.stationId = stationId;
+            this.stationName = stationName;
+            this.simSeconds = simSeconds;
+        }
+    }
+
+    /**
+     * tick 并检测状态变化，返回需要发射的事件列表（幂等）。
+     * 调用方负责持久化事件。
+     *
+     * 状态转换检测：
+     * - START / ROUTE_START: 首次 tick
+     * - STATION_ARRIVE: 进入到站阈值
+     * - STATION_DEPART: 段索引增加
+     * - COMPLETED: 最后一段完成
+     * - VEHICLE_FAULT: 故障状态变化
+     * - GPS_LOST / GPS_RECOVER: GPS 状态变化
+     */
+    public List<SimEvent> tickWithEvents(Long vehicleId) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null || !simulationEnabled || run.segments.isEmpty()) {
+                return List.of();
+            }
+
+            SimRuntimeState rt = run.getRuntimeState();
+            List<SimEvent> events = new ArrayList<>();
+            long simSeconds = run.currentSimSeconds();
+
+            // 检测故障状态变化（幂等）
+            if (rt.isVehicleFault() && !run.lastFaultState) {
+                run.lastFaultState = true;
+                SimSegment currentSeg = run.segments.get(Math.min(run.lastEmittedSegmentIndex + 1, run.segments.size() - 1));
+                events.add(new SimEvent("VEHICLE_FAULT", 2, "车辆故障",
+                        "车辆发生故障，停止推进",
+                        currentSeg.stationId, currentSeg.stationName, simSeconds));
+            } else if (!rt.isVehicleFault() && run.lastFaultState) {
+                run.lastFaultState = false;
+                SimSegment currentSeg = run.segments.get(Math.min(run.lastEmittedSegmentIndex + 1, run.segments.size() - 1));
+                events.add(new SimEvent("VEHICLE_RECOVER", 0, "故障恢复",
+                        "车辆故障已恢复，继续推进",
+                        currentSeg.stationId, currentSeg.stationName, simSeconds));
+            }
+
+            // 检测 GPS 状态变化（幂等）
+            if (!rt.isGpsAvailable() && run.lastGpsState) {
+                run.lastGpsState = false;
+                events.add(new SimEvent("GPS_LOST", 1, "GPS 信号丢失",
+                        "GPS 信号丢失，位置不可用",
+                        null, null, simSeconds));
+            } else if (rt.isGpsAvailable() && !run.lastGpsState) {
+                run.lastGpsState = true;
+                events.add(new SimEvent("GPS_RECOVER", 0, "GPS 恢复",
+                        "GPS 信号已恢复",
+                        null, null, simSeconds));
+            }
+
+            // 故障状态：不推进位置
+            if (rt.isVehicleFault()) {
+                return events;
+            }
+
+            // 首次 tick：发射 START + ROUTE_START
+            if (!run.emittedStart) {
+                run.emittedStart = true;
+                SimSegment first = run.segments.get(0);
+                events.add(new SimEvent(EVENT_START, 0, "模拟启动",
+                        "模拟运行开始，倍速 " + run.getMultiplier() + "×",
+                        first.stationId, first.stationName, 0));
+                events.add(new SimEvent(EVENT_ROUTE_START, 0, "进入路线",
+                        "开始沿路线行驶",
+                        first.stationId, first.stationName, 0));
+            }
+
+            SimTick tick = computeTick(run, simSeconds);
+            if (tick == null) {
+                return events;
+            }
+
+            // 检测段变化（到站/离站）
+            int currentIdx = tick.getSegmentIndex();
+            boolean currentArrived = tick.isArrived();
+
+            // 到站事件：段索引未变但从"未到站"变为"已到站"（幂等）
+            if (currentArrived && !run.lastEmittedArrived) {
+                SimSegment seg = run.segments.get(Math.min(currentIdx, run.segments.size() - 1));
+                events.add(new SimEvent(EVENT_STATION_ARRIVE, 0, "到达 " + seg.stationName,
+                        "车辆到达 " + seg.stationName,
+                        seg.stationId, seg.stationName, simSeconds));
+            }
+
+            // 离站事件：段索引增加（进入下一段）（幂等）
+            if (currentIdx > run.lastEmittedSegmentIndex && run.lastEmittedSegmentIndex >= 0) {
+                SimSegment prevSeg = run.segments.get(Math.min(run.lastEmittedSegmentIndex, run.segments.size() - 1));
+                events.add(new SimEvent(EVENT_STATION_DEPART, 0, "离开 " + prevSeg.stationName,
+                        "停站完成，前往下一站",
+                        prevSeg.stationId, prevSeg.stationName, simSeconds));
+            }
+
+            // 完成事件（幂等）
+            if (run.status == STATUS_COMPLETED && !run.emittedCompleted) {
+                run.emittedCompleted = true;
+                SimSegment last = run.segments.get(run.segments.size() - 1);
+                events.add(new SimEvent(EVENT_COMPLETED, 0, "模拟完成",
+                        "模拟运行完成，总耗时 " + (simSeconds / 60) + " 分钟",
+                        last.stationId, last.stationName, simSeconds));
+            }
+
+            // 更新去重状态
+            run.lastEmittedSegmentIndex = currentIdx;
+            run.lastEmittedArrived = currentArrived;
+
+            return events;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // ==================== 运行时状态修改 ====================
+
+    /** 获取运行时状态（只读，不需要锁） */
+    public SimRuntimeState getRuntimeState(Long vehicleId) {
+        SimRun run = runs.get(vehicleId);
+        return run != null ? run.getRuntimeState() : null;
+    }
+
+    /** 设置车辆故障状态。故障时暂停模拟时间推进，恢复时从暂停点继续。 */
+    public void setVehicleFault(Long vehicleId, boolean fault) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            SimRuntimeState rt = run.getRuntimeState();
+            if (fault && !rt.isVehicleFault()) {
+                // 进入故障：保存当前模拟时刻
+                run.pausedSimAt = taskWindowStart(run).plusSeconds(run.currentSimSeconds());
+            } else if (!fault && rt.isVehicleFault()) {
+                // 恢复故障：从暂停点继续，重置 wallStart
+                run.wallStart = LocalDateTime.now();
+            }
+            rt.setVehicleFault(fault);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 设置 GPS 可用状态。GPS_LOST 不影响 Engine 推进，只影响 VehicleLocationProvider 输出。 */
+    public void setGpsAvailable(Long vehicleId, boolean available) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            run.getRuntimeState().setGpsAvailable(available);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 设置司机在线状态。标记状态，不影响 Engine 推进。 */
+    public void setDriverOnline(Long vehicleId, boolean online) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            run.getRuntimeState().setDriverOnline(online);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 设置交通因子（拥堵）。trafficFactor=1.5 表示旅行时间延长 50%。 */
+    public void setTrafficFactor(Long vehicleId, double factor) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            run.getRuntimeState().setTrafficFactor(Math.max(0.1, factor));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 设置延迟秒数。延迟期间模拟时间不推进，等价于在当前状态暂停 delay 秒墙钟时间。 */
+    public void setDelaySeconds(Long vehicleId, long delay) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            run.getRuntimeState().setDelayRemainingSeconds(Math.max(0, delay));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 设置速度因子。speedFactor=2 表示模拟速度加倍。 */
+    public void setSpeedFactor(Long vehicleId, double factor) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            run.getRuntimeState().setSpeedFactor(Math.max(0.1, factor));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 重置运行时状态为默认值（清除所有场景/注入效果） */
+    public void resetRuntimeState(Long vehicleId) {
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null) return;
+            SimRuntimeState rt = run.getRuntimeState();
+            rt.setTrafficFactor(1.0);
+            rt.setSpeedFactor(1.0);
+            rt.setDelayRemainingSeconds(0);
+            rt.setGpsAvailable(true);
+            rt.setVehicleFault(false);
+            rt.setDriverOnline(true);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 检查 GPS 是否可用（供 VehicleLocationProvider 使用，只读） */
+    public boolean isGpsAvailable(Long vehicleId) {
+        SimRun run = runs.get(vehicleId);
+        if (run == null) return true; // 无运行时默认可用
+        return run.getRuntimeState().isGpsAvailable();
+    }
+
+    private static LocalDateTime taskWindowStart(SimRun run) {
+        return run.taskWindowStart;
     }
 
     // ==================== 控制 ====================
 
+    /** 启动模拟运行。同一车辆已有运行时会被替换。 */
     public void start(Long planId, Long vehicleId, LocalDateTime taskWindowStart, List<SimSegment> segments,
                       double multiplier) {
         if (!simulationEnabled || planId == null || vehicleId == null || segments == null || segments.isEmpty()) {
             return;
         }
-        SimRun run = new SimRun(planId, vehicleId, taskWindowStart, segments);
-        run.multiplier = multiplier > 0 ? multiplier : DEFAULT_MULTIPLIER;
-        run.status = STATUS_RUNNING;
-        run.wallStart = LocalDateTime.now();
-        run.lastTickAt = run.wallStart;
-        runs.put(vehicleId, run);
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = new SimRun(planId, vehicleId, taskWindowStart, segments);
+            run.multiplier = multiplier > 0 ? multiplier : DEFAULT_MULTIPLIER;
+            run.status = STATUS_RUNNING;
+            run.wallStart = LocalDateTime.now();
+            run.lastTickAt = run.wallStart;
+            runs.put(vehicleId, run);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public void pause(Long vehicleId) {
-        SimRun run = runs.get(vehicleId);
-        if (run == null || !simulationEnabled) {
-            return;
-        }
-        if (run.status == STATUS_RUNNING) {
-            run.pausedSimAt = taskWindowStart(run).plusSeconds(run.currentSimSeconds());
-            run.status = STATUS_PAUSED;
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null || !simulationEnabled) return;
+            if (run.status == STATUS_RUNNING) {
+                run.pausedSimAt = taskWindowStart(run).plusSeconds(run.currentSimSeconds());
+                run.status = STATUS_PAUSED;
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     public void resume(Long vehicleId) {
-        SimRun run = runs.get(vehicleId);
-        if (run == null || !simulationEnabled) {
-            return;
-        }
-        if (run.status == STATUS_PAUSED) {
-            run.wallStart = LocalDateTime.now();
-            run.status = STATUS_RUNNING;
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null || !simulationEnabled) return;
+            if (run.status == STATUS_PAUSED) {
+                run.wallStart = LocalDateTime.now();
+                run.status = STATUS_RUNNING;
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     public void reset(Long vehicleId) {
-        if (!simulationEnabled) {
-            return;
+        if (!simulationEnabled) return;
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            runs.remove(vehicleId);
+        } finally {
+            lock.unlock();
         }
-        runs.remove(vehicleId);
     }
 
     public void setSpeed(Long vehicleId, double multiplier) {
-        SimRun run = runs.get(vehicleId);
-        if (run == null || !simulationEnabled) {
-            return;
-        }
-        // 保留当前模拟时刻作为新起点，避免改速导致跳变
-        long simNow = run.currentSimSeconds();
-        run.multiplier = multiplier > 0 ? multiplier : DEFAULT_MULTIPLIER;
-        if (run.status == STATUS_RUNNING) {
-            run.pausedSimAt = taskWindowStart(run).plusSeconds(simNow);
-            run.wallStart = LocalDateTime.now();
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null || !simulationEnabled) return;
+            // 保留当前模拟时刻作为新起点，避免改速导致跳变
+            long simNow = run.currentSimSeconds();
+            run.multiplier = multiplier > 0 ? multiplier : DEFAULT_MULTIPLIER;
+            if (run.status == STATUS_RUNNING) {
+                run.pausedSimAt = taskWindowStart(run).plusSeconds(simNow);
+                run.wallStart = LocalDateTime.now();
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     /** 当前模拟推进结果（位置/状态/当前段）；无运行或未启用返回 null */
     public SimTick tick(Long vehicleId) {
-        SimRun run = runs.get(vehicleId);
-        if (run == null || !simulationEnabled || run.segments.isEmpty()) {
-            return null;
+        ReentrantLock lock = getVehicleLock(vehicleId);
+        lock.lock();
+        try {
+            SimRun run = runs.get(vehicleId);
+            if (run == null || !simulationEnabled || run.segments.isEmpty()) return null;
+            long simSeconds = run.currentSimSeconds();
+            if (simSeconds >= run.totalSimSeconds && run.status == STATUS_RUNNING) {
+                run.status = STATUS_COMPLETED;
+            }
+            return computeTick(run, simSeconds);
+        } finally {
+            lock.unlock();
         }
-        long simSeconds = run.currentSimSeconds();
-        if (simSeconds >= run.totalSimSeconds && run.status == STATUS_RUNNING) {
-            run.status = STATUS_COMPLETED;
-        }
-        return computeTick(run, simSeconds);
     }
 
+    /** 获取运行实例（只读，不需要锁） */
     public SimRun getRun(Long vehicleId) {
         return runs.get(vehicleId);
     }
@@ -300,10 +678,6 @@ public class SimulationEngine {
             }
         }
         return polyline.get(polyline.size() - 1);
-    }
-
-    private static LocalDateTime taskWindowStart(SimRun run) {
-        return run.taskWindowStart;
     }
 
     /** 两点 Haversine 米 */

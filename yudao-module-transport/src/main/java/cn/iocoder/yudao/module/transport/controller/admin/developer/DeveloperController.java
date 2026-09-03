@@ -2,9 +2,12 @@ package cn.iocoder.yudao.module.transport.controller.admin.developer;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
+import cn.iocoder.yudao.module.transport.controller.admin.developer.vo.DeveloperHealthRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.developer.vo.DeveloperStatisticsRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.developer.vo.DeveloperStatusRespVO;
 import cn.iocoder.yudao.module.transport.service.developer.DeveloperModeService;
 import cn.iocoder.yudao.module.transport.service.developer.DeveloperSimulationGuard;
+import cn.iocoder.yudao.module.transport.service.developer.DeveloperHealthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -32,6 +35,9 @@ public class DeveloperController {
     @Resource
     private DeveloperSimulationGuard guard;
 
+    @Resource
+    private DeveloperHealthService healthService;
+
     @GetMapping("/status")
     @Operation(summary = "获取开发者状态")
     @PreAuthorize("@ss.hasPermission('transport:developer:access')")
@@ -40,7 +46,6 @@ public class DeveloperController {
         DeveloperStatusRespVO respVO = new DeveloperStatusRespVO();
         respVO.setDeveloperMode(developerModeService.isDeveloperMode(userId));
         respVO.setEnvironmentSimulationEnabled(guard.isEnvironmentSimulationEnabled());
-        // RBAC 权限检查：通过 SecurityFrameworkUtils 获取当前用户权限
         respVO.setCanViewSimulation(hasPermission("transport:simulation:view"));
         respVO.setCanControlSimulation(hasPermission("transport:simulation:control"));
         return success(respVO);
@@ -64,6 +69,20 @@ public class DeveloperController {
         return success(true);
     }
 
+    @GetMapping("/health")
+    @Operation(summary = "系统健康检查")
+    @PreAuthorize("@ss.hasPermission('transport:developer:access')")
+    public CommonResult<DeveloperHealthRespVO> health() {
+        return success(healthService.checkHealth());
+    }
+
+    @GetMapping("/statistics")
+    @Operation(summary = "获取开发者中心统计数据")
+    @PreAuthorize("@ss.hasPermission('transport:developer:access')")
+    public CommonResult<DeveloperStatisticsRespVO> statistics() {
+        return success(healthService.getStatistics());
+    }
+
     /**
      * 检查当前用户是否拥有指定权限
      */
@@ -76,5 +95,4 @@ public class DeveloperController {
             return false;
         }
     }
-
 }
