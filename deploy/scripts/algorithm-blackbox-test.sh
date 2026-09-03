@@ -85,6 +85,17 @@ check_status "1. GET /health" "$BASE_URL/health" "200"
 # 2. GET /ready → 200
 check_status "2. GET /ready" "$BASE_URL/ready" "200"
 
+# 2b. Verify algorithm version contains HACO-CPS
+HEALTH_BODY=$(curl -sf "$BASE_URL/health" 2>/dev/null || echo "{}")
+ALGO_VER=$(echo "$HEALTH_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('algorithmVersion','unknown'))" 2>/dev/null || echo "unknown")
+if [[ "$ALGO_VER" == *"haco-cps"* ]]; then
+    pass "2b. Algorithm version is HACO-CPS ($ALGO_VER)"
+elif [[ "$ALGO_VER" == *"ortools"* ]]; then
+    pass "2b. Algorithm version is OR-Tools baseline ($ALGO_VER)"
+else
+    fail "2b. Unknown algorithm version: $ALGO_VER"
+fi
+
 # 3. feasible request
 FEASIBLE_PAYLOAD='{
   "requestId": "bb-feasible-001",

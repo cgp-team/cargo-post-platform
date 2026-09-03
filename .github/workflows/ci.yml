@@ -127,7 +127,7 @@ jobs:
       - name: Import application
         run: python -c "from app.main import app; assert app.title"
 
-  # 自研算法（OR-Tools）：pytest 单元测试 + 契约测试 + benchmark
+  # 自研算法（HACO-CPS）：pytest 单元测试 + 契约测试 + benchmark + 消融 + 可复现性
   algorithm:
     needs: changes
     if: needs.changes.outputs.algorithm == 'true'
@@ -148,6 +148,10 @@ jobs:
         run: python -m pytest tests/ -q --ignore=tests/benchmarks --tb=short
       - name: Contract tests (TestClient)
         run: python -m pytest tests/contract -q --tb=short
+      - name: HACO reproducibility tests
+        run: python -m pytest tests/test_haco_reproducibility.py -q --tb=short
+      - name: Ablation tests
+        run: python -m pytest tests/test_ablation.py -q --tb=short
       - name: Benchmark tests
         run: python -m pytest tests/benchmarks -q --tb=short -x
       - name: Import application

@@ -36,8 +36,9 @@ from .solver import solve
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION = "ortools-1.3.0"
-PARAMETER_VERSION = "params-v2"
+ALGORITHM_VERSION = "haco-cps-1.0.0"
+PARAMETER_VERSION = "haco-cps-default-v1"
+BASELINE_VERSION = "ortools-1.3.0"
 
 # 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
 MAX_STATIONS = 30
@@ -112,6 +113,8 @@ def build_result(request: PlanRequest) -> PlanResult:
             # 整单降级回欧氏直线，保证单次求解矩阵口径一致
             warnings.append("路网距离不可用，已降级直线距离")
     outcome = solve(request, matrix)
+    # 合并 solver 产生的 warnings（如 HACO_FALLBACK_TO_BASELINE）
+    warnings.extend(outcome.warnings)
     distance_unit = "km" if matrix is not None else "degree"
     if outcome.status == "infeasible":
         return PlanResult(
@@ -119,8 +122,8 @@ def build_result(request: PlanRequest) -> PlanResult:
             status="infeasible",
             reasonCode=outcome.reason_code,
             warnings=warnings,
-            algorithmVersion=ALGORITHM_VERSION,
-            parameterVersion=PARAMETER_VERSION,
+            algorithmVersion=outcome.algorithm_version,
+            parameterVersion=outcome.parameter_version,
             distanceUnit=distance_unit,
             computedAt=now(),
         )
@@ -128,8 +131,8 @@ def build_result(request: PlanRequest) -> PlanResult:
         requestId=request.requestId,
         status="feasible",
         warnings=warnings,
-        algorithmVersion=ALGORITHM_VERSION,
-        parameterVersion=PARAMETER_VERSION,
+        algorithmVersion=outcome.algorithm_version,
+        parameterVersion=outcome.parameter_version,
         distanceUnit=distance_unit,
         totalDistance=outcome.total_distance,
         vehiclePlans=outcome.vehicle_plans,

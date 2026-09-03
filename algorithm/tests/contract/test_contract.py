@@ -89,6 +89,10 @@ def unique_id(prefix: str) -> str:
 def test_health(client) -> None:
     response = client.get("/health")
     assert response.status_code == 200
+    data = response.json()
+    assert "algorithmVersion" in data
+    # 验证 HACO-CPS 版本
+    assert "haco-cps" in data["algorithmVersion"] or "ortools" in data["algorithmVersion"]
 
 
 def test_ready(client) -> None:

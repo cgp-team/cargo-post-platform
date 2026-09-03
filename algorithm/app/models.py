@@ -79,21 +79,38 @@ class PlanOrder(BaseModel):
     cargoSource: CargoSource | None = None
 
 
-class AlgorithmConfig(BaseModel):
-    """ACO 超参数为算法组方案的历史契约字段；本服务求解器为 OR-Tools，
+class AlgorithmMode(str, Enum):
+    """算法运行模式。"""
+    BASELINE = "BASELINE"    # OR-Tools baseline (ortools-1.3.0)
+    HACO = "HACO"            # HACO-CPS metaheuristic (default)
+    HYBRID = "HYBRID"        # HACO + OR-Tools repair/refinement
 
-    参数全部接受但不参与求解，超出建议范围时响应带 warnings 不拒绝（契约 Q8）。
+
+class AlgorithmConfig(BaseModel):
+    """HACO-CPS 算法参数。所有参数真正参与求解（不再只是接受但忽略）。
+
+    ant_count: 蚂蚁数量
+    max_iterations: 最大迭代次数
+    alpha: 信息素权重
+    beta: 启发式权重
+    rho: 信息素蒸发率
+    Q: 信息素增量常数
+    convergence_threshold: 收敛判定（连续无改善迭代数）
+    randomSeed: 随机种子（相同请求+相同种子=相同结果）
+    algorithmMode: 运行模式（HACO/BASELINE/HYBRID）
     """
 
     model_config = ConfigDict(extra="allow")
 
-    ant_count: int = 30
-    max_iterations: int = 100
+    ant_count: int = 24
+    max_iterations: int = 40
     alpha: float = 1.0
     beta: float = 3.0
     rho: float = 0.1
     Q: float = 100
     convergence_threshold: int = 20
+    randomSeed: int = 20260903
+    algorithmMode: AlgorithmMode = AlgorithmMode.HACO
 
     # 绕行阈值配置（全部可选，不设置时保持当前兼容行为）
     maxDetourDistanceKm: float | None = Field(default=None, ge=0)

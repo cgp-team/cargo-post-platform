@@ -19,6 +19,15 @@ mkdir -p "$OUTPUT_DIR"
 # 获取算法版本
 ALGO_VERSION=$(curl -sf "$BASE_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('algorithmVersion','unknown'))" 2>/dev/null || echo "unreachable")
 
+# 检测算法类型
+if [[ "$ALGO_VERSION" == *"haco-cps"* ]]; then
+    ALGO_TYPE="HACO-CPS"
+elif [[ "$ALGO_VERSION" == *"ortools"* ]]; then
+    ALGO_TYPE="OR-Tools Baseline"
+else
+    ALGO_TYPE="Unknown"
+fi
+
 # 运行黑盒测试，捕获输出
 BB_OUTPUT=""
 BB_STATUS="UNKNOWN"
@@ -38,6 +47,7 @@ python3 -c "
 import json
 report = {
     'algorithmVersion': '$ALGO_VERSION',
+    'algorithmType': '$ALGO_TYPE',
     'status': '$BB_STATUS',
     'blackboxTestOutput': '''$BB_OUTPUT'''.strip().split('\n') if '''$BB_OUTPUT'''.strip() else [],
     'timestamp': '$TIMESTAMP',
