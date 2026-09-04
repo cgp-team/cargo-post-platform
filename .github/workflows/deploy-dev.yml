@@ -507,8 +507,8 @@ jobs:
       # 生成算法验收报告并上传
       # 复用前一步 blackbox-output.txt，不再重复执行黑盒测试。
       # 报告脚本失败必须使 workflow 失败（不允许 || true 或 continue-on-error）。
-      # 报告 JSON 同时写入 $GITHUB_STEP_SUMMARY，保证即使 artifact blob 上传
-      # 因服务器→GitHub 网络 ECONNRESET 失败，报告仍在 Actions UI 直接可见。
+      # 完整报告 JSON 直接 cat 到 step 日志（已验证 step 日志能送达 GitHub 供查看），
+      # 同时追加 $GITHUB_STEP_SUMMARY 作为 UI 摘要。
       - name: Generate algorithm verification report
         if: always()
         run: |
@@ -518,16 +518,29 @@ jobs:
             http://127.0.0.1:18081 \
             "${GITHUB_WORKSPACE}/artifacts/blackbox-output.txt"
 
-          # 把报告 JSON 追加到 step summary（不依赖 blob upload 的可见通道）
+          # 完整报告 JSON 输出到 step 日志（可靠可见通道）
+          echo ""
+          echo "===== 完整报告内容 (algorithm-verification.json) ====="
           if [[ -s artifacts/algorithm-verification.json ]]; then
-            {
-              echo "## Algorithm Verification Report"
-              echo
-              echo '```json'
-              cat artifacts/algorithm-verification.json
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            cat artifacts/algorithm-verification.json
+          else
+            echo "ERROR: artifacts/algorithm-verification.json missing or empty" >&2
+            exit 1
           fi
+          echo ""
+          echo "===== 黑盒测试输出 (blackbox-output.txt) ====="
+          if [[ -s "${GITHUB_WORKSPACE}/artifacts/blackbox-output.txt" ]]; then
+            cat "${GITHUB_WORKSPACE}/artifacts/blackbox-output.txt"
+          fi
+
+          # 追加 step summary（UI 摘要通道）
+          {
+            echo "## Algorithm Verification Report"
+            echo
+            echo '```json'
+            cat artifacts/algorithm-verification.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
       # blob 上传到 GitHub storage 会因服务器→GitHub 网络 ECONNRESET 失败（实测持续）。
       # 报告缺失/非法的逻辑错误已由 Generate step 硬失败拦截（无 || true），
