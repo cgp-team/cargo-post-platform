@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .deadline import SearchDeadline
 from .encoding import ObjectiveVector, TaskBlock, TaskType
 from .evaluator import evaluate_route_genome
 from .feasibility_engine import FeasibilityEngine
@@ -440,6 +441,7 @@ def local_search_improve(
     initial_passenger_loads: dict[int, int],
     initial_cargo_loads: dict[int, int],
     rounds: int = 3,
+    deadline: SearchDeadline | None = None,
 ) -> tuple[list[RouteGenome], ObjectiveVector]:
     """Best Improvement 局部搜索：Relocate 邻域（task 可移到任意车辆的任意位置）。
 
@@ -452,6 +454,8 @@ def local_search_improve(
     )
 
     for _ in range(max(1, rounds)):
+        if deadline is not None and deadline.expired():
+            break
         best_neighbor = None
         best_obj = current_obj
 
