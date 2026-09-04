@@ -63,15 +63,15 @@ def _count_expected_tasks(req):
 
 
 def _count_planned_tasks(result):
-    """Count actual task stops in the result."""
+    """Count unique task IDs in the result (not stop count)."""
     if result.status != "feasible":
         return 0
-    total = 0
+    task_ids = set()
     for p in result.vehicle_plans:
         for s in p.stops:
-            if s.action not in (StopAction.DEPART, StopAction.RETURN):
-                total += 1
-    return total
+            if s.orderId and s.action not in (StopAction.DEPART, StopAction.RETURN):
+                task_ids.add(s.orderId)
+    return len(task_ids)
 
 
 def _run_and_record(req, label):
