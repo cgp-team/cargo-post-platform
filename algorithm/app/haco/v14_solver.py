@@ -145,13 +145,12 @@ def solve(
         max_duration=float(window_seconds),
     )
 
-    # ── Hard Deadline：统一时间预算 ─────────────────────────────
-    # haco_time_limit = 纯搜索预算（ACO + LS + ALNS + Archive）
-    # overall_time_limit = 整个 HACO request 生命周期（含编码/输出）
-    # 取两者较小值作为搜索阶段硬截止
-    deadline = SearchDeadline.from_seconds(
-        min(config.haco_time_limit, config.overall_time_limit)
-    )
+    # ── Hard Deadline：搜索阶段时间预算 ──────────────────────────
+    # haco_time_limit = HACO 搜索硬截止（ACO + LS + ALNS + Archive + 编码输出）
+    # overall_time_limit = 外层应用预留的总时限上限（当前由调用方 solver.py 控制）
+    # 取两者较小值作为本函数内搜索阶段的硬截止
+    haco_search_budget = min(config.haco_time_limit, config.overall_time_limit)
+    deadline = SearchDeadline.from_seconds(haco_search_budget)
 
     # ── 初始解 ────────────────────────────────────────────────
     initial = _generate_initial_solutions(
