@@ -677,27 +677,49 @@ def generate_insertion_candidates(
     pool_size = min(max(candidate_size * 4, 16), 64)
 
     if grouped_by_pickup:
-        # Paired task: per-pickup diversity + global cheap_score ranking.
-        # 1) Sort each group by cheap_score, keep per_pickup_quota best.
-        # 2) Sort the protected set globally by cheap_score (removes traversal-order bias).
-        # 3) Fill remaining pool from unprotected slots sorted by cheap_score.
-        per_pickup_quota = min(max(4, candidate_size), 16)
-        protected: list[_CheapSlot] = []
+        # Paired task: vehicle diversity + global cheap_score ranking.
+        # Strategy: collect the best slot per vehicle (guaranteed diversity),
+        # then fill remaining pool with globally cheapest slots.
+        vehicles_with_slots: dict[int, list[_CheapSlot]] = {}
+        for s in cheap_slots:
+            vehicles_with_slots.setdefault(s.vehicle_index, []).append(s)
 
+        # Step 1: guarantee at least 1 slot per vehicle in the pool
+        protected: list[_CheapSlot] = []
+        protected_set: set[tuple[int, int, int | None]] = set()
+        for vi, vi_slots in vehicles_with_slots.items():
+            vi_slots.sort(key=lambda s: s.cheap_score)
+            best = vi_slots[0]
+            protected.append(best)
+            protected_set.add((best.vehicle_index, best.pickup_index, best.delivery_index))
+
+        # Step 2: add more slots per vehicle-pickup group for diversity,
+        # but cap total protected to leave room in pool_size
+        per_vp_quota = max(1, min(candidate_size // 2, 4))
         for pickup_key, slots in grouped_by_pickup.items():
             slots.sort(key=lambda s: s.cheap_score)
-            protected.extend(slots[:per_pickup_quota])
+            for s in slots[:per_vp_quota]:
+                key = (s.vehicle_index, s.pickup_index, s.delivery_index)
+                if key not in protected_set:
+                    protected.append(s)
+                    protected_set.add(key)
 
-        # CRITICAL: sort protected globally to remove traversal-order bias
-        protected.sort(key=lambda s: s.cheap_score)
-
-        protected_set: set[tuple[int, int, int | None]] = {
-            (s.vehicle_index, s.pickup_index, s.delivery_index) for s in protected
-        }
+        # Step 3: sort remaining by cheap_score and fill pool
         remaining = [s for s in cheap_slots if (s.vehicle_index, s.pickup_index, s.delivery_index) not in protected_set]
         remaining.sort(key=lambda s: s.cheap_score)
 
+        # Build pool: protected (diversity-first) + remaining (cheapest-first)
+        # Sort protected by cheap_score so best protected slots come first
+        protected.sort(key=lambda s: s.cheap_score)
         top_pool = (protected + remaining)[:pool_size]
+
+        # Step 4: post-truncation vehicle diversity guarantee
+        # If any vehicle was completely cut from top_pool, add its best slot
+        pool_vehicles = {s.vehicle_index for s in top_pool}
+        for vi, vi_slots in vehicles_with_slots.items():
+            if vi not in pool_vehicles and vi_slots:
+                best = min(vi_slots, key=lambda s: s.cheap_score)
+                top_pool.append(best)
     else:
         # Single-event task: simple sort and truncate
         cheap_slots.sort(key=lambda s: s.cheap_score)
