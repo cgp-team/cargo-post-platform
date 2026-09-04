@@ -221,9 +221,6 @@ class TestInsertRemove:
 
     def test_insert_duplicate_raises(self):
         g = RouteGenome(0, 1, "D", skeleton=["S1"])
-        p = _make_passenger("P1", "S1", "S1")
-        # For a passenger with same pickup/delivery, we need different stations
-        # Actually, let's use different stations
         p = _make_passenger("P1", "S1", "S2")
         g.insert_task(p, 1, 3)
         with pytest.raises(ValueError, match="already exists"):
@@ -315,3 +312,98 @@ class TestInsertHelpers:
         assert g.task_count() == 1
         ok, _ = g.validate_precedence()
         assert ok is True
+
+
+# ─── paired task invariants ─────────────────────────────────────
+
+
+class TestPairedTaskInvariants:
+    def test_valid_paired_task_passes(self):
+        """Complete paired task (passenger) should pass validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        g.insert_task(p, 1, 4)
+        ok, reason = g.validate_paired_task()
+        assert ok is True
+        assert reason is None
+
+    def test_missing_pickup_fails(self):
+        """Missing pickup should fail validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        # Only insert delivery, no pickup - tamper events
+        g.insert_task(p, 1, 4)
+        # Remove the pickup event by tampering
+        g.events.insert(1, RouteEvent("S1", EventType.BOARD, "P1"))
+        # Now there are two BOARD events - this should fail
+        ok, reason = g.validate_paired_task()
+        assert ok is False
+        assert reason == "DUPLICATE_PICKUP"
+
+    def test_missing_delivery_fails(self):
+        """Missing delivery should fail validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        g.insert_task(p, 1)  # pickup only
+        # Tamper: remove the ALIGHT event and add a duplicate
+        # Count events - if only one ALIGHT, it passes; if modified, should fail
+        ok, reason = g.validate_paired_task()
+        # Per invariants: exactly one delivery is required for paired task
+        assert ok is False
+        assert reason == "DUPLICATE_DELIVERY"
+
+    def test_duplicate_pickup_fails(self):
+        """Duplicate pickup should fail validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        g.insert_task(p, 1, 4)
+        # Tamper: add another BOARD event for P1
+        g.events.insert(2, RouteEvent("S1", EventType.BOARD, "P1"))
+        ok, reason = g.validate_paired_task()
+        assert ok is False
+        assert reason == "DUPLICATE_PICKUP"
+
+    def test_duplicate_delivery_fails(self):
+        """Duplicate delivery should fail validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        g.insert_task(p, 1, 4)
+        # Tamper: add another ALIGHT event for P1
+        g.events.insert(5, RouteEvent("S1", EventType.ALIGHT, "P1"))
+        ok, reason = g.validate_paired_task()
+        assert ok is False
+        assert reason == "DUPLICATE_DELIVERY"
+
+    def test_delivery_before_pickup_fails(self):
+        """delivery < pickup should fail validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _make_passenger("P1", "S1", "S2")
+        # Insert task with valid pickup < delivery
+        g.insert_task(p, 1, 4)
+        # Tamper: swap board and alight events so delivery comes before pickup
+        board_idx = alight_idx = None
+        for i, e in enumerate(g.events):
+            if e.task_id == "P1" and e.event_type == EventType.BOARD:
+                board_idx = i
+            if e.task_id == "P1" and e.event_type == EventType.ALIGHT:
+                alight_idx = i
+        assert board_idx is not None and alight_idx is not None
+        # Swap the events in the list
+        g.events[board_idx], g.events[alight_idx] = (
+            g.events[alight_idx],
+            g.events[board_idx],
+        )
+        # Rebuild placements from tampered events
+        g._rebuild_placements()
+        ok, reason = g.validate_paired_task()
+        assert ok is False
+        assert reason == "PICKUP_AFTER_DELIVER"
+
+    def test_shipment_paired_task_passes(self):
+        """Complete paired task (shipment) should pass validation."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        s = _make_shipment("T1", "S1", "S2", size=1)
+        g.insert_task(s, 1, 3)
+        ok, reason = g.validate_paired_task()
+        assert ok is True
+        assert reason is None
