@@ -529,8 +529,14 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # blob 上传到 GitHub storage 会因服务器→GitHub 网络 ECONNRESET 失败（实测持续）。
+      # 报告缺失/非法的逻辑错误已由 Generate step 硬失败拦截（无 || true），
+      # 报告可见性由上方 step summary 保证（不依赖 blob）。
+      # 因此这里 tolerate 网络错误：continue-on-error 使 deploy 结论不受 ECONNRESET
+      # 影响；if-no-files-found: error 保留为文件缺失的兜底提示。
       - name: Upload algorithm verification report
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: algorithm-verification
