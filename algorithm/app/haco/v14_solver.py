@@ -434,7 +434,7 @@ def solve(
         best_routes, tasks, templates, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix, config, rng,
+        station_map, matrix, config, rng, deadline,
     )
     if compacted is not None:
         best_routes = compacted
@@ -563,6 +563,7 @@ def _cheapest_insertion(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome] | None:
     """确定性 cheapest-insertion：每步选全局启发式得分最低的可行 (task,位置)。"""
     routes = [t.copy() for t in templates]
@@ -570,8 +571,13 @@ def _cheapest_insertion(
     placed_ids: set[str] = set()
 
     while remaining:
+        if deadline is not None and deadline.expired():
+            return None  # 超时，放弃压缩尝试
+
         best = None  # (score, task, route_idx, pickup, delivery)
         for task in remaining:
+            if deadline is not None and deadline.expired():
+                return None
             candidates = generate_insertion_candidates(
                 task,
                 routes,
@@ -584,6 +590,7 @@ def _cheapest_insertion(
                 initial_passenger_loads,
                 initial_cargo_loads,
                 candidate_size=10000,  # 不截断，确定性取全局最优
+                deadline=deadline,
             )
             if candidates:
                 cand = candidates[0]
@@ -715,6 +722,7 @@ def _compact_solution(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix, config, rng,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome]:
     """车辆数最小化 + 输出确定性重建。
 
@@ -743,6 +751,9 @@ def _compact_solution(
     )
 
     for m in range(1, used_n + 1):
+        if deadline is not None and deadline.expired():
+            return routes  # 超时，返回当前最优解
+
         cap_m = sum(cargo_capacities[i] for i in range(min(m, len(cargo_capacities))))
         if deliveries_total > cap_m or pickups_total > cap_m:
             continue  # m 车总货仓容量不足，必不可能 → 跳过整轮尝试
@@ -753,7 +764,7 @@ def _compact_solution(
             canonical, templates[:m], tasks_by_id, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, deadline,
         )
         if cand is not None and _is_complete(cand, tasks) and _routes_feasible(
             cand, tasks_by_id, engine,

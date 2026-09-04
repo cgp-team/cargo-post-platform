@@ -670,7 +670,9 @@ def generate_insertion_candidates(
                 ))
 
     # ─── Stage A truncation: per-pickup diversity + global pool ───
-    pool_size = max(candidate_size * 8, 32)
+    # Cap pool_size to prevent runaway evaluation when candidate_size is very large
+    # (e.g. candidate_size=10000 means "no truncation" in _cheapest_insertion)
+    pool_size = min(max(candidate_size * 4, 16), 64)
 
     if grouped_by_pickup:
         # Paired task: ensure each pickup_index keeps at least K best delivery positions.
