@@ -41,8 +41,8 @@ from .global_evaluator import (
     compute_genome_diversity,
 )
 from .global_local_search import global_local_search
-from .pheromone import PheromoneMatrix
-from .route_genome import GlobalGlobalRouteGenome
+from .pheromone import PheromoneMatrix, extract_vehicle_task_sequences
+from .route_genome import GlobalRouteGenome
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,16 @@ def solve_haco(
     # 迭代搜索
     deadline = time.monotonic() + config.haco_time_limit
 
+    # 计算初始多样性
+    diversity = 0.5
+
     for iteration in range(config.max_iterations):
         if time.monotonic() > deadline:
             warnings.append("HACO_TIME_LIMIT_REACHED")
             break
+
+        # 自适应 alpha/beta
+        adaptive_alpha, adaptive_beta = _adapt_parameters(config, diversity)
 
         iteration_best_genome = None
         iteration_best_obj = GenomeEvaluation(feasible=False)
@@ -153,9 +159,10 @@ def solve_haco(
             if time.monotonic() > deadline:
                 break
 
-            # 构造解
+            # 构造解（传入自适应 alpha/beta）
             ant_genome = construct_global_solution(
-                tasks, genome_template, pheromone, station_map, matrix, config, rng
+                tasks, genome_template, pheromone, station_map, matrix, config, rng,
+                alpha=adaptive_alpha, beta=adaptive_beta
             )
 
             # 局部搜索（对精英蚂蚁）
@@ -175,17 +182,24 @@ def solve_haco(
         pheromone.evaporate()
 
         if iteration_best_genome and iteration_best_obj.feasible:
-            # 提取任务序列用于信息素更新
-            task_seq = _extract_task_sequence(iteration_best_genome)
-            pheromone.deposit(task_seq, iteration_best_obj.normalized_cost, weight=1.0)
+            # 多车辆信息素沉积（禁止跨车边）
+            vehicle_seqs = _extract_vehicle_sequences(iteration_best_genome)
+            pheromone.deposit_multi_vehicle(vehicle_seqs, iteration_best_obj.normalized_cost, weight=1.0)
 
             if iteration_best_obj < best_obj:
                 best_genome = iteration_best_genome
                 best_obj = iteration_best_obj
                 no_improve_count = 0
-                pheromone.update_from_best(task_seq, best_obj.normalized_cost, elite_weight=2.0)
+                pheromone.deposit_multi_vehicle(vehicle_seqs, best_obj.normalized_cost, weight=2.0)
             else:
                 no_improve_count += 1
+
+            # 更新多样性
+            iteration_sigs = set()
+            for obj in iteration_objs:
+                if obj.feasible:
+                    iteration_sigs.add(obj.key())
+            diversity = len(iteration_sigs) / max(len([o for o in iteration_objs if o.feasible]), 1)
         else:
             no_improve_count += 1
 
@@ -286,6 +300,7 @@ def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
                 delivery_station=order.stationId,
                 size=order.itemCount,
                 order_ids=[order.orderId],
+                cargo_source=order.cargoSource,
             ))
         elif order.orderType == OrderType.PICKUP:
             tasks.append(TaskBlock(
@@ -295,6 +310,7 @@ def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
                 delivery_station=order.stationId,
                 size=order.itemCount,
                 order_ids=[order.orderId],
+                cargo_source=order.cargoSource,
             ))
     for shipment in request.shipments:
         tasks.append(TaskBlock(
@@ -337,13 +353,18 @@ def _build_genome_template(request: PlanRequest, tasks: list[TaskBlock] = None) 
     )
 
 
-def _extract_task_sequence(genome: GlobalRouteGenome) -> list[str]:
-    """提取任务序列（用于信息素更新）。"""
-    seq = ["DEPOT"]
-    for vi in sorted(genome.vehicle_routes.keys()):
-        for task_id in genome.vehicle_routes[vi]:
+def _extract_vehicle_sequences(genome: GlobalRouteGenome) -> dict[int, list[str]]:
+    """提取每辆车的任务序列（用于多车辆信息素更新）。
+
+    每个序列以 "DEPOT" 开头，禁止跨车边。
+    """
+    result = {}
+    for vi, route in genome.vehicle_routes.items():
+        seq = ["DEPOT"]
+        for task_id in route:
             seq.append(task_id)
-    return seq
+        result[vi] = seq
+    return result
 
 
 def _genome_to_plans(
@@ -539,6 +560,27 @@ def _pheromone_restart(pheromone, config, rng) -> None:
     for i in range(pheromone.n):
         for j in range(pheromone.n):
             pheromone.tau[i][j] = pheromone.tau0 * 0.5 + pheromone.tau[i][j] * 0.5
+
+
+def _adapt_parameters(config: HacoConfig, diversity: float) -> tuple[float, float]:
+    """自适应 alpha/beta：根据多样性调整探索/利用平衡。
+
+    低多样性 → 增大 beta（更贪婪，增加多样性）
+    高多样性 → 增大 alpha（更依赖信息素，加速收敛）
+    """
+    alpha = config.alpha
+    beta = config.beta
+
+    if diversity < config.adaptive_diversity_low:
+        # 太相似，增加探索
+        beta = min(config.beta_max, config.beta * 1.2)
+        alpha = max(config.alpha_min, config.alpha * 0.9)
+    elif diversity > config.adaptive_diversity_high:
+        # 太分散，增加利用
+        alpha = min(config.alpha_max, config.alpha * 1.2)
+        beta = max(config.beta_min, config.beta * 0.9)
+
+    return alpha, beta
 
 
 def _ortools_validate(request, vehicle_plans, matrix) -> SolveOutcome | None:
