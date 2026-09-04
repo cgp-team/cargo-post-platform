@@ -1306,8 +1306,13 @@ class TestDeadlineRegression:
                 f"Route {i}: placements changed"
             )
 
-    def test_expired_deadline_cheapest_insertion_returns_none(self):
-        """_cheapest_insertion with expired deadline must return None quickly."""
+    def test_expired_deadline_cheapest_insertion_returns_partial(self):
+        """_cheapest_insertion with expired deadline must return GreedySeedResult(complete=False) quickly.
+
+        PR #118: budget exhaustion must NOT collapse into None (= 'no feasible solution').
+        It returns an explicit incomplete state so the caller can repair/fallback
+        instead of declaring infeasible.
+        """
         from app.haco.v14_solver import _cheapest_insertion
 
         templates = [RouteGenome(0, 1000, "S0")]
@@ -1328,5 +1333,161 @@ class TestDeadlineRegression:
         )
         elapsed = time.monotonic() - t0
 
-        assert result is None, "Expired deadline should return None"
+        assert result is not None, "Should return GreedySeedResult, not None"
+        assert result.complete is False, "Expired deadline should be complete=False"
+        assert result.placed_count < result.total_tasks, "Partial placement on expiry"
+        assert result.total_tasks == 10
         assert elapsed < 1.0, f"Expired deadline took {elapsed:.2f}s (should be instant)"
+
+
+# 18. PR #118: Unified Deadline Hardening regressions
+
+
+class TestUnifiedDeadlineHardening:
+
+    def test_greedy_seed_timeout_returns_partial_state(self):
+        """Seed with a tight budget returns partial (complete=False), never None."""
+        from app.haco.v14_solver import _cheapest_insertion
+
+        templates = [RouteGenome(0, 1000, "S0")]
+        tasks = [_task(f"T{i}", TaskType.PASSENGER, f"S{i % 9 + 1}", f"S{(i + 1) % 9 + 1}") for i in range(30)]
+        tasks_by_id = {t.task_id: t for t in tasks}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        # Tiny seed budget → cannot place all 30 → partial, explicit complete=False
+        seed_deadline = SearchDeadline.from_seconds(0.05)
+        res = _cheapest_insertion(
+            tasks, templates, tasks_by_id, engine,
+            {0: 60}, {0: 60}, {0: 0}, {0: 0},
+            station_map, None, seed_deadline,
+        )
+        assert res is not None
+        assert res.complete is False
+        assert res.placed_count < 30
+        assert res.total_tasks == 30
+
+    def test_seed_timeout_does_not_report_infeasible(self):
+        """A feasible instance with a tight seed budget must still end feasible."""
+        # 5 passengers, 1 vehicle cap 5 → feasible. Tiny greedy seed budget forces
+        # partial seed + repair fallback path (not infeasible).
+        orders = [_passenger(i, "S1", "S2") for i in range(5)]
+        vehicles = [Vehicle(vehicleId=1000, passengerCapacity=5, cargoCapacity=4)]
+        cfg = AlgorithmConfig(
+            algorithmMode=AlgorithmMode.HACO,
+            haco_time_limit=3.0, overall_time_limit=4.0,
+            greedy_seed_time_limit=0.01,  # force seed timeout → partial → repair
+        )
+        req = PlanRequest(
+            requestId="seed-timeout-fallback",
+            batchStart=datetime(2026, 8, 23, 8, 0, tzinfo=TZ),
+            batchEnd=datetime(2026, 8, 23, 18, 0, tzinfo=TZ),
+            depot=DEPOT, stations=STATIONS, vehicles=vehicles,
+            orders=orders, algorithmConfig=cfg,
+        )
+        result = unified_solve(req)
+        assert result.status == "feasible", f"seed timeout must not report infeasible: {result.reason_code}"
+
+    def test_deadline_returns_last_feasible_solution(self):
+        """Even under a very short deadline, a feasible instance must return feasible."""
+        orders = [_passenger(i, f"S{i % 9 + 1}", f"S{(i + 3) % 9 + 1}") for i in range(6)]
+        vehicles = [Vehicle(vehicleId=1000 + i, passengerCapacity=5, cargoCapacity=4) for i in range(2)]
+        cfg = AlgorithmConfig(
+            algorithmMode=AlgorithmMode.HACO,
+            haco_time_limit=0.2, overall_time_limit=0.5,
+        )
+        req = PlanRequest(
+            requestId="short-deadline-feasible",
+            batchStart=datetime(2026, 8, 23, 8, 0, tzinfo=TZ),
+            batchEnd=datetime(2026, 8, 23, 18, 0, tzinfo=TZ),
+            depot=DEPOT, stations=STATIONS, vehicles=vehicles,
+            orders=orders, algorithmConfig=cfg,
+        )
+        result = unified_solve(req)
+        # A feasible instance must never return infeasible purely from budget exhaustion
+        assert result.status == "feasible", (
+            f"feasible instance reported infeasible under short deadline: {result.reason_code}"
+        )
+
+    def test_construction_respects_deadline(self):
+        """construct_ant_solution_v14 with expired deadline returns quickly."""
+        from app.haco.construction import construct_ant_solution_v14
+        from app.haco.pheromone import PheromoneMatrix
+
+        templates = [RouteGenome(0, 1000, "S0")]
+        tasks = [_task(f"T{i}", TaskType.PASSENGER, f"S{i % 9 + 1}", f"S{(i + 1) % 9 + 1}") for i in range(20)]
+        tasks_by_id = {t.task_id: t for t in tasks}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+        config = HacoConfig()
+        pm = PheromoneMatrix([t.task_id for t in tasks] + ["DEPOT"], config)
+
+        deadline = SearchDeadline.from_seconds(0.0)
+        time.sleep(0.01)
+
+        t0 = time.monotonic()
+        routes = construct_ant_solution_v14(
+            tasks, templates, tasks_by_id, pm, engine, station_map, None,
+            {0: 20}, {0: 20}, {0: 0}, {0: 0},
+            config, __import__("random").Random(42),
+            deadline=deadline,
+        )
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, f"construct_ant with expired deadline took {elapsed:.2f}s"
+        assert routes is not None
+
+    def test_local_search_respects_deadline(self):
+        """local_search_improve with expired deadline returns current (complete) routes fast."""
+        from app.haco.local_search_v14 import local_search_improve
+
+        route = RouteGenome(0, 1000, "S0")
+        tasks = [_task(f"T{i}", TaskType.PASSENGER, f"S{i+1}", f"S{i+2}") for i in range(5)]
+        for i, t in enumerate(tasks):
+            route.insert_task(t, 1 + i * 2, 2 + i * 2)
+        tasks_by_id = {t.task_id: t for t in tasks}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        deadline = SearchDeadline.from_seconds(0.0)
+        time.sleep(0.01)
+
+        t0 = time.monotonic()
+        out_routes, obj = local_search_improve(
+            [route], tasks_by_id, station_map, None, engine,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            rounds=3, deadline=deadline,
+        )
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, f"local_search with expired deadline took {elapsed:.2f}s"
+        # Must return complete routes (all tasks still placed)
+        placed = sum(len(r.placements) for r in out_routes)
+        assert placed == 5, f"local_search lost tasks on deadline: {placed}"
+
+    def test_alns_respects_deadline(self):
+        """alns_search with expired deadline returns current best quickly."""
+        from app.haco.alns_v14 import alns_search
+
+        route = RouteGenome(0, 1000, "S0")
+        tasks = [_task(f"T{i}", TaskType.PASSENGER, f"S{i+1}", f"S{i+2}") for i in range(5)]
+        for i, t in enumerate(tasks):
+            route.insert_task(t, 1 + i * 2, 2 + i * 2)
+        tasks_by_id = {t.task_id: t for t in tasks}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        deadline = SearchDeadline.from_seconds(0.0)
+        time.sleep(0.01)
+
+        t0 = time.monotonic()
+        result = alns_search(
+            [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            HacoConfig(), __import__("random").Random(42),
+            max_iterations=10000, deadline=deadline,
+        )
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, f"alns with expired deadline took {elapsed:.2f}s"

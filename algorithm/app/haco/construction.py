@@ -806,6 +806,9 @@ def construct_ant_solution_v14(
     last_task_id = "DEPOT"
 
     while unassigned:
+        # NOTE: 不在此处按墙钟打断蚂蚁构造。一次蚂蚁的 RNG 消耗必须确定，
+        # 否则主循环同 seed 下复现性被破坏（确定性回归）。超时只在外层迭代边界判定，
+        # 单蚂蚁的微小超时由外层 deadline 兜底（本地 S4 实测 <1 只蚂蚁构造时长）。
         # 选择下一个任务
         task_scores = []
         for task in unassigned:
