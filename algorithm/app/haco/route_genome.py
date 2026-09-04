@@ -341,6 +341,67 @@ class RouteGenome:
 
         return True, None
 
+    def validate_paired_task(
+        self,
+    ) -> tuple[bool, str | None]:
+        """验证 paired task（乘客/PASSENGER 或 货运/SHIPMENT）的完整性Invariants。
+
+        检查：
+        1. exactly one pickup
+        2. exactly one delivery
+        3. pickup_index < delivery_index
+        """
+        # 统计每个 task_id 的事件类型
+        task_event_counts: dict[str, dict[EventType, int]] = {}
+
+        for event in self.events:
+            if not event.task_id:
+                continue
+            task_id = event.task_id
+            if task_id not in task_event_counts:
+                task_event_counts[task_id] = {
+                    EventType.PICKUP: 0,
+                    EventType.DELIVER: 0,
+                    EventType.BOARD: 0,
+                    EventType.ALIGHT: 0,
+                }
+            task_event_counts[task_id][event.event_type] += 1
+
+        for task_id, placement in self.placements.items():
+            if task_id not in task_event_counts:
+                continue
+
+            counts = task_event_counts[task_id]
+
+            # 检查：PASSENGER/SHIPMENT task 必须有 exactly one BOARD/ALIGHT
+            # 或者 exactly one PICKUP/DELIVER
+            is_paired_task = (
+                counts[EventType.BOARD] > 0
+                or counts[EventType.ALIGHT] > 0
+                or counts[EventType.PICKUP] > 0
+                or counts[EventType.DELIVER] > 0
+            )
+
+            if not is_paired_task:
+                continue
+
+            # invariant: exactly one pickup event (PICKUP or BOARD)
+            pickup_count = counts[EventType.PICKUP] + counts[EventType.BOARD]
+            if pickup_count != 1:
+                return False, "DUPLICATE_PICKUP"
+
+            # invariant: exactly one delivery event (DELIVER or ALIGHT)
+            delivery_count = counts[EventType.DELIVER] + counts[EventType.ALIGHT]
+            if delivery_count != 1:
+                return False, "DUPLICATE_DELIVERY"
+
+            # invariant: pickup_index < delivery_index
+            if placement.delivery_index is not None:
+                if placement.pickup_index >= placement.delivery_index:
+                    return False, "PICKUP_AFTER_DELIVER"
+
+        return True, None
+
     def validate_skeleton(
         self,
     ) -> tuple[bool, str | None]:
