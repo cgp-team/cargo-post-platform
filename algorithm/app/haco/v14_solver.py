@@ -82,6 +82,24 @@ class SolveOutcome:
     iteration_stats: list[dict] = field(default_factory=list)
 
 
+@dataclass
+class GreedySeedResult:
+    """Deterministic cheapest-insertion 结果（含完整性标记）。
+
+    complete=True  ⇒ routes 覆盖全部任务，可作完整 seed。
+    complete=False ⇒ routes 只覆盖部分任务（deadline 超时或无可放置），
+                     不得直接当完整解；须经 repair/construction fallback 补齐，
+                     补齐 + FeasibilityEngine 验证通过后才可作为 seed。
+    """
+
+    routes: list[RouteGenome]
+    complete: bool
+    placed_count: int
+    total_tasks: int
+    candidate_count: int = 0        # telemetry: 累计可行的候选数
+    feasibility_check_count: int = 0  # telemetry: 累计 FeasibilityEngine 检查次数（近似）
+
+
 def solve(
     request: PlanRequest,
     matrix: DistanceMatrix | None = None,
@@ -91,6 +109,7 @@ def solve(
     if config is None:
         config = HacoConfig.from_algorithm_config(request.algorithmConfig)
 
+    t_solve_start = time.perf_counter()
     rng = random.Random(config.random_seed)
 
     precheck = _precheck(request)
@@ -153,7 +172,7 @@ def solve(
     deadline = SearchDeadline.from_seconds(haco_search_budget)
 
     # ── 初始解 ────────────────────────────────────────────────
-    initial = _generate_initial_solutions(
+    initial, seed_telemetry = _generate_initial_solutions(
         tasks, tasks_by_id, templates, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
@@ -176,8 +195,9 @@ def solve(
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, probe_deadline,
         )
-        if probe is not None and _routes_feasible(
-            probe, tasks_by_id, probe_engine,
+        # 诊断：去掉时间窗后能否形成完整可行解（probe.complete 必须为 True）
+        if probe.complete and _routes_feasible(
+            probe.routes, tasks_by_id, probe_engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix,
@@ -207,6 +227,10 @@ def solve(
     archive.add(best_routes, best_obj, tasks_by_id, station_map, matrix)
 
     warnings: list[str] = []
+    # greedy seed telemetry（含 SEED_MS / SEED_COMPLETE / SEED_PLACED / SEED_EXPECTED）
+    for _k, _v in seed_telemetry.items():
+        if _v is not None:
+            warnings.append(f"{_k}={_v}")
     iteration_stats: list[dict] = []
     no_improve_count = 0
     temperature = config.initial_temperature
@@ -465,10 +489,19 @@ def solve(
 
     total_search_ms = (time.perf_counter() - total_search_start) * 1000
 
-    # 将 ALNS 和总搜索时间追加到 warnings（便于日志排查）
+    # 阶段耗时 telemetry（便于定位超时阶段）
+    warnings.append(f"SEARCH_START_MS={round((total_search_start - t_solve_start) * 1000, 1)}")
     if alns_ms > 0:
         warnings.append(f"ALNS_MS={alns_ms:.0f}")
     warnings.append(f"TOTAL_SEARCH_MS={total_search_ms:.0f}")
+    warnings.append(f"ITERATION_COUNT={len(iteration_stats)}")
+    if iteration_stats:
+        warnings.append(
+            f"CANDIDATE_MS={round(sum(s.get('candidate_ms', 0) for s in iteration_stats), 1)}"
+        )
+        warnings.append(
+            f"LOCAL_SEARCH_MS={round(sum(s.get('local_search_ms', 0) for s in iteration_stats), 1)}"
+        )
 
     return SolveOutcome(
         status="feasible",
@@ -492,25 +525,75 @@ def _generate_initial_solutions(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix, config, rng,
     deadline: SearchDeadline | None = None,
-) -> list[tuple[list[RouteGenome], ObjectiveVector] | None]:
-    """生成多种初始解：确定性 cheapest-insertion + 多组 ACO 蚂蚁。"""
-    seeds: list[tuple[list[RouteGenome], ObjectiveVector]] = []
+) -> tuple[list[tuple[list[RouteGenome], ObjectiveVector] | None], dict]:
+    """生成多种初始解：确定性 cheapest-insertion + 多组 ACO 蚂蚁。
 
-    # 1) 确定性 cheapest-insertion（保证全部任务被放置的基线）
+    返回 (seeds, seed_telemetry)：
+    - seeds: 完整可行初始解列表
+    - seed_telemetry: 记录 greedy seed 的时间/完整性诊断（SEED_MS / SEED_COMPLETE /
+      SEED_PLACED / SEED_EXPECTED / SEED_CANDIDATES / SEED_FEASIBILITY_CHECKS）
+    """
+    seeds: list[tuple[list[RouteGenome], ObjectiveVector] | None] = []
+    seed_telemetry: dict = {
+        "SEED_MS": 0.0,
+        "SEED_COMPLETE": None,
+        "SEED_PLACED": 0,
+        "SEED_EXPECTED": len(tasks),
+        "SEED_CANDIDATES": 0,
+        "SEED_FEASIBILITY_CHECKS": 0,
+    }
+
+    # 1) 确定性 cheapest-insertion（保证全部任务被放置的基线）。
+    #    greedy seed 有独立有限预算，不应独占整个 search budget。
+    #    超时返回部分 seed（complete=False）→ 走快速 repair 补齐 → 验证后才作 seed。
+    seed_time_limit = float(getattr(config, "greedy_seed_time_limit", 2.0))
+    if deadline is not None:
+        seed_budget = min(seed_time_limit, max(0.0, deadline.remaining()))
+    else:
+        seed_budget = seed_time_limit
+    seed_deadline = SearchDeadline.from_seconds(seed_budget)
+
+    _seed_t0 = time.perf_counter()
     greedy = _cheapest_insertion(
         tasks, templates, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix,
+        station_map, matrix, seed_deadline,
     )
-    if greedy is not None and _routes_feasible(
-        greedy, tasks_by_id, engine,
+    seed_telemetry["SEED_MS"] = round((time.perf_counter() - _seed_t0) * 1000, 1)
+    seed_telemetry["SEED_COMPLETE"] = greedy.complete
+    seed_telemetry["SEED_PLACED"] = greedy.placed_count
+    seed_telemetry["SEED_CANDIDATES"] = greedy.candidate_count
+    seed_telemetry["SEED_FEASIBILITY_CHECKS"] = greedy.feasibility_check_count
+
+    greedy_seed: list[RouteGenome] | None = None
+    if greedy.complete and _routes_feasible(
+        greedy.routes, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
         station_map, matrix,
     ):
-        obj = evaluate_route_states(greedy, tasks_by_id, station_map, matrix)
-        seeds.append((greedy, obj))
+        # 完整 seed，直接可用
+        greedy_seed = greedy.routes
+    elif not greedy.complete and greedy.placed_count > 0:
+        # 部分 seed：标记 incomplete，不得直接当完整解；走快速 repair 补齐（主 deadline 内）
+        repaired = _repair_unassigned(
+            greedy.routes, tasks, tasks_by_id, engine,
+            passenger_capacities, cargo_capacities,
+            initial_passenger_loads, initial_cargo_loads,
+            station_map, matrix, deadline,
+        )
+        if repaired is not None and _routes_feasible(
+            repaired, tasks_by_id, engine,
+            passenger_capacities, cargo_capacities,
+            initial_passenger_loads, initial_cargo_loads,
+            station_map, matrix,
+        ):
+            greedy_seed = repaired
+
+    if greedy_seed is not None:
+        obj = evaluate_route_states(greedy_seed, tasks_by_id, station_map, matrix)
+        seeds.append((greedy_seed, obj))
 
     # 2) ACO 蚂蚁（统一信息素无先验，多样性来自不同 alpha/beta）
     for alpha, beta in (
@@ -558,7 +641,7 @@ def _generate_initial_solutions(
         obj = evaluate_route_states(routes, tasks_by_id, station_map, matrix)
         seeds.append((routes, obj))
 
-    return seeds
+    return seeds, seed_telemetry
 
 
 def _cheapest_insertion(
@@ -567,20 +650,35 @@ def _cheapest_insertion(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
     deadline: SearchDeadline | None = None,
-) -> list[RouteGenome] | None:
-    """确定性 cheapest-insertion：每步选全局启发式得分最低的可行 (task,位置)。"""
+) -> GreedySeedResult:
+    """确定性 cheapest-insertion：每步选全局启发式得分最低的可行 (task,位置)。
+
+    返回 GreedySeedResult（从不返回 None）：
+    - 全部任务放置 → complete=True
+    - deadline 到期 / 存在任务无法放置 → complete=False（保留已放置的部分 routes，
+      供调用方 repair/fallback 补齐），placed_count 记录已放置数。
+    """
     routes = [t.copy() for t in templates]
     remaining = list(tasks)
     placed_ids: set[str] = set()
+    cand_count = 0
+    feas_count = 0
+
+    def _partial() -> GreedySeedResult:
+        return GreedySeedResult(
+            routes=routes, complete=False,
+            placed_count=len(placed_ids), total_tasks=len(tasks),
+            candidate_count=cand_count, feasibility_check_count=feas_count,
+        )
 
     while remaining:
         if deadline is not None and deadline.expired():
-            return None  # 超时，放弃压缩尝试
+            return _partial()  # 超时：返回已放置的部分（非完整解）
 
         best = None  # (score, task, route_idx, pickup, delivery)
         for task in remaining:
             if deadline is not None and deadline.expired():
-                return None
+                return _partial()
             candidates = generate_insertion_candidates(
                 task,
                 routes,
@@ -595,6 +693,8 @@ def _cheapest_insertion(
                 candidate_size=10000,  # 不截断，确定性取全局最优
                 deadline=deadline,
             )
+            cand_count += len(candidates)
+            feas_count += min(len(candidates), 64)  # 近似：pool 上限 64 次全量检查
             if candidates:
                 cand = candidates[0]
                 score = cand.heuristic_score
@@ -604,15 +704,17 @@ def _cheapest_insertion(
                         cand.pickup_index, cand.delivery_index,
                     )
         if best is None:
-            return None  # 存在剩余任务无法放置 → 非全量解
+            return _partial()  # 存在剩余任务无法放置 → 非全量解
         _, task, vi, pickup, delivery = best
         routes[vi].insert_task(task, pickup, delivery)
         placed_ids.add(task.task_id)
         remaining.remove(task)
 
-    if len(placed_ids) != len(tasks):
-        return None
-    return routes
+    return GreedySeedResult(
+        routes=routes, complete=True,
+        placed_count=len(tasks), total_tasks=len(tasks),
+        candidate_count=cand_count, feasibility_check_count=feas_count,
+    )
 
 
 def _repair_unassigned(
@@ -769,13 +871,14 @@ def _compact_solution(
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
         )
-        if cand is not None and _is_complete(cand, tasks) and _routes_feasible(
-            cand, tasks_by_id, engine,
+        # compact 只接受完整解：部分 seed（complete=False）不得使用
+        if cand.complete and cand.routes is not None and _is_complete(cand.routes, tasks) and _routes_feasible(
+            cand.routes, tasks_by_id, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix,
         ):
-            return cand  # m 是从小到大，首个可行即贪心能找到的最小可行车数
+            return cand.routes  # m 是从小到大，首个可行即贪心能找到的最小可行车数
 
     return routes
 
