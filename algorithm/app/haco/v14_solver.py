@@ -1,4 +1,4 @@
-"""HACO-CPS 1.4.0 完整求解器（RouteGenome 主链）。
+"""HACO-CPS 1.4.1 完整求解器（RouteGenome 主链）。
 
 把 1.4 组件串成一条可被生产 API 请求进入的主搜索链：
 
@@ -13,7 +13,7 @@
       → EliteArchive(保存/多样性/采样参与重建)
       → Best RouteGenome → VehiclePlan → SolveOutcome
 
-模式身份：algorithm_version = "haco-cps-1.4.0"。本模块不做 OR-Tools 兜底伪装；
+模式身份：algorithm_version = "haco-cps-1.4.1"。本模块不做 OR-Tools 兜底伪装；
 真实回落到 OR-Tools 由调用方(app/solver)负责并把版本改成 ortools-1.3.0。
 """
 
@@ -87,7 +87,7 @@ def solve(
     matrix: DistanceMatrix | None = None,
     config: HacoConfig | None = None,
 ) -> SolveOutcome:
-    """HACO-CPS 1.4.0 主入口：与 hybrid_optimizer.solve_hybrid 同形状。"""
+    """HACO-CPS 1.4.1 主入口：与 hybrid_optimizer.solve_hybrid 同形状。"""
     if config is None:
         config = HacoConfig.from_algorithm_config(request.algorithmConfig)
 
