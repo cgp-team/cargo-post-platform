@@ -62,6 +62,10 @@ class PheromoneMatrix:
         """精英强化：全局最优路径额外沉积。"""
         self.deposit(best_sequence, best_cost, weight=elite_weight)
 
+    def deposit_best(self, sequence: list[str], cost: float, elite_weight: float = 2.0) -> None:
+        """精英沉积（别名）。"""
+        self.deposit(sequence, cost, weight=elite_weight)
+
     def initialize_tau0(self, initial_cost: float) -> None:
         """根据初始解成本设置 tau0。"""
         if initial_cost > 0:
@@ -69,3 +73,69 @@ class PheromoneMatrix:
         for i in range(self.n):
             for j in range(self.n):
                 self.tau[i][j] = self.tau0
+
+    def restart(self, ratio: float = 0.5) -> None:
+        """部分重启（防早熟收敛）。"""
+        for i in range(self.n):
+            for j in range(self.n):
+                self.tau[i][j] = self.tau0 * ratio + self.tau[i][j] * (1 - ratio)
+
+    def deposit_multi_vehicle(
+        self,
+        vehicle_sequences: dict[int, list[str]],
+        cost: float,
+        weight: float = 1.0,
+    ) -> None:
+        """多车辆信息素沉积：每辆车独立沉积，禁止跨车边。"""
+        if cost <= 0:
+            return
+
+        for sequence in vehicle_sequences.values():
+            self.deposit(
+                sequence,
+                cost,
+                weight,
+            )
+
+
+def extract_vehicle_task_sequences(
+    routes,
+) -> dict[int, list[str]]:
+    """从 RouteGenome 列表提取每辆车的任务序列。
+
+    每个序列以 "DEPOT" 开头，仅包含 pickup 类型事件的 task_id。
+    对于 SHIPMENT：只包含 PICKUP（不含 DELIVER，避免 PICKUP→DELIVER 虚假边）。
+    对于独立 DELIVERY：包含 DELIVER（它是唯一的事件）。
+    禁止学习 Vehicle1 last task -> Vehicle2 first task。
+    """
+    from .encoding import TaskType
+    from .route_genome import EventType
+
+    result = {}
+
+    for route in routes:
+        sequence = ["DEPOT"]
+
+        for event in route.events:
+            if not event.task_id:
+                continue
+
+            # BOARD (passenger pickup) — always include
+            if event.event_type == EventType.BOARD:
+                sequence.append(event.task_id)
+                continue
+
+            # PICKUP (shipment/delivery pickup) — always include
+            if event.event_type == EventType.PICKUP:
+                sequence.append(event.task_id)
+                continue
+
+            # DELIVER — only include for standalone DELIVERY (not SHIPMENT)
+            if event.event_type == EventType.DELIVER:
+                if event.task_type == TaskType.DELIVERY:
+                    sequence.append(event.task_id)
+                continue
+
+        result[route.vehicle_index] = sequence
+
+    return result

@@ -115,6 +115,42 @@ class RouteGenome:
     def task_count(self) -> int:
         return len(self.placements)
 
+    # ─── RETURN 末位不变量 ───────────────────────────────────
+
+    def _normalize_return_last(self) -> None:
+        """保证 RETURN 恒为最后事件。
+
+        insert_task 允许调用方用 ``delivery_index == len(events)`` 表达"尽可能晚"，
+        该插入会把业务事件追加到 RETURN 之后；本方法把 RETURN 移到末尾，
+        使事件序列恒满足 DEPOT → TASK/PASS → RETURN。
+        """
+        if not self.events:
+            return
+        if self.events[-1].event_type == EventType.RETURN:
+            return
+        for idx, event in enumerate(self.events):
+            if event.event_type == EventType.RETURN:
+                self.events.pop(idx)
+                self.events.append(event)
+                break
+
+    def validate_terminal_return(self) -> tuple[bool, str | None]:
+        """RETURN 必须存在、唯一且为最末事件，其后不得再有任何业务/PASS 事件。
+
+        返回 (ok, reason)；reason ∈ {MISSING_RETURN, DUPLICATE_RETURN, BUSINESS_EVENT_AFTER_RETURN}。
+        """
+        returns = [
+            i for i, e in enumerate(self.events)
+            if e.event_type == EventType.RETURN
+        ]
+        if not returns:
+            return False, "MISSING_RETURN"
+        if len(returns) > 1:
+            return False, "DUPLICATE_RETURN"
+        if returns[0] != len(self.events) - 1:
+            return False, "BUSINESS_EVENT_AFTER_RETURN"
+        return True, None
+
     # ─── insert helpers ────────────────────────────────────────
 
     def insert_after_index(
@@ -190,6 +226,10 @@ class RouteGenome:
                 adjusted_delivery_index,
                 _delivery_event(task),
             )
+
+        # RETURN 恒为最末事件：插入若越过了 RETURN（如 delivery_index==len(events)
+        # 表达"尽可能晚"），把 RETURN 移回末尾，禁止 RETURN 后残留业务事件。
+        self._normalize_return_last()
 
         pickup_pos = self._find_task_event(
             task.task_id,

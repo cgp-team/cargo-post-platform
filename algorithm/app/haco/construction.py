@@ -10,12 +10,15 @@
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .candidate import CandidateInsertion
 from .encoding import TaskBlock, TaskType
 from .feasibility import fast_feasible_insert_state
+from .feasibility_engine import FeasibilityEngine
 from .heuristic import compute_distance, compute_duration
+from .route_genome import EventType, RouteGenome
 from .route_state import RouteState
 
 if TYPE_CHECKING:
@@ -452,3 +455,324 @@ def _compute_insertion_score(task, state, gap_index, station_map, matrix, config
     )
 
     return max(cost, EPSILON)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 1.4.0 新核心：基于 RouteGenome 的候选搜索
+# ═══════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class InsertionCandidate:
+    vehicle_index: int
+    pickup_index: int
+    delivery_index: int | None
+    delta_distance: float
+    delta_duration: float
+    passenger_impact: float
+    cargo_detour: float
+    heuristic_score: float
+
+
+def generate_insertion_candidates(
+    task: TaskBlock,
+    routes: list[RouteGenome],
+    tasks_by_id: dict[str, TaskBlock],
+    feasibility_engine: FeasibilityEngine,
+    station_map: dict,
+    matrix,
+    passenger_capacities: dict[int, int],
+    cargo_capacities: dict[int, int],
+    initial_passenger_loads: dict[int, int],
+    initial_cargo_loads: dict[int, int],
+    candidate_size: int,
+) -> list[InsertionCandidate]:
+    """为 task 生成所有可行插入候选，按 heuristic_score 排序截断。"""
+    from .evaluator import evaluate_route_genome
+
+    candidates = []
+
+    for route in routes:
+
+        event_count = len(route.events)
+
+        if task.task_type in (
+            TaskType.PASSENGER,
+            TaskType.SHIPMENT,
+        ):
+
+            for pickup_index in range(
+                1,
+                event_count,
+            ):
+                for delivery_index in range(
+                    pickup_index + 1,
+                    event_count + 1,
+                ):
+
+                    candidate_route = route.copy()
+
+                    try:
+                        candidate_route.insert_task(
+                            task,
+                            pickup_index,
+                            delivery_index,
+                        )
+                    except (
+                        ValueError,
+                        IndexError,
+                    ):
+                        continue
+
+                    result = feasibility_engine.check(
+                        candidate_route,
+                        tasks_by_id
+                        | {task.task_id: task},
+                        passenger_capacities[
+                            route.vehicle_index
+                        ],
+                        cargo_capacities[
+                            route.vehicle_index
+                        ],
+                        initial_passenger_loads[
+                            route.vehicle_index
+                        ],
+                        initial_cargo_loads[
+                            route.vehicle_index
+                        ],
+                        station_map=station_map,
+                        matrix=matrix,
+                    )
+
+                    if not result.feasible:
+                        continue
+
+                    metrics = evaluate_route_genome(
+                        candidate_route,
+                        tasks_by_id
+                        | {task.task_id: task},
+                        station_map,
+                        matrix,
+                    )
+
+                    candidates.append(
+                        InsertionCandidate(
+                            vehicle_index=route.vehicle_index,
+                            pickup_index=pickup_index,
+                            delivery_index=delivery_index,
+                            delta_distance=metrics[
+                                "distance"
+                            ],
+                            delta_duration=metrics[
+                                "duration"
+                            ],
+                            passenger_impact=metrics[
+                                "passenger_impact"
+                            ],
+                            cargo_detour=metrics[
+                                "cargo_detour"
+                            ],
+                            heuristic_score=(
+                                metrics["distance"]
+                                + metrics[
+                                    "passenger_impact"
+                                ] * 0.01
+                                + metrics[
+                                    "cargo_detour"
+                                ] * 10.0
+                            ),
+                        )
+                    )
+
+        else:
+
+            for pickup_index in range(
+                1,
+                event_count,
+            ):
+
+                candidate_route = route.copy()
+
+                try:
+                    candidate_route.insert_task(
+                        task,
+                        pickup_index,
+                        None,
+                    )
+                except (
+                    ValueError,
+                    IndexError,
+                ):
+                    continue
+
+                result = feasibility_engine.check(
+                    candidate_route,
+                    tasks_by_id
+                    | {task.task_id: task},
+                    passenger_capacities[
+                        route.vehicle_index
+                    ],
+                    cargo_capacities[
+                        route.vehicle_index
+                    ],
+                    initial_passenger_loads[
+                        route.vehicle_index
+                    ],
+                    initial_cargo_loads[
+                        route.vehicle_index
+                    ],
+                    station_map=station_map,
+                    matrix=matrix,
+                )
+
+                if not result.feasible:
+                    continue
+
+                metrics = evaluate_route_genome(
+                    candidate_route,
+                    tasks_by_id
+                    | {task.task_id: task},
+                    station_map,
+                    matrix,
+                )
+
+                candidates.append(
+                    InsertionCandidate(
+                        vehicle_index=route.vehicle_index,
+                        pickup_index=pickup_index,
+                        delivery_index=None,
+                        delta_distance=metrics[
+                            "distance"
+                        ],
+                        delta_duration=metrics[
+                            "duration"
+                        ],
+                        passenger_impact=metrics[
+                            "passenger_impact"
+                        ],
+                        cargo_detour=metrics[
+                            "cargo_detour"
+                        ],
+                        heuristic_score=(
+                            metrics["distance"]
+                            + metrics[
+                                "passenger_impact"
+                            ] * 0.01
+                            + metrics[
+                                "cargo_detour"
+                            ] * 10.0
+                        ),
+                    )
+                )
+
+    candidates.sort(
+        key=lambda x: x.heuristic_score
+    )
+
+    return candidates[:max(1, candidate_size)]
+
+
+def construct_ant_solution_v14(
+    tasks: list[TaskBlock],
+    routes: list[RouteGenome],
+    tasks_by_id: dict[str, TaskBlock],
+    pheromone: PheromoneMatrix,
+    feasibility_engine: FeasibilityEngine,
+    station_map: dict,
+    matrix,
+    passenger_capacities: dict[int, int],
+    cargo_capacities: dict[int, int],
+    initial_passenger_loads: dict[int, int],
+    initial_cargo_loads: dict[int, int],
+    config: HacoConfig,
+    rng: random.Random,
+    alpha: float = 1.0,
+    beta: float = 3.0,
+    candidate_size: int = 8,
+) -> list[RouteGenome]:
+    """1.4.0 蚂蚁构造：基于 RouteGenome + FeasibilityEngine + alpha/beta。"""
+    working_routes = [r.copy() for r in routes]
+    unassigned = list(tasks)
+    last_task_id = "DEPOT"
+
+    while unassigned:
+        # 选择下一个任务
+        task_scores = []
+        for task in unassigned:
+            tau = pheromone.get(last_task_id, task.task_id)
+            urgency = _task_urgency(task)
+            score = (tau ** alpha) * urgency
+            task_scores.append((task, score))
+
+        if not task_scores:
+            break
+
+        total_score = sum(s for _, s in task_scores)
+        if total_score <= 0:
+            selected_task = rng.choice(unassigned)
+        else:
+            probs = [s / total_score for _, s in task_scores]
+            r = rng.random()
+            cumulative = 0.0
+            selected_task = task_scores[-1][0]
+            for i, prob in enumerate(probs):
+                cumulative += prob
+                if r <= cumulative:
+                    selected_task = task_scores[i][0]
+                    break
+
+        # 生成候选插入
+        candidates = generate_insertion_candidates(
+            selected_task,
+            working_routes,
+            tasks_by_id,
+            feasibility_engine,
+            station_map,
+            matrix,
+            passenger_capacities,
+            cargo_capacities,
+            initial_passenger_loads,
+            initial_cargo_loads,
+            candidate_size,
+        )
+
+        if not candidates:
+            unassigned.remove(selected_task)
+            continue
+
+        # 轮盘赌选择
+        if len(candidates) == 1:
+            selected = candidates[0]
+        else:
+            probs = []
+            for cand in candidates:
+                tau_task = pheromone.get(last_task_id, selected_task.task_id)
+                eta = cand.heuristic_score
+                prob = (tau_task ** alpha) * ((1.0 / (eta + EPSILON)) ** beta)
+                probs.append(prob)
+
+            total = sum(probs)
+            if total <= 0:
+                selected = rng.choice(candidates)
+            else:
+                probs = [p / total for p in probs]
+                r = rng.random()
+                cumulative = 0.0
+                selected = candidates[-1]
+                for i, prob in enumerate(probs):
+                    cumulative += prob
+                    if r <= cumulative:
+                        selected = candidates[i]
+                        break
+
+        # 执行插入
+        target_route = working_routes[selected.vehicle_index]
+        target_route.insert_task(
+            selected_task,
+            selected.pickup_index,
+            selected.delivery_index,
+        )
+        unassigned.remove(selected_task)
+        last_task_id = selected_task.task_id
+
+    return working_routes

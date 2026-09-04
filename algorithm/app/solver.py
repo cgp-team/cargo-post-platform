@@ -1,12 +1,15 @@
-"""统一求解入口：根据 algorithmMode 调度 HACO-CPS 或 OR-Tools Baseline。
+"""统一求解入口：根据 algorithmMode 调度 HACO-CPS 1.4.0 或 OR-Tools Baseline。
 
-默认模式：HACO
-Fallback：HACO 失败/超时时回退到 OR-Tools baseline（在 warnings 中标注）
+版本：
+- BASELINE: ortools-1.3.0
+- HACO:     haco-cps-1.4.0（RouteGenome 主链：Construction → FeasibilityEngine →
+            ObjectiveVector → Pheromone → Local Search → ALNS → Archive）
+- HYBRID:   HACO 1.4 + OR-Tools portfolio（两个求解器都跑，选更优解）
 
-算法版本：
-- HACO 1.1: haco-cps-1.1.0 (真正路线构造)
-- HACO 1.0: haco-cps-1.0.0 (OR-Tools 驱动)
-- Baseline: ortools-1.3.0
+fallback 身份规则：
+- 只有真回落 OR-Tools 的结果才允许标 ortools-1.3.0；
+- 禁止把 OR-Tools 结果伪装成任何 haco-cps 版本；
+- HACO 模式本身不静默回落：无解/异常就返回 infeasible（不掩盖）。
 """
 
 from __future__ import annotations
@@ -21,65 +24,95 @@ logger = logging.getLogger(__name__)
 
 # 版本常量
 BASELINE_ALGORITHM_VERSION = "ortools-1.3.0"
-HACO_1_0_VERSION = "haco-cps-1.0.0"
-HACO_1_1_VERSION = "haco-cps-1.1.0"
-HACO_1_2_VERSION = "haco-cps-1.2.0"
-ALGORITHM_VERSION = "haco-cps-1.3.0"
+HACO_1_3_VERSION = "haco-cps-1.3.0"
+HACO_1_4_VERSION = "haco-cps-1.4.0"
+ALGORITHM_VERSION = HACO_1_4_VERSION  # 默认（HACO）
+PARAMETER_VERSION = "haco-cps-default-v1.4"
 
 
 @dataclass
 class SolveOutcome:
-    status: str  # "feasible" | "infeasible"
+    status: str
     reason_code: str | None = None
     vehicle_plans: list[VehiclePlan] = field(default_factory=list)
     total_distance: float = 0.0
     algorithm_version: str = ALGORITHM_VERSION
-    parameter_version: str = "haco-cps-default-v1"
+    parameter_version: str = PARAMETER_VERSION
     warnings: list[str] = field(default_factory=list)
+    iteration_stats: list[dict] = field(default_factory=list)
 
 
 def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:
-    """统一求解入口。
-
-    根据 request.algorithmConfig.algorithmMode 调度：
-    - HACO (默认): HACO-CPS 元启发式
-    - BASELINE: OR-Tools PATH_CHEAPEST_ARC
-    - HYBRID: HACO + OR-Tools refinement
-
-    HACO 失败时自动 fallback 到 baseline，并在 warnings 中标注。
-    """
+    """统一求解入口：按 mode 分流，不再把 HACO/HYBRID 折叠。"""
     mode = getattr(request.algorithmConfig, "algorithmMode", AlgorithmMode.HACO)
 
     if mode == AlgorithmMode.BASELINE:
         return _solve_baseline(request, matrix)
 
-    # 默认 HACO 模式
+    if mode == AlgorithmMode.HACO:
+        return _solve_haco(request, matrix)
+
+    # HYBRID：HACO 1.4 + OR-Tools portfolio
+    return _solve_hybrid(request, matrix)
+
+
+def _solve_haco(
+    request: PlanRequest,
+    matrix: DistanceMatrix | None = None,
+) -> SolveOutcome:
+    """HACO-CPS 1.4.0。不静默回落 OR-Tools：失败即如实返回 infeasible。"""
     try:
         from .haco.config import HacoConfig
-        from .haco.solver import solve_haco
+        from .haco.v14_solver import solve as solve_v14
 
         config = HacoConfig.from_algorithm_config(request.algorithmConfig)
-        result = solve_haco(request, matrix, config)
+        return solve_v14(request, matrix, config)
 
-        if result.status == "feasible":
-            return result
+    except Exception as e:  # noqa: BLE001
+        logger.error("HACO-CPS 1.4.0 failed with exception: %s", e, exc_info=True)
+        return SolveOutcome(
+            status="infeasible",
+            reason_code="INTERNAL_ERROR",
+            algorithm_version=HACO_1_4_VERSION,
+            parameter_version="haco-cps-fallback-v1.4",
+            warnings=["HACO_ERROR: " + type(e).__name__],
+        )
 
-        # HACO 无解，尝试 fallback
-        logger.warning("HACO returned %s (%s), falling back to baseline", result.status, result.reason_code)
-        baseline = _solve_baseline(request, matrix)
-        baseline.warnings = list(result.warnings) + ["HACO_FALLBACK_TO_BASELINE"]
-        baseline.algorithm_version = ALGORITHM_VERSION
-        baseline.parameter_version = "haco-cps-fallback-v1"
+
+def _solve_hybrid(
+    request: PlanRequest,
+    matrix: DistanceMatrix | None = None,
+) -> SolveOutcome:
+    """HYBRID：同时跑 HACO-1.4 与 OR-Tools baseline，取更优者（portfolio）。
+
+    排序键：(feasible, 用车辆数, total_distance)。选中的是谁就标谁的版本，
+    绝不把 baseline 结果标成 haco 版本。
+    """
+    haco = _solve_haco(request, matrix)
+    baseline = _solve_baseline(request, matrix)
+
+    def _rank(o: SolveOutcome) -> tuple:
+        if o.status != "feasible":
+            return (1, float("inf"), float("inf"))
+        return (0, len(o.vehicle_plans), o.total_distance)
+
+    if _rank(baseline) < _rank(haco):
+        # baseline 严格更优 → 返回 baseline，如实标 ortools-1.3.0
+        logger.info("HYBRID: baseline chosen over HACO-1.4")
+        baseline.warnings = list(haco.warnings or []) + list(baseline.warnings or []) + [
+            "HYBRID_PORTFOLIO_CHOSE_BASELINE"
+        ]
         return baseline
 
-    except Exception as e:
-        # HACO 异常，fallback 到 baseline
-        logger.error("HACO failed with exception: %s, falling back to baseline", e)
-        baseline = _solve_baseline(request, matrix)
-        baseline.warnings = ["HACO_FALLBACK_TO_BASELINE", f"HACO_ERROR: {type(e).__name__}"]
-        baseline.algorithm_version = ALGORITHM_VERSION
-        baseline.parameter_version = "haco-cps-fallback-v1"
+    if haco.status != "feasible" and baseline.status == "feasible":
+        # HACO 无解、baseline 有解 → 采用 baseline（HACO 失败回落，如实标注）
+        baseline.warnings = list(haco.warnings or []) + list(baseline.warnings or []) + [
+            "HACO_FALLBACK_TO_BASELINE"
+        ]
         return baseline
+
+    # HACO 更优或打平 → 返回 HACO 结果（haco-cps-1.4.0）
+    return haco
 
 
 def _solve_baseline(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:
