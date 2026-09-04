@@ -516,6 +516,9 @@ def generate_insertion_candidates(
         capacity_risk: float
 
     cheap_slots: list[_CheapSlot] = []
+    # For paired tasks: group by (vehicle, pickup_index) to ensure diversity
+    # Key: (vehicle_index, pickup_index), Value: list of _CheapSlot
+    grouped_by_pickup: dict[tuple[int, int], list[_CheapSlot]] = {}
     _check_count = 0
 
     pickup_station = station_map.get(task.pickup_station)
@@ -551,34 +554,70 @@ def generate_insertion_candidates(
 
         if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
             for pickup_index in range(1, event_count):
+                # cheap distance for the pickup insertion point
+                from_station = station_map.get(route.events[pickup_index - 1].station_id)
+                after_pickup = station_map.get(route.events[min(pickup_index, event_count - 1)].station_id)
+
                 for delivery_index in range(pickup_index + 1, event_count + 1):
                     _check_count += 1
                     if _check_count % 32 == 0 and deadline is not None and deadline.expired():
                         break
 
-                    # cheap distance estimate
-                    from_station = station_map.get(route.events[pickup_index - 1].station_id)
-                    to_station = station_map.get(route.events[min(pickup_index, event_count - 1)].station_id)
+                    # cheap distance estimate: incremental detour for inserting
+                    # pickup at pickup_index and delivery at delivery_index.
+                    # pickup cost: from_station → pickup_station → after_pickup
+                    # delivery cost: before_delivery → delivery_station → after_delivery
                     dd = 0.0
                     dur = 0.0
-                    if from_station and pickup_station and delivery_station and to_station:
-                        d_orig = compute_distance(from_station, to_station, matrix)
-                        d_new = (
+                    if from_station and pickup_station and delivery_station and after_pickup:
+                        # pickup detour
+                        d_orig_pickup = compute_distance(from_station, after_pickup, matrix)
+                        d_new_pickup = (
                             compute_distance(from_station, pickup_station, matrix)
-                            + compute_distance(pickup_station, delivery_station, matrix)
-                            + compute_distance(delivery_station, to_station, matrix)
+                            + compute_distance(pickup_station, after_pickup, matrix)
                         )
-                        dd = max(0.0, d_new - d_orig)
-                        t_orig = compute_duration(from_station, to_station, matrix)
-                        t_new = (
+                        dd_pickup = max(0.0, d_new_pickup - d_orig_pickup)
+
+                        # delivery detour
+                        if delivery_index <= event_count:
+                            before_del = station_map.get(route.events[delivery_index - 1].station_id)
+                            after_del = station_map.get(route.events[min(delivery_index, event_count - 1)].station_id)
+                        else:
+                            before_del = after_pickup
+                            after_del = station_map.get(route.depot_station)
+
+                        dd_delivery = 0.0
+                        if before_del and after_del:
+                            d_orig_del = compute_distance(before_del, after_del, matrix)
+                            d_new_del = (
+                                compute_distance(before_del, delivery_station, matrix)
+                                + compute_distance(delivery_station, after_del, matrix)
+                            )
+                            dd_delivery = max(0.0, d_new_del - d_orig_del)
+
+                        dd = dd_pickup + dd_delivery
+
+                        # duration estimate (same structure)
+                        t_orig_pickup = compute_duration(from_station, after_pickup, matrix)
+                        t_new_pickup = (
                             compute_duration(from_station, pickup_station, matrix)
-                            + compute_duration(pickup_station, delivery_station, matrix)
-                            + compute_duration(delivery_station, to_station, matrix)
+                            + compute_duration(pickup_station, after_pickup, matrix)
                         )
-                        dur = max(0.0, t_new - t_orig)
+                        dur_pickup = max(0.0, t_new_pickup - t_orig_pickup)
+
+                        dur_delivery = 0.0
+                        if before_del and after_del:
+                            t_orig_del = compute_duration(before_del, after_del, matrix)
+                            t_new_del = (
+                                compute_duration(before_del, delivery_station, matrix)
+                                + compute_duration(delivery_station, after_del, matrix)
+                            )
+                            dur_delivery = max(0.0, t_new_del - t_orig_del)
+
+                        dur = dur_pickup + dur_delivery
 
                     cheap_score = dd + skel_penalty * 10.0 + cap_risk * 50.0
-                    cheap_slots.append(_CheapSlot(
+                    slot = _CheapSlot(
                         vehicle_index=route.vehicle_index,
                         pickup_index=pickup_index,
                         delivery_index=delivery_index,
@@ -587,7 +626,11 @@ def generate_insertion_candidates(
                         delta_duration=dur,
                         skeleton_penalty=skel_penalty,
                         capacity_risk=cap_risk,
-                    ))
+                    )
+                    cheap_slots.append(slot)
+                    grouped_by_pickup.setdefault(
+                        (route.vehicle_index, pickup_index), []
+                    ).append(slot)
                 if _check_count % 32 == 0 and deadline is not None and deadline.expired():
                     break
         else:
@@ -626,10 +669,33 @@ def generate_insertion_candidates(
                     capacity_risk=cap_risk,
                 ))
 
-    # sort by cheap_score and keep top pool
-    cheap_slots.sort(key=lambda s: s.cheap_score)
-    pool_size = max(candidate_size * 4, 16)
-    top_pool = cheap_slots[:pool_size]
+    # ─── Stage A truncation: per-pickup diversity + global pool ───
+    pool_size = max(candidate_size * 8, 32)
+
+    if grouped_by_pickup:
+        # Paired task: ensure each pickup_index keeps at least K best delivery positions.
+        # The cheap_score is an approximation; keeping more per pickup ensures the truly
+        # best delivery position survives Stage A even when cheap_score is inaccurate.
+        per_pickup_quota = max(4, candidate_size)
+        protected: list[_CheapSlot] = []
+        protected_set: set[tuple[int, int, int | None]] = set()
+
+        for pickup_key, slots in grouped_by_pickup.items():
+            slots.sort(key=lambda s: s.cheap_score)
+            for s in slots[:per_pickup_quota]:
+                protected.append(s)
+                protected_set.add((s.vehicle_index, s.pickup_index, s.delivery_index))
+
+        # Remaining slots (not protected)
+        remaining = [s for s in cheap_slots if (s.vehicle_index, s.pickup_index, s.delivery_index) not in protected_set]
+        remaining.sort(key=lambda s: s.cheap_score)
+
+        # Combine: protected first (diversity), then remaining by cheap_score
+        top_pool = (protected + remaining)[:pool_size]
+    else:
+        # Single-event task: simple sort and truncate
+        cheap_slots.sort(key=lambda s: s.cheap_score)
+        top_pool = cheap_slots[:pool_size]
 
     # ─── Stage B: full FeasibilityEngine + ObjectiveVector ──────
     candidates: list[InsertionCandidate] = []

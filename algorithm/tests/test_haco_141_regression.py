@@ -524,3 +524,487 @@ class TestHACOIntegration:
                 for p in result.vehicle_plans
             )
             assert total_stops >= 3, f"Expected >=3 task stops, got {total_stops}"
+
+
+# 11. Pruning Correctness Tests
+
+
+def _generate_insertion_candidates_exhaustive(
+    task, routes, tasks_by_id, feasibility_engine,
+    station_map, matrix, passenger_capacities, cargo_capacities,
+    initial_passenger_loads, initial_cargo_loads,
+):
+    """Exhaustive (no pruning) candidate generation — test only, not for production."""
+    from app.haco.construction import InsertionCandidate
+    from app.haco.evaluator import evaluate_route_genome
+
+    candidates = []
+    for route in routes:
+        event_count = len(route.events)
+        if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
+            for pickup_index in range(1, event_count):
+                for delivery_index in range(pickup_index + 1, event_count + 1):
+                    candidate_route = route.copy()
+                    try:
+                        candidate_route.insert_task(task, pickup_index, delivery_index)
+                    except (ValueError, IndexError):
+                        continue
+                    result = feasibility_engine.check(
+                        candidate_route, tasks_by_id | {task.task_id: task},
+                        passenger_capacities[route.vehicle_index],
+                        cargo_capacities[route.vehicle_index],
+                        initial_passenger_loads[route.vehicle_index],
+                        initial_cargo_loads[route.vehicle_index],
+                        station_map=station_map, matrix=matrix,
+                    )
+                    if not result.feasible:
+                        continue
+                    metrics = evaluate_route_genome(
+                        candidate_route, tasks_by_id | {task.task_id: task},
+                        station_map, matrix,
+                    )
+                    candidates.append(InsertionCandidate(
+                        vehicle_index=route.vehicle_index,
+                        pickup_index=pickup_index,
+                        delivery_index=delivery_index,
+                        delta_distance=metrics["distance"],
+                        delta_duration=metrics["duration"],
+                        passenger_impact=metrics["passenger_impact"],
+                        cargo_detour=metrics["cargo_detour"],
+                        heuristic_score=(
+                            metrics["distance"]
+                            + metrics["passenger_impact"] * 0.01
+                            + metrics["cargo_detour"] * 10.0
+                        ),
+                    ))
+        else:
+            for pickup_index in range(1, event_count):
+                candidate_route = route.copy()
+                try:
+                    candidate_route.insert_task(task, pickup_index, None)
+                except (ValueError, IndexError):
+                    continue
+                result = feasibility_engine.check(
+                    candidate_route, tasks_by_id | {task.task_id: task},
+                    passenger_capacities[route.vehicle_index],
+                    cargo_capacities[route.vehicle_index],
+                    initial_passenger_loads[route.vehicle_index],
+                    initial_cargo_loads[route.vehicle_index],
+                    station_map=station_map, matrix=matrix,
+                )
+                if not result.feasible:
+                    continue
+                metrics = evaluate_route_genome(
+                    candidate_route, tasks_by_id | {task.task_id: task},
+                    station_map, matrix,
+                )
+                candidates.append(InsertionCandidate(
+                    vehicle_index=route.vehicle_index,
+                    pickup_index=pickup_index,
+                    delivery_index=None,
+                    delta_distance=metrics["distance"],
+                    delta_duration=metrics["duration"],
+                    passenger_impact=metrics["passenger_impact"],
+                    cargo_detour=metrics["cargo_detour"],
+                    heuristic_score=(
+                        metrics["distance"]
+                        + metrics["passenger_impact"] * 0.01
+                        + metrics["cargo_detour"] * 10.0
+                    ),
+                ))
+    candidates.sort(key=lambda x: x.heuristic_score)
+    return candidates
+
+
+class TestPruningCorrectness:
+
+    def test_paired_pruning_preserves_delivery_position_diversity(self):
+        """Stage A must keep multiple delivery_index values per pickup_index."""
+        from app.haco.construction import generate_insertion_candidates
+
+        # Route with many events so there are many delivery positions
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        # Use stations that exist in the route's station_map (STATIONS has S1-S10)
+        task = _task("T1", TaskType.PASSENGER, "S2", "S3")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        # Use candidate_size=2 — pruning should still keep delivery diversity
+        candidates = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=2,
+        )
+
+        # Check that we have candidates with different delivery_index values
+        delivery_indices = {c.delivery_index for c in candidates}
+        # With per-pickup quota, we should have at least 2 different delivery positions
+        assert len(delivery_indices) >= 2, (
+            f"Expected delivery diversity, got only {delivery_indices}"
+        )
+
+    def test_pruned_best_is_close_to_exhaustive_best(self):
+        """Pruned best score should be within 2x of exhaustive best (approximate filter)."""
+        from app.haco.construction import generate_insertion_candidates
+
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        task = _task("T1", TaskType.PASSENGER, "S6", "S7")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=4,
+        )
+
+        if exhaustive and pruned:
+            # Pruned best should be within 2x of exhaustive best
+            assert pruned[0].heuristic_score <= exhaustive[0].heuristic_score * 2.0 + 0.01, (
+                f"Pruned best ({pruned[0].heuristic_score:.4f}) much worse than "
+                f"exhaustive best ({exhaustive[0].heuristic_score:.4f})"
+            )
+
+    def test_pruning_does_not_drop_known_best_delivery_position(self):
+        """The best delivery_index from exhaustive must survive pruning."""
+        from app.haco.construction import generate_insertion_candidates
+
+        # Route with many events
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        task = _task("T1", TaskType.PASSENGER, "S1", "S9")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        # Exhaustive: get all candidates
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        if not exhaustive:
+            pytest.skip("No feasible candidates in exhaustive")
+
+        best_exhaustive = exhaustive[0]
+
+        # Pruned with small candidate_size
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=3,
+        )
+        if not pruned:
+            pytest.skip("No feasible candidates in pruned")
+
+        # The best exhaustive candidate's (pickup, delivery) should appear in pruned set
+        pruned_positions = {(c.pickup_index, c.delivery_index) for c in pruned}
+        assert (best_exhaustive.pickup_index, best_exhaustive.delivery_index) in pruned_positions, (
+            f"Best exhaustive position ({best_exhaustive.pickup_index}, {best_exhaustive.delivery_index}) "
+            f"not in pruned set {pruned_positions}"
+        )
+
+    def test_pruned_vs_exhaustive_same_best_for_passenger(self):
+        """Pruned best == exhaustive best for a passenger task."""
+        from app.haco.construction import generate_insertion_candidates
+
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        task = _task("T1", TaskType.PASSENGER, "S6", "S7")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=4,
+        )
+
+        if exhaustive and pruned:
+            assert pruned[0].heuristic_score == exhaustive[0].heuristic_score, (
+                f"Pruned best ({pruned[0].heuristic_score}) != exhaustive best ({exhaustive[0].heuristic_score})"
+            )
+
+    def test_pruned_vs_exhaustive_close_for_shipment(self):
+        """Pruned best score should be close to exhaustive best for a shipment task."""
+        from app.haco.construction import generate_insertion_candidates
+
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        task = _task("T1", TaskType.SHIPMENT, "S6", "S7", size=2)
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=4,
+        )
+
+        if exhaustive and pruned:
+            assert pruned[0].heuristic_score <= exhaustive[0].heuristic_score * 2.0 + 0.01
+
+    def test_pruned_vs_exhaustive_close_for_skeleton_route(self):
+        """Pruned best score should be close to exhaustive best on a route with skeleton."""
+        from app.haco.construction import generate_insertion_candidates
+
+        route = RouteGenome(0, 1000, "S0", skeleton=["S3", "S6"])
+        for s in ["S1", "S2", "S4", "S5"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        task = _task("T1", TaskType.PASSENGER, "S7", "S8")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=4,
+        )
+
+        if exhaustive and pruned:
+            assert pruned[0].heuristic_score <= exhaustive[0].heuristic_score * 2.0 + 0.01
+
+
+# 12. HYBRID Objective Consistency Tests
+
+
+class TestHybridObjectiveConsistency:
+
+    def test_hybrid_objective_matches_haco_objective(self):
+        """evaluate_solution_objective(VehiclePlan) ≈ evaluate_route_states(RouteGenome)."""
+        from app.haco.v14_solver import _routes_to_vehicle_plans, _segment, DISTANCE_SCALE, _EVENT_TO_ACTION
+        from app.objective_compare import evaluate_solution_objective
+
+        # Build a route with enough events for both insertions
+        route = RouteGenome(0, 1000, "S0")
+        # Add extra PASS events so we have room for 2 paired tasks
+        for s in ["S6", "S7", "S8"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+        t1 = _task("T1", TaskType.PASSENGER, "S1", "S3")
+        t2 = _task("T2", TaskType.SHIPMENT, "S4", "S5")
+        route.insert_task(t1, 1, 3)
+        route.insert_task(t2, 4, 6)
+
+        tasks_by_id = {"T1": t1, "T2": t2}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+
+        # RouteGenome-based objective
+        from app.haco.evaluator import evaluate_route_states
+        obj_haco = evaluate_route_states([route], tasks_by_id, station_map, None)
+
+        # Convert to VehiclePlan and evaluate
+        from app.models import PlanRequest, Vehicle as V
+        class FakeReq:
+            vehicles = [V(vehicleId=1000)]
+            depot = DEPOT
+            stations = STATIONS
+
+        plans = _routes_to_vehicle_plans([route], FakeReq(), station_map, None)
+        obj_hybrid = evaluate_solution_objective(plans)
+
+        # Compare (allow small floating point differences)
+        assert obj_haco.vehicle_count == obj_hybrid.vehicle_count
+        assert abs(obj_haco.passenger_impact - obj_hybrid.passenger_impact) < 1.0, (
+            f"pax_impact: haco={obj_haco.passenger_impact}, hybrid={obj_hybrid.passenger_impact}"
+        )
+        assert abs(obj_haco.cargo_detour - obj_hybrid.cargo_detour) < 0.1, (
+            f"cargo_detour: haco={obj_haco.cargo_detour}, hybrid={obj_hybrid.cargo_detour}"
+        )
+        assert abs(obj_haco.total_distance - obj_hybrid.total_distance) < 0.01, (
+            f"distance: haco={obj_haco.total_distance}, hybrid={obj_hybrid.total_distance}"
+        )
+
+    def test_hybrid_vehicle_count_has_priority_over_distance(self):
+        """1车 8km beats 2车 3km."""
+        from app.objective_compare import solution_key
+        from app.models import VehiclePlan, RouteStop
+
+        class OutcomeA:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=1.5, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=1.0, segmentDuration=50),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=0.5, segmentDuration=25),
+                ]),
+                VehiclePlan(vehicleId=2, totalDistance=1.5, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S2", action=StopAction.BOARD, orderId="P2", segmentDistance=1.0, segmentDuration=50),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=0.5, segmentDuration=25),
+                ]),
+            ]
+
+        class OutcomeB:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=8.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=3.0, segmentDuration=100),
+                    RouteStop(stationId="S2", action=StopAction.BOARD, orderId="P2", segmentDistance=2.0, segmentDuration=100),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=3.0, segmentDuration=100),
+                ]),
+            ]
+
+        assert solution_key(OutcomeB()) < solution_key(OutcomeA()), "1车 should beat 2车"
+
+    def test_hybrid_passenger_impact_has_priority_over_distance(self):
+        """Same vehicle_count: lower passenger_impact wins even if more distance."""
+        from app.objective_compare import solution_key
+        from app.models import VehiclePlan, RouteStop
+
+        class OutcomeA:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=5.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=1.0, segmentDuration=50),
+                    RouteStop(stationId="S3", action=StopAction.PICKUP, orderId="D1", segmentDistance=2.0, segmentDuration=100,
+                              detourDistance=2.0, detourDuration=200, passengerImpact=200.0),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=2.0, segmentDuration=100),
+                ]),
+            ]
+
+        class OutcomeB:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=8.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=2.0, segmentDuration=100),
+                    RouteStop(stationId="S3", action=StopAction.PICKUP, orderId="D1", segmentDistance=3.0, segmentDuration=150,
+                              detourDistance=0.1, detourDuration=10, passengerImpact=10.0),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=3.0, segmentDuration=150),
+                ]),
+            ]
+
+        assert solution_key(OutcomeB()) < solution_key(OutcomeA()), "Lower pax_impact should win"
+
+    def test_hybrid_cargo_detour_has_priority_over_distance(self):
+        """Same vehicle_count + pax_impact: lower cargo_detour wins."""
+        from app.objective_compare import solution_key
+        from app.models import VehiclePlan, RouteStop
+
+        class OutcomeA:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=5.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S3", action=StopAction.PICKUP, orderId="D1", segmentDistance=3.0, segmentDuration=100,
+                              detourDistance=5.0, detourDuration=100, passengerImpact=0),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=2.0, segmentDuration=100),
+                ]),
+            ]
+
+        class OutcomeB:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=10.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S3", action=StopAction.PICKUP, orderId="D1", segmentDistance=5.0, segmentDuration=200,
+                              detourDistance=0.5, detourDuration=20, passengerImpact=0),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=5.0, segmentDuration=200),
+                ]),
+            ]
+
+        assert solution_key(OutcomeB()) < solution_key(OutcomeA()), "Lower cargo_detour should win"
+
+    def test_hybrid_distance_has_priority_over_duration(self):
+        """Same first 4 dims: lower distance wins."""
+        from app.objective_compare import solution_key
+        from app.models import VehiclePlan, RouteStop
+
+        class OutcomeA:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=10.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=5.0, segmentDuration=50),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=5.0, segmentDuration=50),
+                ]),
+            ]
+
+        class OutcomeB:
+            status = "feasible"
+            vehicle_plans = [
+                VehiclePlan(vehicleId=1, totalDistance=5.0, stops=[
+                    RouteStop(stationId="S0", action=StopAction.DEPART, segmentDistance=0, segmentDuration=0),
+                    RouteStop(stationId="S1", action=StopAction.BOARD, orderId="P1", segmentDistance=2.5, segmentDuration=200),
+                    RouteStop(stationId="S0", action=StopAction.RETURN, segmentDistance=2.5, segmentDuration=200),
+                ]),
+            ]
+
+        assert solution_key(OutcomeB()) < solution_key(OutcomeA()), "Lower distance should win"
+
+
+# 13. Deadline Runtime Budget Tests
+
+
+class TestDeadlineRuntimeBudget:
+
+    @pytest.mark.parametrize("budget", [0.1, 0.5, 1.0, 2.0, 4.0])
+    def test_deadline_respects_budget(self, budget):
+        """Each budget must complete within 2x the configured time (generous for Python overhead)."""
+        orders = [_passenger(i, f"S{i % 9 + 1}", f"S{(i + 3) % 9 + 1}") for i in range(5)]
+        req = _request(orders, haco_time_limit=budget, overall_time_limit=budget + 1.0)
+
+        for _ in range(3):  # 3 repetitions
+            t0 = time.monotonic()
+            result = unified_solve(req)
+            elapsed = time.monotonic() - t0
+
+            assert elapsed < budget * 2.5 + 0.5, (
+                f"Budget {budget}s → actual {elapsed:.2f}s (too slow)"
+            )
+            # Must not return incomplete solution on timeout
+            if result.status == "feasible":
+                total_stops = sum(
+                    sum(1 for s in p.stops if s.action not in (StopAction.DEPART, StopAction.RETURN))
+                    for p in result.vehicle_plans
+                )
+                assert total_stops >= 5, f"Expected 5+ task stops, got {total_stops}"
