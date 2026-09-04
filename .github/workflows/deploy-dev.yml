@@ -505,20 +505,23 @@ jobs:
           exit "$RC"
 
       # 生成算法验收报告并上传
+      # 复用前一步 blackbox-output.txt，不再重复执行黑盒测试。
+      # 报告脚本失败必须使 workflow 失败（不允许 || true 或 continue-on-error）。
       - name: Generate algorithm verification report
         if: always()
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           mkdir -p artifacts
-          bash "${GITHUB_WORKSPACE}/deploy/scripts/generate-algorithm-report.sh" http://127.0.0.1:18081 || true
+          bash "${GITHUB_WORKSPACE}/deploy/scripts/generate-algorithm-report.sh" \
+            http://127.0.0.1:18081 \
+            "${GITHUB_WORKSPACE}/artifacts/blackbox-output.txt"
 
       - name: Upload algorithm verification report
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: algorithm-verification
           path: |
             artifacts/algorithm-verification.json
             artifacts/blackbox-output.txt
-          if-no-files-found: warn
+          if-no-files-found: error
