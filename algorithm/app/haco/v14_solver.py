@@ -167,11 +167,14 @@ def solve(
         probe_engine = FeasibilityEngine(
             station_map=station_map, matrix=matrix,
         )  # 无 max_duration
+        # Give the diagnostic probe its own limited budget (max 2s),
+        # not the main search deadline, so it can complete diagnosis.
+        probe_deadline = SearchDeadline.from_seconds(min(2.0, deadline.remaining()))
         probe = _cheapest_insertion(
             tasks, templates, tasks_by_id, probe_engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, probe_deadline,
         )
         if probe is not None and _routes_feasible(
             probe, tasks_by_id, probe_engine,

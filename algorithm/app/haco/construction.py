@@ -670,29 +670,33 @@ def generate_insertion_candidates(
                 ))
 
     # ─── Stage A truncation: per-pickup diversity + global pool ───
-    # Cap pool_size to prevent runaway evaluation when candidate_size is very large
-    # (e.g. candidate_size=10000 means "no truncation" in _cheapest_insertion)
+    # Pool size is capped to bound Stage B FeasibilityEngine evaluation cost.
+    # For normal HACO search (candidate_size=8): pool=32, cost=~32 evals/task.
+    # For _cheapest_insertion (candidate_size=10000): pool=64, cost=~64 evals/task.
+    # With 50 tasks: 50*64=3200 evals, ~1-2s total — fits in 4s budget.
     pool_size = min(max(candidate_size * 4, 16), 64)
 
     if grouped_by_pickup:
-        # Paired task: ensure each pickup_index keeps at least K best delivery positions.
-        # The cheap_score is an approximation; keeping more per pickup ensures the truly
-        # best delivery position survives Stage A even when cheap_score is inaccurate.
-        per_pickup_quota = max(4, candidate_size)
+        # Paired task: per-pickup diversity + global cheap_score ranking.
+        # 1) Sort each group by cheap_score, keep per_pickup_quota best.
+        # 2) Sort the protected set globally by cheap_score (removes traversal-order bias).
+        # 3) Fill remaining pool from unprotected slots sorted by cheap_score.
+        per_pickup_quota = min(max(4, candidate_size), 16)
         protected: list[_CheapSlot] = []
-        protected_set: set[tuple[int, int, int | None]] = set()
 
         for pickup_key, slots in grouped_by_pickup.items():
             slots.sort(key=lambda s: s.cheap_score)
-            for s in slots[:per_pickup_quota]:
-                protected.append(s)
-                protected_set.add((s.vehicle_index, s.pickup_index, s.delivery_index))
+            protected.extend(slots[:per_pickup_quota])
 
-        # Remaining slots (not protected)
+        # CRITICAL: sort protected globally to remove traversal-order bias
+        protected.sort(key=lambda s: s.cheap_score)
+
+        protected_set: set[tuple[int, int, int | None]] = {
+            (s.vehicle_index, s.pickup_index, s.delivery_index) for s in protected
+        }
         remaining = [s for s in cheap_slots if (s.vehicle_index, s.pickup_index, s.delivery_index) not in protected_set]
         remaining.sort(key=lambda s: s.cheap_score)
 
-        # Combine: protected first (diversity), then remaining by cheap_score
         top_pool = (protected + remaining)[:pool_size]
     else:
         # Single-event task: simple sort and truncate

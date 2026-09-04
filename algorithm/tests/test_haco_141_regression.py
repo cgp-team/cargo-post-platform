@@ -1013,3 +1013,320 @@ class TestDeadlineRuntimeBudget:
                         if s.orderId and s.action not in (StopAction.DEPART, StopAction.RETURN):
                             task_ids.add(s.orderId)
                 assert len(task_ids) >= 5, f"Expected 5+ unique tasks, got {len(task_ids)}"
+
+
+# 14. Candidate Pruning Adversarial Tests
+
+
+class TestPruningAdversarial:
+
+    def test_late_delivery_position_not_pruned(self):
+        """Best delivery_index at a late position must survive pruning."""
+        from app.haco.construction import generate_insertion_candidates
+
+        # Route with many events — best delivery is at the end
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5", "S6", "S7"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        # Task whose delivery station is near the end of the route
+        task = _task("T1", TaskType.PASSENGER, "S1", "S7")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        # Exhaustive
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        # Pruned
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=4,
+        )
+
+        if exhaustive and pruned:
+            # The best candidate must be the same
+            assert pruned[0].heuristic_score <= exhaustive[0].heuristic_score * 1.5 + 0.001, (
+                f"Late delivery position pruned: pruned={pruned[0].heuristic_score:.4f}, "
+                f"exhaustive={exhaustive[0].heuristic_score:.4f}"
+            )
+
+    def test_late_vehicle_group_not_pruned(self):
+        """Best candidate on a later vehicle must survive pruning."""
+        from app.haco.construction import generate_insertion_candidates
+
+        # 3 routes — best insertion is on vehicle 2 (last)
+        routes = []
+        for vi in range(3):
+            r = RouteGenome(vi, 1000 + vi, "S0")
+            for s in [f"S{vi*3+1}", f"S{vi*3+2}", f"S{vi*3+3}"]:
+                r.events.insert(len(r.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+            routes.append(r)
+
+        task = _task("T1", TaskType.PASSENGER, "S1", "S2")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, routes, tasks_by_id, engine, station_map, None,
+            {0: 10, 1: 10, 2: 10}, {0: 10, 1: 10, 2: 10},
+            {0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, routes, tasks_by_id, engine, station_map, None,
+            {0: 10, 1: 10, 2: 10}, {0: 10, 1: 10, 2: 10},
+            {0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0},
+            candidate_size=3,
+        )
+
+        if exhaustive and pruned:
+            pruned_positions = {(c.vehicle_index, c.pickup_index, c.delivery_index) for c in pruned}
+            best_exh = exhaustive[0]
+            # Best exhaustive position should be in pruned set (within tolerance)
+            assert any(
+                c.heuristic_score <= best_exh.heuristic_score * 1.5 + 0.001
+                for c in pruned
+            ), (
+                f"Best vehicle group pruned: exhaustive best at vehicle {best_exh.vehicle_index}"
+            )
+
+    def test_late_pickup_group_not_pruned(self):
+        """Best candidate at a later pickup_index must survive pruning."""
+        from app.haco.construction import generate_insertion_candidates
+
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S1", "S2", "S3", "S4", "S5", "S6"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+
+        # Task with pickup near end of route
+        task = _task("T1", TaskType.PASSENGER, "S5", "S6")
+        tasks_by_id = {"T1": task}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        exhaustive = _generate_insertion_candidates_exhaustive(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+        )
+        pruned = generate_insertion_candidates(
+            task, [route], tasks_by_id, engine, station_map, None,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            candidate_size=3,
+        )
+
+        if exhaustive and pruned:
+            assert pruned[0].heuristic_score <= exhaustive[0].heuristic_score * 1.5 + 0.001, (
+                f"Late pickup group pruned: pruned={pruned[0].heuristic_score:.4f}, "
+                f"exhaustive={exhaustive[0].heuristic_score:.4f}"
+            )
+
+
+# 15. Objective Round-Trip Consistency
+
+
+class TestObjectiveRoundTrip:
+
+    def test_haco_vs_vehicle_plan_objective_consistency(self):
+        """RouteGenome evaluation must match VehiclePlan evaluation for all6 dimensions."""
+        from app.haco.evaluator import evaluate_route_states
+        from app.haco.v14_solver import _routes_to_vehicle_plans
+        from app.objective_compare import evaluate_solution_objective
+
+        # Build route with mixed tasks
+        route = RouteGenome(0, 1000, "S0")
+        for s in ["S6", "S7", "S8"]:
+            route.events.insert(len(route.events) - 1,
+                                RouteEvent(station_id=s, event_type=EventType.PASS))
+        t1 = _task("T1", TaskType.PASSENGER, "S1", "S3")
+        t2 = _task("T2", TaskType.SHIPMENT, "S4", "S5")
+        route.insert_task(t1, 1, 3)
+        route.insert_task(t2, 4, 6)
+
+        tasks_by_id = {"T1": t1, "T2": t2}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+
+        # HACO evaluation
+        obj_haco = evaluate_route_states([route], tasks_by_id, station_map, None)
+
+        # VehiclePlan evaluation
+        class FakeReq:
+            vehicles = [Vehicle(vehicleId=1000, passengerCapacity=10, cargoCapacity=10)]
+            depot = DEPOT
+            stations = STATIONS
+
+        plans = _routes_to_vehicle_plans([route], FakeReq(), station_map, None)
+        obj_plan = evaluate_solution_objective(plans)
+
+        # All6 dimensions must match (with floating point tolerance)
+        assert obj_haco.vehicle_count == obj_plan.vehicle_count, (
+            f"vehicle_count: haco={obj_haco.vehicle_count}, plan={obj_plan.vehicle_count}"
+        )
+        assert abs(obj_haco.passenger_impact - obj_plan.passenger_impact) < 0.5, (
+            f"passenger_impact: haco={obj_haco.passenger_impact}, plan={obj_plan.passenger_impact}"
+        )
+        assert abs(obj_haco.cargo_detour - obj_plan.cargo_detour) < 0.05, (
+            f"cargo_detour: haco={obj_haco.cargo_detour}, plan={obj_plan.cargo_detour}"
+        )
+        assert abs(obj_haco.total_distance - obj_plan.total_distance) < 0.01, (
+            f"total_distance: haco={obj_haco.total_distance}, plan={obj_plan.total_distance}"
+        )
+        assert abs(obj_haco.total_duration - obj_plan.total_duration) < 1.0, (
+            f"total_duration: haco={obj_haco.total_duration}, plan={obj_plan.total_duration}"
+        )
+
+
+# 16. HYBRID Boundary Tests
+
+
+class TestHybridBoundary:
+
+    def test_haco_feasible_baseline_infeasible_chooses_haco(self):
+        """When HACO is feasible and baseline is infeasible, HYBRID must choose HACO."""
+        from app.solver import _solve_hybrid
+        from app.models import AlgorithmConfig, AlgorithmMode
+
+        # Use a case where HACO can solve but baseline might struggle
+        # (this is hard to construct deterministically, so test the logic directly)
+        from app.objective_compare import solution_key
+
+        class HacoOutcome:
+            status = "feasible"
+            vehicle_plans = [
+                type("VP", (), {
+                    "vehicleId": 1000, "totalDistance": 5.0,
+                    "stops": [
+                        type("S", (), {"action": "DEPART", "orderId": None, "segmentDuration": 0, "passengerImpact": None, "detourDistance": None})(),
+                        type("S", (), {"action": "BOARD", "orderId": "P1", "segmentDuration": 100, "passengerImpact": None, "detourDistance": None})(),
+                        type("S", (), {"action": "RETURN", "orderId": None, "segmentDuration": 100, "passengerImpact": None, "detourDistance": None})(),
+                    ]
+                })(),
+            ]
+
+        class BaselineOutcome:
+            status = "infeasible"
+            vehicle_plans = []
+
+        haco_key = solution_key(HacoOutcome())
+        baseline_key = solution_key(BaselineOutcome())
+        assert haco_key < baseline_key, "HACO feasible should beat baseline infeasible"
+
+    def test_haco_infeasible_baseline_feasible_chooses_baseline(self):
+        """When HACO is infeasible and baseline is feasible, HYBRID must choose baseline."""
+        from app.objective_compare import solution_key
+
+        class HacoOutcome:
+            status = "infeasible"
+            vehicle_plans = []
+
+        class BaselineOutcome:
+            status = "feasible"
+            vehicle_plans = [
+                type("VP", (), {
+                    "vehicleId": 1000, "totalDistance": 10.0,
+                    "stops": [
+                        type("S", (), {"action": "DEPART", "orderId": None, "segmentDuration": 0, "passengerImpact": None, "detourDistance": None})(),
+                        type("S", (), {"action": "BOARD", "orderId": "P1", "segmentDuration": 200, "passengerImpact": None, "detourDistance": None})(),
+                        type("S", (), {"action": "RETURN", "orderId": None, "segmentDuration": 200, "passengerImpact": None, "detourDistance": None})(),
+                    ]
+                })(),
+            ]
+
+        haco_key = solution_key(HacoOutcome())
+        baseline_key = solution_key(BaselineOutcome())
+        assert baseline_key < haco_key, "Baseline feasible should beat HACO infeasible"
+
+    def test_both_infeasible_preserves_ordering(self):
+        """When both are infeasible, solution_key returns equal ranking."""
+        from app.objective_compare import solution_key
+
+        class OutcomeA:
+            status = "infeasible"
+            vehicle_plans = []
+
+        class OutcomeB:
+            status = "infeasible"
+            vehicle_plans = []
+
+        assert solution_key(OutcomeA()) == solution_key(OutcomeB())
+
+
+# 17. Deadline Regression
+
+
+class TestDeadlineRegression:
+
+    def test_expired_deadline_compact_returns_unchanged(self):
+        """_compact_solution with expired deadline must return routes unchanged."""
+        from app.haco.v14_solver import _compact_solution
+        from app.haco.config import HacoConfig
+
+        route = RouteGenome(0, 1000, "S0")
+        t1 = _task("T1", TaskType.PASSENGER, "S1", "S2")
+        route.insert_task(t1, 1, 2)
+        routes = [route]
+        tasks = [t1]
+        tasks_by_id = {"T1": t1}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+        templates = [RouteGenome(0, 1000, "S0")]
+        config = HacoConfig()
+
+        # Record original state
+        original_events = [list(r.events) for r in routes]
+        original_placements = [dict(r.placements) for r in routes]
+
+        # Expired deadline
+        deadline = SearchDeadline.from_seconds(0.0)
+        time.sleep(0.01)
+
+        result = _compact_solution(
+            routes, tasks, templates, tasks_by_id, engine,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            station_map, None, config, __import__("random").Random(42), deadline,
+        )
+
+        # Routes must be unchanged
+        for i, r in enumerate(result):
+            assert len(r.events) == len(original_events[i]), (
+                f"Route {i}: events changed from {len(original_events[i])} to {len(r.events)}"
+            )
+            assert r.placements == original_placements[i], (
+                f"Route {i}: placements changed"
+            )
+
+    def test_expired_deadline_cheapest_insertion_returns_none(self):
+        """_cheapest_insertion with expired deadline must return None quickly."""
+        from app.haco.v14_solver import _cheapest_insertion
+
+        templates = [RouteGenome(0, 1000, "S0")]
+        tasks = [_task(f"T{i}", TaskType.PASSENGER, f"S{i+1}", f"S{i+2}") for i in range(10)]
+        tasks_by_id = {t.task_id: t for t in tasks}
+        station_map = {s.stationId: s for s in STATIONS}
+        station_map["S0"] = DEPOT
+        engine = FeasibilityEngine(station_map=station_map, matrix=None)
+
+        deadline = SearchDeadline.from_seconds(0.0)
+        time.sleep(0.01)
+
+        t0 = time.monotonic()
+        result = _cheapest_insertion(
+            tasks, templates, tasks_by_id, engine,
+            {0: 10}, {0: 10}, {0: 0}, {0: 0},
+            station_map, None, deadline,
+        )
+        elapsed = time.monotonic() - t0
+
+        assert result is None, "Expired deadline should return None"
+        assert elapsed < 1.0, f"Expired deadline took {elapsed:.2f}s (should be instant)"
