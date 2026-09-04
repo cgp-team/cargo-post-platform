@@ -1,11 +1,9 @@
-"""HACO-CPS 解评估器：基于 RouteState 计算 ObjectiveVector。
+"""HACO-CPS 1.4.0 解评估器：基于 RouteGenome.events 计算真实指标。
 
-直接在 RouteState 上计算：
-- 距离
-- 时间
-- 乘客影响
-- 货物绕行
-- 容量利用率
+核心改进：
+- 直接遍历事件序列，不再依赖 gap 模型
+- cargo_detour 基于实际 detour（via - direct），不再恒为 0
+- passenger_impact 基于实际 detour 秒数 × 当前乘客数
 """
 
 from __future__ import annotations
@@ -14,55 +12,203 @@ from typing import TYPE_CHECKING
 
 from .encoding import ObjectiveVector, TaskType
 from .heuristic import compute_distance, compute_duration
-from .route_state import RouteState
+from .route_genome import EventType, RouteGenome
 
 if TYPE_CHECKING:
     from ..distance import DistanceMatrix
-    from ..models import PlanRequest, Station
+    from ..models import Station
+    from .encoding import TaskBlock
+
+
+def evaluate_route_genome(
+    route: RouteGenome,
+    tasks_by_id: dict[str, TaskBlock],
+    station_map: dict,
+    matrix,
+) -> dict:
+    """基于 RouteGenome.events 计算单车真实指标。
+
+    Returns:
+        dict with keys: distance, duration, passenger_impact, cargo_detour
+    """
+    total_distance = 0.0
+    total_duration = 0.0
+    passenger_impact = 0.0
+    cargo_detour = 0.0
+
+    current_passengers = 0
+
+    events = route.events
+
+    for i in range(1, len(events)):
+
+        previous = events[i - 1]
+        current = events[i]
+
+        from_station = station_map[previous.station_id]
+        to_station = station_map[current.station_id]
+
+        segment_distance = compute_distance(
+            from_station,
+            to_station,
+            matrix,
+        )
+
+        segment_duration = compute_duration(
+            from_station,
+            to_station,
+            matrix,
+        )
+
+        total_distance += segment_distance
+        total_duration += segment_duration
+
+        if current.event_type == EventType.BOARD:
+            current_passengers += 1
+            continue
+
+        if current.event_type == EventType.ALIGHT:
+            current_passengers = max(
+                0,
+                current_passengers - 1,
+            )
+            continue
+
+        if (
+            current.event_type
+            not in (
+                EventType.PICKUP,
+                EventType.DELIVER,
+            )
+        ):
+            continue
+
+        if not current.task_id:
+            continue
+
+        task = tasks_by_id.get(current.task_id)
+        if task is None:
+            continue
+
+        if i + 1 >= len(events):
+            continue
+
+        next_station = station_map[
+            events[i + 1].station_id
+        ]
+
+        direct = compute_distance(
+            from_station,
+            next_station,
+            matrix,
+        )
+
+        via = (
+            compute_distance(
+                from_station,
+                to_station,
+                matrix,
+            )
+            +
+            compute_distance(
+                to_station,
+                next_station,
+                matrix,
+            )
+        )
+
+        detour = max(
+            0.0,
+            via - direct,
+        )
+
+        if task.task_type.value in (
+            "DELIVERY",
+            "PICKUP",
+            "SHIPMENT",
+        ):
+            cargo_detour += detour
+
+            if current_passengers > 0:
+                passenger_impact += (
+                    detour
+                    / 25.0
+                    * 3600.0
+                    * current_passengers
+                )
+
+    return {
+        "distance": total_distance,
+        "duration": total_duration,
+        "passenger_impact": passenger_impact,
+        "cargo_detour": cargo_detour,
+    }
 
 
 def evaluate_route_states(
-    states: list[RouteState],
-    station_map: dict[str, Station],
-    matrix: DistanceMatrix | None,
+    routes: list[RouteGenome],
+    tasks_by_id: dict[str, TaskBlock],
+    station_map: dict,
+    matrix,
 ) -> ObjectiveVector:
-    """评估一组路线状态，返回分层目标向量。"""
-    if not states or all(not s.tasks for s in states):
-        return ObjectiveVector(infeasibility=1.0)
-
-    total_distance = 0.0
-    total_duration = 0.0
-    total_passenger_impact = 0.0
-    total_cargo_detour = 0.0
+    """评估一组 RouteGenome 路线，返回 ObjectiveVector。"""
     used_vehicles = 0
 
-    for state in states:
-        if not state.tasks:
+    total = {
+        "distance": 0.0,
+        "duration": 0.0,
+        "passenger_impact": 0.0,
+        "cargo_detour": 0.0,
+    }
+
+    for route in routes:
+
+        if route.task_count() == 0:
             continue
+
         used_vehicles += 1
 
-        result = _evaluate_single_route(state, station_map, matrix)
-        total_distance += result["distance"]
-        total_duration += result["duration"]
-        total_passenger_impact += result["passenger_impact"]
-        total_cargo_detour += result["cargo_detour"]
+        metrics = evaluate_route_genome(
+            route,
+            tasks_by_id,
+            station_map,
+            matrix,
+        )
+
+        for key in total:
+            total[key] += metrics[key]
 
     return ObjectiveVector(
         infeasibility=0.0,
         vehicle_count=used_vehicles,
-        passenger_impact=total_passenger_impact,
-        cargo_detour=total_cargo_detour,
-        total_distance=round(total_distance, 3),
-        total_duration=round(total_duration, 1),
+        passenger_impact=total[
+            "passenger_impact"
+        ],
+        cargo_detour=total[
+            "cargo_detour"
+        ],
+        total_distance=round(
+            total["distance"],
+            3,
+        ),
+        total_duration=round(
+            total["duration"],
+            1,
+        ),
     )
 
 
-def _evaluate_single_route(
-    state: RouteState,
-    station_map: dict[str, Station],
-    matrix: DistanceMatrix | None,
+# ─── 旧版 RouteState 评估（保留兼容） ────────────────────────
+
+
+def _evaluate_single_route_legacy(
+    state,
+    station_map: dict,
+    matrix,
 ) -> dict:
-    """评估单条路线。"""
+    """旧版单条路线评估（基于 RouteState.gaps）。"""
+    from .route_state import RouteState
+
     depot = station_map.get(state.depot_station)
     if not depot:
         return {"distance": 0, "duration": 0, "passenger_impact": 0, "cargo_detour": 0}
@@ -74,7 +220,6 @@ def _evaluate_single_route(
     current_station = depot
     current_passengers = state.initial_passenger_load
 
-    # 遍历骨架间隙
     for gap in state.gaps:
         gap_tasks = state.get_tasks_in_gap(gap.gap_index)
 
@@ -83,7 +228,6 @@ def _evaluate_single_route(
             if not pickup:
                 continue
 
-            # 到 pickup 站
             d = compute_distance(current_station, pickup, matrix)
             t = compute_duration(current_station, pickup, matrix)
             distance += d
@@ -93,16 +237,15 @@ def _evaluate_single_route(
             if task.task_type == TaskType.PASSENGER:
                 current_passengers += 1
             elif task.task_type in (TaskType.SHIPMENT, TaskType.DELIVERY, TaskType.PICKUP):
-                # 货运绕行
                 delivery = station_map.get(task.delivery_station)
                 if delivery and task.task_type == TaskType.SHIPMENT:
                     direct_d = compute_distance(pickup, delivery, matrix)
-                    cargo_detour += 0  # 在 gap 内不算绕行
+                    detour = max(0.0, compute_distance(current_station, delivery, matrix) - direct_d)
+                    cargo_detour += detour
                     if current_passengers > 0:
-                        detour_seconds = 0  # 无绕行
+                        detour_seconds = detour / 25.0 * 3600.0
                         passenger_impact += detour_seconds * current_passengers
 
-            # 到 delivery 站
             if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
                 delivery = station_map.get(task.delivery_station)
                 if delivery:
@@ -115,7 +258,6 @@ def _evaluate_single_route(
                 if task.task_type == TaskType.PASSENGER:
                     current_passengers -= 1
 
-        # 到骨架站
         to_station = station_map.get(gap.to_station)
         if to_station and gap.to_station != state.depot_station:
             d = compute_distance(current_station, to_station, matrix)
@@ -124,7 +266,6 @@ def _evaluate_single_route(
             duration += t
             current_station = to_station
 
-    # 返回场站
     distance += compute_distance(current_station, depot, matrix)
     duration += compute_duration(current_station, depot, matrix)
 
@@ -136,18 +277,22 @@ def _evaluate_single_route(
     }
 
 
-def compute_route_signature(states: list[RouteState]) -> str:
+def compute_route_signature(routes: list[RouteGenome]) -> str:
     """计算解的签名（用于多样性度量）。"""
     parts = []
-    for state in states:
-        if not state.tasks:
+    for route in routes:
+        if route.task_count() == 0:
             continue
-        task_ids = sorted(t.task_id for t in state.tasks)
-        parts.append(f"V{state.vehicle_index}:{'|'.join(task_ids)}")
+        task_ids = sorted(
+            e.task_id for e in route.events if e.task_id
+        )
+        parts.append(
+            f"V{route.vehicle_index}:{'|'.join(task_ids)}"
+        )
     return ";".join(sorted(parts))
 
 
-def compute_diversity(solutions: list[list[RouteState]]) -> float:
+def compute_diversity(solutions: list[list[RouteGenome]]) -> float:
     """计算解集合的多样性（唯一签名比例）。"""
     if not solutions:
         return 0.0
