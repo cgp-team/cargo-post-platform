@@ -1,8 +1,8 @@
-"""统一求解入口：根据 algorithmMode 调度 HACO-CPS 1.4.0 或 OR-Tools Baseline。
+"""统一求解入口：根据 algorithmMode 调度 HACO-CPS 1.4.1 或 OR-Tools Baseline。
 
 版本：
 - BASELINE: ortools-1.3.0
-- HACO:     haco-cps-1.4.0（RouteGenome 主链：Construction → FeasibilityEngine →
+- HACO:     haco-cps-1.4.1（RouteGenome 主链：Construction → FeasibilityEngine →
             ObjectiveVector → Pheromone → Local Search → ALNS → Archive）
 - HYBRID:   HACO 1.4 + OR-Tools portfolio（两个求解器都跑，选更优解）
 
@@ -60,7 +60,7 @@ def _solve_haco(
     request: PlanRequest,
     matrix: DistanceMatrix | None = None,
 ) -> SolveOutcome:
-    """HACO-CPS 1.4.0。不静默回落 OR-Tools：失败即如实返回 infeasible。"""
+    """HACO-CPS 1.4.1。不静默回落 OR-Tools：失败即如实返回 infeasible。"""
     try:
         from .haco.config import HacoConfig
         from .haco.v14_solver import solve as solve_v14
@@ -69,12 +69,12 @@ def _solve_haco(
         return solve_v14(request, matrix, config)
 
     except Exception as e:  # noqa: BLE001
-        logger.error("HACO-CPS 1.4.0 failed with exception: %s", e, exc_info=True)
+        logger.error("HACO-CPS 1.4.1 failed with exception: %s", e, exc_info=True)
         return SolveOutcome(
             status="infeasible",
             reason_code="INTERNAL_ERROR",
             algorithm_version=HACO_1_4_VERSION,
-            parameter_version="haco-cps-fallback-v1.4",
+            parameter_version="haco-cps-fallback-v1.4.1",
             warnings=["HACO_ERROR: " + type(e).__name__],
         )
 
@@ -109,7 +109,7 @@ def _solve_hybrid(
         ]
         return baseline
 
-    # HACO 更优或打平 → 返回 HACO 结果（haco-cps-1.4.0）
+    # HACO 更优或打平 → 返回 HACO 结果（haco-cps-1.4.1）
     return haco
 
 
