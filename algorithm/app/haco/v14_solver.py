@@ -37,6 +37,7 @@ from ..models import (
 from .alns_v14 import alns_search
 from .config import HacoConfig
 from .construction import construct_ant_solution_v14, generate_insertion_candidates
+from .deadline import SearchDeadline
 from .elite_archive import EliteArchive
 from .encoding import ObjectiveVector, TaskBlock, TaskType
 from .evaluator import compute_diversity, evaluate_route_states
@@ -49,8 +50,8 @@ from .route_genome import EventType, RouteGenome
 logger = logging.getLogger(__name__)
 
 # 版本信息
-HACO_VERSION = "haco-cps-1.4.0"
-PARAMETER_VERSION = "haco-cps-default-v1.4"
+HACO_VERSION = "haco-cps-1.4.1"
+PARAMETER_VERSION = "haco-cps-default-v1.4.1"
 
 DISTANCE_SCALE = 1000
 
@@ -144,14 +145,19 @@ def solve(
         max_duration=float(window_seconds),
     )
 
-    deadline = time.monotonic() + config.haco_time_limit
+    # ── Hard Deadline：搜索阶段时间预算 ──────────────────────────
+    # haco_time_limit = HACO 搜索硬截止（ACO + LS + ALNS + Archive + 编码输出）
+    # overall_time_limit = 外层应用预留的总时限上限（当前由调用方 solver.py 控制）
+    # 取两者较小值作为本函数内搜索阶段的硬截止
+    haco_search_budget = min(config.haco_time_limit, config.overall_time_limit)
+    deadline = SearchDeadline.from_seconds(haco_search_budget)
 
     # ── 初始解 ────────────────────────────────────────────────
     initial = _generate_initial_solutions(
         tasks, tasks_by_id, templates, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix, config, rng,
+        station_map, matrix, config, rng, deadline,
     )
     feasible_initials = [
         s for s in initial if s is not None
@@ -161,11 +167,14 @@ def solve(
         probe_engine = FeasibilityEngine(
             station_map=station_map, matrix=matrix,
         )  # 无 max_duration
+        # Give the diagnostic probe its own limited budget (max 2s),
+        # not the main search deadline, so it can complete diagnosis.
+        probe_deadline = SearchDeadline.from_seconds(min(2.0, deadline.remaining()))
         probe = _cheapest_insertion(
             tasks, templates, tasks_by_id, probe_engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, probe_deadline,
         )
         if probe is not None and _routes_feasible(
             probe, tasks_by_id, probe_engine,
@@ -204,8 +213,10 @@ def solve(
     recent_solutions: list[list[RouteGenome]] = []
 
     # ── 主搜索循环（ACO 构造 + 局部搜索 + SA + 存档）────────
+    total_search_start = time.perf_counter()
+
     for iteration in range(config.max_iterations):
-        if time.monotonic() > deadline:
+        if deadline.expired():
             warnings.append("HACO_TIME_LIMIT_REACHED")
             break
 
@@ -217,12 +228,17 @@ def solve(
         )
         alpha, beta = _adapt_parameters(diversity, config)
 
+        iter_cand_ms = 0.0
+        iter_eval_ms = 0.0
+        iter_ls_ms = 0.0
+
         iteration_best = None
         iteration_best_obj = ObjectiveVector(infeasibility=float("inf"))
 
         for ant_idx in range(config.ant_count):
-            # 不在此处按墙钟打断：一次迭代内蚂蚁数固定，保证同 seed 下 RNG 消耗序列
-            # 确定（复现性）；超时只在外层迭代边界判定。
+            if deadline.expired():
+                warnings.append("HACO_TIME_LIMIT_REACHED")
+                break
 
             # 存档周期性参与：部分蚂蚁从精英解出发（重建/微扰）
             seeded = archive.sample_elite(rng) if (
@@ -232,6 +248,7 @@ def solve(
             if seeded is not None:
                 ant_routes = seeded
             else:
+                _t0 = time.perf_counter()
                 ant_routes = construct_ant_solution_v14(
                     tasks,
                     templates,
@@ -249,13 +266,15 @@ def solve(
                     alpha=alpha,
                     beta=beta,
                     candidate_size=config.candidate_size,
+                    deadline=deadline,
                 )
+                iter_cand_ms += (time.perf_counter() - _t0) * 1000
                 # 构造可能丢任务 → 贪心补插
                 ant_routes = _repair_unassigned(
                     ant_routes, tasks, tasks_by_id, engine,
                     passenger_capacities, cargo_capacities,
                     initial_passenger_loads, initial_cargo_loads,
-                    station_map, matrix,
+                    station_map, matrix, deadline,
                 )
                 if ant_routes is None:
                     continue
@@ -268,9 +287,11 @@ def solve(
             ):
                 continue
 
+            _t0 = time.perf_counter()
             ant_obj = evaluate_route_states(
                 ant_routes, tasks_by_id, station_map, matrix
             )
+            iter_eval_ms += (time.perf_counter() - _t0) * 1000
 
             if iteration_best is None or ant_obj < iteration_best_obj:
                 iteration_best = ant_routes
@@ -294,12 +315,15 @@ def solve(
         # 每代只对 iteration_best 做一次 Best Improvement 局部搜索
         # （蚂蚁只构造不精炼，控制整体耗时在契约时限内）
         if iteration_best is not None:
+            _t0 = time.perf_counter()
             refined, _ = local_search_improve(
                 iteration_best, tasks_by_id, station_map, matrix, engine,
                 passenger_capacities, cargo_capacities,
                 initial_passenger_loads, initial_cargo_loads,
                 rounds=config.local_search_rounds,
+                deadline=deadline,
             )
+            iter_ls_ms = (time.perf_counter() - _t0) * 1000
             if _routes_feasible(
                 refined, tasks_by_id, engine,
                 passenger_capacities, cargo_capacities,
@@ -348,6 +372,9 @@ def solve(
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),
             "diversity": round(diversity, 3) if diversity is not None else None,
+            "candidate_ms": round(iter_cand_ms, 1),
+            "evaluation_ms": round(iter_eval_ms, 1),
+            "local_search_ms": round(iter_ls_ms, 1),
         })
 
         if no_improve_count >= config.convergence_threshold:
@@ -358,20 +385,24 @@ def solve(
             pheromone.restart(config.restart_ratio)
 
     # ── 收尾：ALNS + 再局部搜索 ─────────────────────────────
-    if time.monotonic() < deadline:
+    alns_ms = 0.0
+    if not deadline.expired():
         alns_iterations = max(30, min(200, config.max_iterations * 3))
+        _t0 = time.perf_counter()
         refined = alns_search(
             best_routes, tasks_by_id, engine, station_map, matrix,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             config, rng, max_iterations=alns_iterations,
+            deadline=deadline,
         )
+        alns_ms = (time.perf_counter() - _t0) * 1000
         # ALNS destroy/repair 可能丢任务 → 必须补全后才可能被采纳
         refined = _ensure_complete(
             refined, tasks, tasks_by_id, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, deadline,
         )
         if refined is not None:
             refined_obj = evaluate_route_states(
@@ -390,6 +421,7 @@ def solve(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             rounds=config.local_search_rounds + 1,
+            deadline=deadline,
         )
 
     # 存档里若有更优（且可行）精英则采纳
@@ -405,7 +437,7 @@ def solve(
         best_routes, tasks, templates, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix, config, rng,
+        station_map, matrix, config, rng, deadline,
     )
     if compacted is not None:
         best_routes = compacted
@@ -418,7 +450,7 @@ def solve(
         best_routes, tasks, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix,
+        station_map, matrix, deadline,
     )
     if best_routes is None:
         return SolveOutcome(
@@ -430,6 +462,13 @@ def solve(
     vehicle_plans = _routes_to_vehicle_plans(
         best_routes, request, station_map, matrix
     )
+
+    total_search_ms = (time.perf_counter() - total_search_start) * 1000
+
+    # 将 ALNS 和总搜索时间追加到 warnings（便于日志排查）
+    if alns_ms > 0:
+        warnings.append(f"ALNS_MS={alns_ms:.0f}")
+    warnings.append(f"TOTAL_SEARCH_MS={total_search_ms:.0f}")
 
     return SolveOutcome(
         status="feasible",
@@ -452,6 +491,7 @@ def _generate_initial_solutions(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix, config, rng,
+    deadline: SearchDeadline | None = None,
 ) -> list[tuple[list[RouteGenome], ObjectiveVector] | None]:
     """生成多种初始解：确定性 cheapest-insertion + 多组 ACO 蚂蚁。"""
     seeds: list[tuple[list[RouteGenome], ObjectiveVector]] = []
@@ -498,12 +538,13 @@ def _generate_initial_solutions(
             alpha=alpha,
             beta=beta,
             candidate_size=config.candidate_size,
+            deadline=deadline,
         )
         routes = _repair_unassigned(
             routes, tasks, tasks_by_id, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, deadline,
         )
         if routes is None:
             continue
@@ -525,6 +566,7 @@ def _cheapest_insertion(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome] | None:
     """确定性 cheapest-insertion：每步选全局启发式得分最低的可行 (task,位置)。"""
     routes = [t.copy() for t in templates]
@@ -532,8 +574,13 @@ def _cheapest_insertion(
     placed_ids: set[str] = set()
 
     while remaining:
+        if deadline is not None and deadline.expired():
+            return None  # 超时，放弃压缩尝试
+
         best = None  # (score, task, route_idx, pickup, delivery)
         for task in remaining:
+            if deadline is not None and deadline.expired():
+                return None
             candidates = generate_insertion_candidates(
                 task,
                 routes,
@@ -546,6 +593,7 @@ def _cheapest_insertion(
                 initial_passenger_loads,
                 initial_cargo_loads,
                 candidate_size=10000,  # 不截断，确定性取全局最优
+                deadline=deadline,
             )
             if candidates:
                 cand = candidates[0]
@@ -572,6 +620,7 @@ def _repair_unassigned(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome] | None:
     """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。"""
     placed = {
@@ -583,6 +632,8 @@ def _repair_unassigned(
 
     # 在现有 routes 上逐一补插（best feasible position each time）
     for task in missing:
+        if deadline is not None and deadline.expired():
+            return None
         candidates = generate_insertion_candidates(
             task,
             routes,
@@ -656,6 +707,7 @@ def _ensure_complete(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome] | None:
     """确保解覆盖全部任务；有遗漏则贪心补插，插不回返回 None（该解不可用）。"""
     if _is_complete(routes, tasks):
@@ -664,7 +716,7 @@ def _ensure_complete(
         routes, tasks, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix,
+        station_map, matrix, deadline,
     )
 
 
@@ -673,6 +725,7 @@ def _compact_solution(
     passenger_capacities, cargo_capacities,
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix, config, rng,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome]:
     """车辆数最小化 + 输出确定性重建。
 
@@ -701,6 +754,9 @@ def _compact_solution(
     )
 
     for m in range(1, used_n + 1):
+        if deadline is not None and deadline.expired():
+            return routes  # 超时，返回当前最优解
+
         cap_m = sum(cargo_capacities[i] for i in range(min(m, len(cargo_capacities))))
         if deliveries_total > cap_m or pickups_total > cap_m:
             continue  # m 车总货仓容量不足，必不可能 → 跳过整轮尝试
@@ -711,7 +767,7 @@ def _compact_solution(
             canonical, templates[:m], tasks_by_id, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
-            station_map, matrix,
+            station_map, matrix, deadline,
         )
         if cand is not None and _is_complete(cand, tasks) and _routes_feasible(
             cand, tasks_by_id, engine,
