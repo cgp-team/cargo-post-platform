@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .candidate import CandidateInsertion
+from .deadline import SearchDeadline
 from .encoding import TaskBlock, TaskType
 from .feasibility import fast_feasible_insert_state
 from .feasibility_engine import FeasibilityEngine
@@ -486,189 +487,203 @@ def generate_insertion_candidates(
     initial_passenger_loads: dict[int, int],
     initial_cargo_loads: dict[int, int],
     candidate_size: int,
+    deadline: SearchDeadline | None = None,
 ) -> list[InsertionCandidate]:
-    """为 task 生成所有可行插入候选，按 heuristic_score 排序截断。"""
+    """为 task 生成可行插入候选（两阶段筛选）。
+
+    Stage A — cheap pre-screen：
+        对每个 (route, pickup_index, delivery_index) 只计算廉价指标
+        (delta_distance, delta_duration, skeleton_penalty, capacity_risk)，
+        不调用完整 FeasibilityEngine / ObjectiveVector。
+        按 cheap_score 排序，保留 top pool_size 个。
+
+    Stage B — full evaluation：
+        只对 top pool 执行 FeasibilityEngine.check + evaluate_route_genome，
+        最终截断到 candidate_size。
+    """
     from .evaluator import evaluate_route_genome
 
-    candidates = []
+    # ─── Stage A: cheap pre-screen ──────────────────────────────
+    @dataclass(frozen=True)
+    class _CheapSlot:
+        vehicle_index: int
+        pickup_index: int
+        delivery_index: int | None
+        cheap_score: float
+        delta_distance: float
+        delta_duration: float
+        skeleton_penalty: float
+        capacity_risk: float
+
+    cheap_slots: list[_CheapSlot] = []
+    _check_count = 0
+
+    pickup_station = station_map.get(task.pickup_station)
+    delivery_station = station_map.get(task.delivery_station)
 
     for route in routes:
-
         event_count = len(route.events)
+        skeleton_set = set(route.skeleton) if route.skeleton else set()
 
-        if task.task_type in (
-            TaskType.PASSENGER,
-            TaskType.SHIPMENT,
+        # skeleton penalty for this task on this route
+        skel_penalty = 0.0
+        if task.pickup_station not in skeleton_set:
+            skel_penalty += 0.5
+        if (
+            task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT)
+            and task.delivery_station not in skeleton_set
         ):
+            skel_penalty += 0.5
 
-            for pickup_index in range(
-                1,
-                event_count,
-            ):
-                for delivery_index in range(
-                    pickup_index + 1,
-                    event_count + 1,
-                ):
+        # capacity risk: how close is this route to capacity?
+        pax_used = sum(
+            1 for e in route.events
+            if e.event_type == EventType.BOARD
+        ) - sum(
+            1 for e in route.events
+            if e.event_type == EventType.ALIGHT
+        )
+        pax_cap = passenger_capacities.get(route.vehicle_index, 999)
+        cargo_cap = cargo_capacities.get(route.vehicle_index, 999)
+        pax_risk = max(0.0, (pax_used + (1 if task.task_type == TaskType.PASSENGER else 0)) / max(pax_cap, 1) - 0.8)
+        cargo_risk = max(0.0, task.size / max(cargo_cap, 1) - 0.5) if task.task_type != TaskType.PASSENGER else 0.0
+        cap_risk = pax_risk + cargo_risk
 
-                    candidate_route = route.copy()
+        if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
+            for pickup_index in range(1, event_count):
+                for delivery_index in range(pickup_index + 1, event_count + 1):
+                    _check_count += 1
+                    if _check_count % 32 == 0 and deadline is not None and deadline.expired():
+                        break
 
-                    try:
-                        candidate_route.insert_task(
-                            task,
-                            pickup_index,
-                            delivery_index,
+                    # cheap distance estimate
+                    from_station = station_map.get(route.events[pickup_index - 1].station_id)
+                    to_station = station_map.get(route.events[min(pickup_index, event_count - 1)].station_id)
+                    dd = 0.0
+                    dur = 0.0
+                    if from_station and pickup_station and delivery_station and to_station:
+                        d_orig = compute_distance(from_station, to_station, matrix)
+                        d_new = (
+                            compute_distance(from_station, pickup_station, matrix)
+                            + compute_distance(pickup_station, delivery_station, matrix)
+                            + compute_distance(delivery_station, to_station, matrix)
                         )
-                    except (
-                        ValueError,
-                        IndexError,
-                    ):
-                        continue
-
-                    result = feasibility_engine.check(
-                        candidate_route,
-                        tasks_by_id
-                        | {task.task_id: task},
-                        passenger_capacities[
-                            route.vehicle_index
-                        ],
-                        cargo_capacities[
-                            route.vehicle_index
-                        ],
-                        initial_passenger_loads[
-                            route.vehicle_index
-                        ],
-                        initial_cargo_loads[
-                            route.vehicle_index
-                        ],
-                        station_map=station_map,
-                        matrix=matrix,
-                    )
-
-                    if not result.feasible:
-                        continue
-
-                    metrics = evaluate_route_genome(
-                        candidate_route,
-                        tasks_by_id
-                        | {task.task_id: task},
-                        station_map,
-                        matrix,
-                    )
-
-                    candidates.append(
-                        InsertionCandidate(
-                            vehicle_index=route.vehicle_index,
-                            pickup_index=pickup_index,
-                            delivery_index=delivery_index,
-                            delta_distance=metrics[
-                                "distance"
-                            ],
-                            delta_duration=metrics[
-                                "duration"
-                            ],
-                            passenger_impact=metrics[
-                                "passenger_impact"
-                            ],
-                            cargo_detour=metrics[
-                                "cargo_detour"
-                            ],
-                            heuristic_score=(
-                                metrics["distance"]
-                                + metrics[
-                                    "passenger_impact"
-                                ] * 0.01
-                                + metrics[
-                                    "cargo_detour"
-                                ] * 10.0
-                            ),
+                        dd = max(0.0, d_new - d_orig)
+                        t_orig = compute_duration(from_station, to_station, matrix)
+                        t_new = (
+                            compute_duration(from_station, pickup_station, matrix)
+                            + compute_duration(pickup_station, delivery_station, matrix)
+                            + compute_duration(delivery_station, to_station, matrix)
                         )
-                    )
+                        dur = max(0.0, t_new - t_orig)
 
-        else:
-
-            for pickup_index in range(
-                1,
-                event_count,
-            ):
-
-                candidate_route = route.copy()
-
-                try:
-                    candidate_route.insert_task(
-                        task,
-                        pickup_index,
-                        None,
-                    )
-                except (
-                    ValueError,
-                    IndexError,
-                ):
-                    continue
-
-                result = feasibility_engine.check(
-                    candidate_route,
-                    tasks_by_id
-                    | {task.task_id: task},
-                    passenger_capacities[
-                        route.vehicle_index
-                    ],
-                    cargo_capacities[
-                        route.vehicle_index
-                    ],
-                    initial_passenger_loads[
-                        route.vehicle_index
-                    ],
-                    initial_cargo_loads[
-                        route.vehicle_index
-                    ],
-                    station_map=station_map,
-                    matrix=matrix,
-                )
-
-                if not result.feasible:
-                    continue
-
-                metrics = evaluate_route_genome(
-                    candidate_route,
-                    tasks_by_id
-                    | {task.task_id: task},
-                    station_map,
-                    matrix,
-                )
-
-                candidates.append(
-                    InsertionCandidate(
+                    cheap_score = dd + skel_penalty * 10.0 + cap_risk * 50.0
+                    cheap_slots.append(_CheapSlot(
                         vehicle_index=route.vehicle_index,
                         pickup_index=pickup_index,
-                        delivery_index=None,
-                        delta_distance=metrics[
-                            "distance"
-                        ],
-                        delta_duration=metrics[
-                            "duration"
-                        ],
-                        passenger_impact=metrics[
-                            "passenger_impact"
-                        ],
-                        cargo_detour=metrics[
-                            "cargo_detour"
-                        ],
-                        heuristic_score=(
-                            metrics["distance"]
-                            + metrics[
-                                "passenger_impact"
-                            ] * 0.01
-                            + metrics[
-                                "cargo_detour"
-                            ] * 10.0
-                        ),
+                        delivery_index=delivery_index,
+                        cheap_score=cheap_score,
+                        delta_distance=dd,
+                        delta_duration=dur,
+                        skeleton_penalty=skel_penalty,
+                        capacity_risk=cap_risk,
+                    ))
+                if _check_count % 32 == 0 and deadline is not None and deadline.expired():
+                    break
+        else:
+            for pickup_index in range(1, event_count):
+                _check_count += 1
+                if _check_count % 32 == 0 and deadline is not None and deadline.expired():
+                    break
+
+                from_station = station_map.get(route.events[pickup_index - 1].station_id)
+                to_station = station_map.get(route.events[min(pickup_index, event_count - 1)].station_id)
+                dd = 0.0
+                dur = 0.0
+                if from_station and pickup_station and to_station:
+                    d_orig = compute_distance(from_station, to_station, matrix)
+                    d_new = (
+                        compute_distance(from_station, pickup_station, matrix)
+                        + compute_distance(pickup_station, to_station, matrix)
                     )
-                )
+                    dd = max(0.0, d_new - d_orig)
+                    t_orig = compute_duration(from_station, to_station, matrix)
+                    t_new = (
+                        compute_duration(from_station, pickup_station, matrix)
+                        + compute_duration(pickup_station, to_station, matrix)
+                    )
+                    dur = max(0.0, t_new - t_orig)
 
-    candidates.sort(
-        key=lambda x: x.heuristic_score
-    )
+                cheap_score = dd + skel_penalty * 10.0 + cap_risk * 50.0
+                cheap_slots.append(_CheapSlot(
+                    vehicle_index=route.vehicle_index,
+                    pickup_index=pickup_index,
+                    delivery_index=None,
+                    cheap_score=cheap_score,
+                    delta_distance=dd,
+                    delta_duration=dur,
+                    skeleton_penalty=skel_penalty,
+                    capacity_risk=cap_risk,
+                ))
 
+    # sort by cheap_score and keep top pool
+    cheap_slots.sort(key=lambda s: s.cheap_score)
+    pool_size = max(candidate_size * 4, 16)
+    top_pool = cheap_slots[:pool_size]
+
+    # ─── Stage B: full FeasibilityEngine + ObjectiveVector ──────
+    candidates: list[InsertionCandidate] = []
+
+    for slot in top_pool:
+        if deadline is not None and deadline.expired():
+            break
+
+        route = routes[slot.vehicle_index]
+        candidate_route = route.copy()
+
+        try:
+            candidate_route.insert_task(
+                task, slot.pickup_index, slot.delivery_index,
+            )
+        except (ValueError, IndexError):
+            continue
+
+        result = feasibility_engine.check(
+            candidate_route,
+            tasks_by_id | {task.task_id: task},
+            passenger_capacities[route.vehicle_index],
+            cargo_capacities[route.vehicle_index],
+            initial_passenger_loads[route.vehicle_index],
+            initial_cargo_loads[route.vehicle_index],
+            station_map=station_map,
+            matrix=matrix,
+        )
+        if not result.feasible:
+            continue
+
+        metrics = evaluate_route_genome(
+            candidate_route,
+            tasks_by_id | {task.task_id: task},
+            station_map,
+            matrix,
+        )
+
+        candidates.append(InsertionCandidate(
+            vehicle_index=route.vehicle_index,
+            pickup_index=slot.pickup_index,
+            delivery_index=slot.delivery_index,
+            delta_distance=metrics["distance"],
+            delta_duration=metrics["duration"],
+            passenger_impact=metrics["passenger_impact"],
+            cargo_detour=metrics["cargo_detour"],
+            heuristic_score=(
+                metrics["distance"]
+                + metrics["passenger_impact"] * 0.01
+                + metrics["cargo_detour"] * 10.0
+            ),
+        ))
+
+    candidates.sort(key=lambda x: x.heuristic_score)
     return candidates[:max(1, candidate_size)]
 
 
@@ -689,6 +704,7 @@ def construct_ant_solution_v14(
     alpha: float = 1.0,
     beta: float = 3.0,
     candidate_size: int = 8,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome]:
     """1.4.0 蚂蚁构造：基于 RouteGenome + FeasibilityEngine + alpha/beta。"""
     working_routes = [r.copy() for r in routes]
@@ -734,6 +750,7 @@ def construct_ant_solution_v14(
             initial_passenger_loads,
             initial_cargo_loads,
             candidate_size,
+            deadline=deadline,
         )
 
         if not candidates:

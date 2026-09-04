@@ -13,6 +13,7 @@ import random
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .deadline import SearchDeadline
 from .encoding import TaskBlock, TaskType
 from .evaluator import evaluate_route_genome, evaluate_route_states
 from .feasibility_engine import FeasibilityEngine
@@ -560,6 +561,7 @@ def alns_search(
     config,
     rng: random.Random,
     max_iterations: int = 100,
+    deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome]:
     """ALNS 主搜索循环。"""
     destroy_names = ["random", "worst", "shaw", "segment"]
@@ -577,6 +579,8 @@ def alns_search(
     cooling_rate = config.cooling_rate if hasattr(config, 'cooling_rate') else 0.995
 
     for iteration in range(max_iterations):
+        if deadline is not None and deadline.expired():
+            break
         # 选择算子
         destroy_name = selector.select_destroy(rng)
         repair_name = selector.select_repair(rng)

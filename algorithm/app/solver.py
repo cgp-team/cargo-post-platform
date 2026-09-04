@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 # 版本常量
 BASELINE_ALGORITHM_VERSION = "ortools-1.3.0"
 HACO_1_3_VERSION = "haco-cps-1.3.0"
-HACO_1_4_VERSION = "haco-cps-1.4.0"
+HACO_1_4_VERSION = "haco-cps-1.4.1"
 ALGORITHM_VERSION = HACO_1_4_VERSION  # 默认（HACO）
-PARAMETER_VERSION = "haco-cps-default-v1.4"
+PARAMETER_VERSION = "haco-cps-default-v1.4.1"
 
 
 @dataclass
@@ -85,18 +85,16 @@ def _solve_hybrid(
 ) -> SolveOutcome:
     """HYBRID：同时跑 HACO-1.4 与 OR-Tools baseline，取更优者（portfolio）。
 
-    排序键：(feasible, 用车辆数, total_distance)。选中的是谁就标谁的版本，
+    排序键：统一 6 维 ObjectiveVector（infeasibility > vehicle_count >
+    passenger_impact > cargo_detour > total_distance > total_duration）。
     绝不把 baseline 结果标成 haco 版本。
     """
+    from .objective_compare import solution_key
+
     haco = _solve_haco(request, matrix)
     baseline = _solve_baseline(request, matrix)
 
-    def _rank(o: SolveOutcome) -> tuple:
-        if o.status != "feasible":
-            return (1, float("inf"), float("inf"))
-        return (0, len(o.vehicle_plans), o.total_distance)
-
-    if _rank(baseline) < _rank(haco):
+    if solution_key(baseline) < solution_key(haco):
         # baseline 严格更优 → 返回 baseline，如实标 ortools-1.3.0
         logger.info("HYBRID: baseline chosen over HACO-1.4")
         baseline.warnings = list(haco.warnings or []) + list(baseline.warnings or []) + [
