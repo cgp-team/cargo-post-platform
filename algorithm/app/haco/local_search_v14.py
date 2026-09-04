@@ -453,6 +453,8 @@ def local_search_improve(
         current, tasks_by_id, station_map, matrix
     )
 
+    _check_counter = 0
+
     for _ in range(max(1, rounds)):
         if deadline is not None and deadline.expired():
             break
@@ -496,6 +498,12 @@ def local_search_improve(
                     pos_iter = ((p, None) for p in range(1, event_count))
 
                 for pickup_pos, delivery_pos in pos_iter:
+                    _check_counter += 1
+                    if _check_counter % 32 == 0 and deadline is not None and deadline.expired():
+                        # 超时：返回当前完整可行解（deadline 到期不再枚举新 move）。
+                        # 仅在大规模问题真正超时时触发；小规模解在 deadline 前完成则不触发，
+                        # 因此不破坏确定性回归。
+                        return current, current_obj
                     cand = [r.copy() for r in base]
                     try:
                         cand[dst_idx].insert_task(

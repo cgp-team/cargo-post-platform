@@ -43,6 +43,11 @@ class HacoConfig:
     haco_time_limit: float = 4.0
     overall_time_limit: float = 5.0
 
+    # deterministic greedy seed 的独立时间预算（秒）。
+    # greedy seed 不应独占整个 HACO search budget：
+    # 超时返回部分 seed（complete=False），由快速 repair 补齐后再进入主搜索。
+    greedy_seed_time_limit: float = 2.0
+
     # MMAS 信息素边界
     tau_min: float = 0.01
     tau_max: float = 10.0
@@ -106,6 +111,7 @@ class HacoConfig:
             ls_max_moves=_get(config, "ls_max_moves", cls.ls_max_moves),
             haco_time_limit=_get(config, "haco_time_limit", cls.haco_time_limit),
             overall_time_limit=_get(config, "overall_time_limit", cls.overall_time_limit),
+            greedy_seed_time_limit=_get(config, "greedy_seed_time_limit", cls.greedy_seed_time_limit),
             tau_min=_get(config, "tau_min", cls.tau_min),
             tau_max=_get(config, "tau_max", cls.tau_max),
             initial_temperature=_get(config, "initial_temperature", cls.initial_temperature),
