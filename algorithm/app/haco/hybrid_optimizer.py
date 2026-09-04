@@ -39,7 +39,7 @@ from .global_evaluator import evaluate_genome, GenomeEvaluation
 from .global_local_search import global_local_search
 from .global_construction import construct_global_solution, construct_greedy_global, construct_nn_global
 from .pheromone import PheromoneMatrix
-from .route_genome import GlobalGlobalRouteGenome
+from .route_genome import GlobalRouteGenome
 from .station_backbone import (
     BackboneSolution,
     StationBackbone,
@@ -480,9 +480,9 @@ def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
         if order.orderType == OrderType.PASSENGER:
             tasks.append(TaskBlock(task_id=f"P:{order.orderId}", task_type=TaskType.PASSENGER, pickup_station=order.boardingStationId, delivery_station=order.alightingStationId, size=1, order_ids=[order.orderId]))
         elif order.orderType == OrderType.DELIVERY:
-            tasks.append(TaskBlock(task_id=f"D:{order.orderId}", task_type=TaskType.DELIVERY, pickup_station=order.stationId, delivery_station=order.stationId, size=order.itemCount, order_ids=[order.orderId]))
+            tasks.append(TaskBlock(task_id=f"D:{order.orderId}", task_type=TaskType.DELIVERY, pickup_station=order.stationId, delivery_station=order.stationId, size=order.itemCount, order_ids=[order.orderId], cargo_source=order.cargoSource))
         elif order.orderType == OrderType.PICKUP:
-            tasks.append(TaskBlock(task_id=f"K:{order.orderId}", task_type=TaskType.PICKUP, pickup_station=order.stationId, delivery_station=order.stationId, size=order.itemCount, order_ids=[order.orderId]))
+            tasks.append(TaskBlock(task_id=f"K:{order.orderId}", task_type=TaskType.PICKUP, pickup_station=order.stationId, delivery_station=order.stationId, size=order.itemCount, order_ids=[order.orderId], cargo_source=order.cargoSource))
     for shipment in request.shipments:
         tasks.append(TaskBlock(task_id=f"S:{shipment.shipmentId}", task_type=TaskType.SHIPMENT, pickup_station=shipment.pickupStationId, delivery_station=shipment.deliveryStationId, size=shipment.quantity, order_ids=[shipment.shipmentId]))
     return tasks
@@ -602,4 +602,5 @@ def _ortools_validate(request, vehicle_plans, matrix) -> SolveOutcome | None:
 def _fallback_to_baseline(request, matrix, warnings) -> SolveOutcome:
     from ..baseline.ortools_solver import solve as baseline_solve
     result = baseline_solve(request, matrix)
-    return SolveOutcome(status=result.status, reason_code=result.reason_code, vehicle_plans=result.vehicle_plans, total_distance=result.total_distance, algorithm_version=HACO_VERSION, parameter_version="haco-cps-fallback-v2.1", warnings=warnings)
+    # fallback 身份：真回落 OR-Tools 就如实标 ortools-1.3.0，禁止伪装成 HACO 版本
+    return SolveOutcome(status=result.status, reason_code=result.reason_code, vehicle_plans=result.vehicle_plans, total_distance=result.total_distance, algorithm_version=BASELINE_VERSION, parameter_version="ortools-fallback-v1.3", warnings=warnings)

@@ -14,7 +14,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models import Station
+    from ..models import CargoSource, Station
 
 
 class TaskType(str, Enum):
@@ -33,6 +33,10 @@ class TaskBlock:
     delivery_station: str    # 下车/派送站
     size: int = 1            # 乘客数或货物件数
     order_ids: list[str] = field(default_factory=list)  # 原始订单 ID
+    # 货物来源：PRELOADED=场站预装（消耗 initial_cargo_load，CargoLoad 维度不计入、
+    # CargoOut 累计派送）；None=上下文推断（DELIVERY 无来源语义按旧逻辑）。
+    # 从 PlanRequest 编码时透传 PlanOrder.cargoSource；PASSENGER/SHIPMENT 恒为 None。
+    cargo_source: CargoSource | None = None
 
     # 运行时计算的属性
     pickup_station_obj: Station | None = None
@@ -89,19 +93,19 @@ class ObjectiveVector:
     total_distance: float = 0.0
     total_duration: float = 0.0    # 总行驶时间（秒）
 
+    def key(self):
+        return (
+            self.infeasibility,
+            self.vehicle_count,
+            round(self.passenger_impact, 3),
+            round(self.cargo_detour, 3),
+            round(self.total_distance, 3),
+            round(self.total_duration, 1),
+        )
+
     def __lt__(self, other: ObjectiveVector) -> bool:
         """分层比较：infeasibility > vehicle_count > passenger_impact > cargo_detour > distance > duration。"""
-        if self.infeasibility != other.infeasibility:
-            return self.infeasibility < other.infeasibility
-        if self.vehicle_count != other.vehicle_count:
-            return self.vehicle_count < other.vehicle_count
-        if abs(self.passenger_impact - other.passenger_impact) > 0.1:
-            return self.passenger_impact < other.passenger_impact
-        if abs(self.cargo_detour - other.cargo_detour) > 0.001:
-            return self.cargo_detour < other.cargo_detour
-        if abs(self.total_distance - other.total_distance) > 0.001:
-            return self.total_distance < other.total_distance
-        return self.total_duration < other.total_duration
+        return self.key() < other.key()
 
     def __le__(self, other: ObjectiveVector) -> bool:
         return self == other or self < other

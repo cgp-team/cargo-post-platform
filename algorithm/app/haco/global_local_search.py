@@ -11,7 +11,7 @@ import random
 from typing import TYPE_CHECKING
 
 from .global_evaluator import evaluate_genome
-from .route_genome import GlobalGlobalRouteGenome
+from .route_genome import GlobalRouteGenome
 
 if TYPE_CHECKING:
     from .config import HacoConfig

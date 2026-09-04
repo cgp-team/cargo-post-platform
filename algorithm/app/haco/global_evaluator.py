@@ -16,7 +16,7 @@ from math import hypot
 from typing import TYPE_CHECKING
 
 from .encoding import TaskType
-from .route_genome import GenomeEvaluation, GlobalGlobalRouteGenome
+from .route_genome import GenomeEvaluation, GlobalRouteGenome
 
 if TYPE_CHECKING:
     from ..distance import DistanceMatrix

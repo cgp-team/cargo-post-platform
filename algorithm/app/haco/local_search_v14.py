@@ -376,7 +376,149 @@ def apply_move(
     move: NeighborhoodMove,
     tasks_by_id: dict[str, TaskBlock],
 ) -> list[RouteGenome]:
-    """应用 move 到路线。"""
-    # 简化实现：重新创建路线
-    # 实际应用中应该直接修改
-    return routes
+    """应用 move 到路线。
+
+    Relocate：从 source 车辆移除任务，在 target 车辆 (pickup, delivery) 位置重插。
+    由于重插位置以"插入前的路线"为参考系，先移除再按记录的绝对位置插入即可复现
+    find_best_move 评估过的邻居。
+    """
+    if move is None:
+        return routes
+
+    task_id = move.task_ids[0]
+    task = tasks_by_id.get(task_id)
+    if task is None:
+        return routes
+
+    new_routes = [r.copy() for r in routes]
+    # 从 source 车辆移除
+    src = new_routes[move.source_vehicle]
+    if task_id in src.placements:
+        src.remove_task(task_id)
+
+    # 在 target 车辆按记录的绝对位置重插
+    dst = new_routes[move.target_vehicle]
+    pickup_pos = move.pickup_positions[0]
+    delivery_pos = move.delivery_positions[0]
+    try:
+        dst.insert_task(task, pickup_pos, delivery_pos)
+    except (ValueError, IndexError):
+        # 位置漂移兜底：若绝对位置失效，退化为贪心重插回 target 车辆
+        _reinsert_greedy(dst, task, tasks_by_id, None, None)
+    return new_routes
+
+
+def _reinsert_greedy(route, task, tasks_by_id, station_map, matrix) -> bool:
+    """把 task 贪心插回 route 的某个可行位置（无候选则失败）。"""
+    event_count = len(route.events)
+    if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
+        for p in range(1, event_count):
+            for d in range(p + 1, event_count + 1):
+                try:
+                    route.insert_task(task, p, d)
+                    return True
+                except (ValueError, IndexError):
+                    continue
+    else:
+        for p in range(1, event_count):
+            try:
+                route.insert_task(task, p, None)
+                return True
+            except (ValueError, IndexError):
+                continue
+    return False
+
+
+def local_search_improve(
+    routes: list[RouteGenome],
+    tasks_by_id: dict[str, TaskBlock],
+    station_map: dict,
+    matrix,
+    feasibility_engine: FeasibilityEngine,
+    passenger_capacities: dict[int, int],
+    cargo_capacities: dict[int, int],
+    initial_passenger_loads: dict[int, int],
+    initial_cargo_loads: dict[int, int],
+    rounds: int = 3,
+) -> tuple[list[RouteGenome], ObjectiveVector]:
+    """Best Improvement 局部搜索：Relocate 邻域（task 可移到任意车辆的任意位置）。
+
+    原则：枚举全部合法邻居 → FeasibilityEngine → ObjectiveVector(Best Improvement)；
+    直到无改善或达到 rounds 上限。返回 (改进后路线, 目标)。禁止"找到第一个可行就返回"。
+    """
+    current = [r.copy() for r in routes]
+    current_obj = _evaluate_solution(
+        current, tasks_by_id, station_map, matrix
+    )
+
+    for _ in range(max(1, rounds)):
+        best_neighbor = None
+        best_obj = current_obj
+
+        task_ids = [
+            tid
+            for r in current
+            for tid in r.placements
+        ]
+
+        for tid in task_ids:
+            task = tasks_by_id.get(tid)
+            if task is None:
+                continue
+
+            base = [r.copy() for r in current]
+            src_idx = None
+            for i, r in enumerate(base):
+                if tid in r.placements:
+                    r.remove_task(tid)
+                    src_idx = i
+                    break
+            if src_idx is None:
+                continue
+
+            for dst_idx, dst_route in enumerate(base):
+                event_count = len(dst_route.events)
+
+                if task.task_type in (
+                    TaskType.PASSENGER,
+                    TaskType.SHIPMENT,
+                ):
+                    pos_iter = (
+                        (p, d)
+                        for p in range(1, event_count)
+                        for d in range(p + 1, event_count + 1)
+                    )
+                else:
+                    pos_iter = ((p, None) for p in range(1, event_count))
+
+                for pickup_pos, delivery_pos in pos_iter:
+                    cand = [r.copy() for r in base]
+                    try:
+                        cand[dst_idx].insert_task(
+                            task, pickup_pos, delivery_pos
+                        )
+                    except (ValueError, IndexError):
+                        continue
+
+                    if not _all_routes_feasible(
+                        cand, tasks_by_id, feasibility_engine,
+                        passenger_capacities, cargo_capacities,
+                        initial_passenger_loads, initial_cargo_loads,
+                        station_map, matrix,
+                    ):
+                        continue
+
+                    obj = _evaluate_solution(
+                        cand, tasks_by_id, station_map, matrix
+                    )
+                    if obj < best_obj:
+                        best_obj = obj
+                        best_neighbor = cand
+
+        if best_neighbor is None or not (best_obj < current_obj):
+            break
+
+        current = best_neighbor
+        current_obj = best_obj
+
+    return current, current_obj
