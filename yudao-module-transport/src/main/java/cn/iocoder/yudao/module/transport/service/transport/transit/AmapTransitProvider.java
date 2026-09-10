@@ -62,6 +62,11 @@ public class AmapTransitProvider implements TransitProvider {
     }
 
     @Override
+    public String dataSource() {
+        return REAL_TRANSIT;
+    }
+
+    @Override
     public boolean available() {
         return amapKey != null && !amapKey.isBlank();
     }

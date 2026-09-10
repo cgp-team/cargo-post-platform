@@ -186,7 +186,8 @@ public class AppBusServiceImpl implements AppBusService {
                 }
                 List<TransitProvider.TransitStation> found =
                         provider.searchNearbyStations(latitude, longitude, radM);
-                if (TransitProvider.REAL_TRANSIT.equals(provider.name())) {
+                // 注意：用 dataSource()（REAL_TRANSIT/PROJECT_TRANSIT）判断分层，name() 是展示名（AMAP/PROJECT）
+                if (TransitProvider.REAL_TRANSIT.equals(provider.dataSource())) {
                     realTransitAvailable = true;
                     transitProvider = provider.name();
                 }
@@ -341,7 +342,7 @@ public class AppBusServiceImpl implements AppBusService {
         if (located) {
             // 现实线路层（高德等）：项目线路已由 buildLines 给出（含起终点），这里只补现实来源
             for (TransitProvider provider : transitProviders) {
-                if (!provider.available() || TransitProvider.PROJECT_TRANSIT.equals(provider.name())) {
+                if (!provider.available() || TransitProvider.PROJECT_TRANSIT.equals(provider.dataSource())) {
                     continue;
                 }
                 for (TransitProvider.TransitLine line : provider.searchNearbyLines(latitude, longitude, radM)) {
