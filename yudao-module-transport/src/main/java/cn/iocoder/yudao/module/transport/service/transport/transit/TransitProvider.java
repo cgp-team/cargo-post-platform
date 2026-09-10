@@ -50,4 +50,18 @@ public interface TransitProvider {
     /** 附近线路 */
     record TransitLine(String routeName, String startStation, String endStation, String dataSource) {
     }
+
+    /**
+     * 站点名称规范化：去掉「(公交站)」「（XX）」等后缀与空白，使「曾家岩(公交站)」与「曾家岩」归为同一键。
+     * 站点去重键 = 规范化名称 + 5 位小数经纬度（客户端与后端共用同一套规则）。
+     */
+    static String normalizeStationName(String name) {
+        if (name == null) {
+            return "";
+        }
+        return name.replaceAll("[（(][^）)]*[）)]", "")
+                .replaceAll("(公交车?站|站点|站)$", "")
+                .replaceAll("\\s+", "")
+                .trim();
+    }
 }

@@ -17,6 +17,10 @@
 - **高德双 key 接入与文档**：小程序端 `AMAP_MINI_KEY`（微信小程序类型 key，`libs/amap-wx.js` + `https://restapi.amap.com` 合法域名，已配）；后端/算法侧 `AMAP_KEY`（Web 服务类型 key，`.env` 一处配置，部署流水线新增 `Sync AMAP_KEY to backend env` 幂等同步到后端 systemd env）；两种 key 类型不可互换（混用会 `USERKEY_PLAT_NOMATCH`）。真实高德公交站 POI 的 `address` 实为途经线路，已在前后端解析为线路标签。
 - **修复后台看不到寄货/司机照片**：`infra_file_config.domain` 被修成 `http://1.15.29.107`（缺 `/api`），生成的文件 URL 形如 `/admin-api/infra/file/4/get/xxx.jpg`；而 nginx 只把 `/api/` 转发后端（剥前缀），其余落到前端 SPA → 浏览器拿到 index.html（实测 `text/html`），后台订单列表/审核弹窗里的照片全是裂图。新增 V018 迁移：domain 与历史 URL 统一补齐 `/api` 前缀（含 `infra_file.url`、`transport_cargo_order.photo_url/driver_photo_url`、`system_users.avatar`），部署流水线新增"文件 URL 必须带 /api"的硬校验。
 - **就近站点匹配 + 通知客户前往**：`CargoReviewServiceImpl.selectServicePointStation` 按确定性规则匹配交接站点（取货站本身是场站级 → 本站交接；否则取距取货站最近的启用站点，同距取 ID 升序；无站点数据回退送达站点）；响应补 `servicePointStationName/坐标/距取货点公里数`，小程序寄货成功卡与「快递」页在"需客户操作"时显示"请送往就近站点 X（约 Y km）"并提供**导航前往**（`wx.openLocation`）。
+- **实时公交页重构（农村客货邮版"车来了"）**：页面改为 定位状态 → 概览 → **地图（45vh 第一视觉焦点）** → 附近线路（默认 6 条，可展开全部）→ 正在运行车辆列表，不再是几十个站点铺满首屏；地图含我的位置（`marker-me.png`）、公交站、运行车辆（真实绿色 `/images/marker-bus-real.png`、模拟橙色 `marker-bus-sim.png`）与线路 polyline，并有「回到我的位置」；拖动地图后不再被 15s 刷新抢回中心；详情页补地图+车辆实时位置+数据来源标注。
+- **统一定位层（AmapLocationProvider）**：全项目仅 `utils/location.js` 调用 `wx.getLocation({type:'gcj02'})`（首页/公交页/详情页/司机端均已改为 `location.getCurrentLocation()` / `getDeviceLocationGcj02()`）；高德链路=设备定位+`amap-wx.js` 逆地理，统一输出 `{success,latitude,longitude,accuracy,timestamp,source,level,district,city}`，`source ∈ AMAP|CACHE|DEMO|UNKNOWN`，日志 `[AMAP_LOCATION] ...`；缓存 1~5 分钟（60s 秒出、超时同步刷新），搜索半径按精度 5000/8000/15000m，定位失败显示"无法获取当前位置"而不是伪造地点。
+- **站点去重（同名同坐标合并线路）**：客户端 `transit-amap.dedupeStations`、后端 `AmapTransitProvider.dedupe`、合并层 `AppBusServiceImpl.dedupeNearbyStations` 用同一规则（规范化名称去掉 `(公交站)` + 5 位小数坐标），线路取并集，修复线上"曾家岩(公交站)"重复两条的问题。
+- **车辆平滑移动动画**：新增 `utils/bus-motion.js`（单定时器统一循环，1.2s 内插值约 12 帧，含朝向计算），15s 刷新只更新目标坐标并只重设 markers；`onHide/onUnload` 清理动画与刷新定时器，避免定时器泄漏。
 
 ---
 
