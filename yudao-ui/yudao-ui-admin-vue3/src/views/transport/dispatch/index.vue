@@ -40,7 +40,7 @@
         :loading="demoRunning"
         @click="runOneClickDemo"
       >
-        <Icon icon="ep:video-play" />一键演示（归集→调度→审核→核验）
+        <Icon icon="ep:video-play" />一键演示（归集→调度→审核）
       </el-button>
       <el-table
         ref="poolTableRef"
@@ -723,15 +723,18 @@ const viewPlan = (planId: number) => {
 }
 
 /**
- * 一键演示：归集全部待入池 → 一键智能调度 → 自动审核通过 → 自动发车核验。
- * 现场演示只点一次，随后即可去小程序端看"我的寄货提醒 / 实时公交 / 司机端任务"。
+ * 一键演示：归集全部待入池 → 一键智能调度 → 自动审核通过。
+ *
+ * 刻意**不做**发车核验：核验与发车留给司机端演示（扫码装车 → 发车 → 到站妥投），
+ * 保证"管理员调度 / 司机执行"的分工在演示里完整呈现。管理员若要代核验，
+ * 可在下方「调度方案」列表里对单台车执行发车核验（原入口保留）。
  * 每一步都复用正式接口与权限校验，不是特制后门。
  */
 const demoRunning = ref(false)
 const runOneClickDemo = async () => {
   try {
     await ElMessageBox.confirm(
-      '将依次执行：① 归集全部「待入池」订单 ② 一键智能调度（自动选场站/车辆） ③ 方案审核通过 ④ 发车核验。是否继续？',
+      '将依次执行：① 归集全部「待入池」订单 ② 一键智能调度（自动选场站/车辆） ③ 方案审核通过。\n\n发车核验与司机发车留给司机端演示（扫码装车 → 发车 → 到站妥投）。是否继续？',
       '一键演示',
       { type: 'warning', confirmButtonText: '开始演示', cancelButtonText: '取消' }
     )
@@ -750,19 +753,11 @@ const runOneClickDemo = async () => {
     loading.setText('③ 正在审核方案…')
     // ③ 方案审核通过
     await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
-    // ④ 逐车发车核验通过
     const plan = await DispatchApi.getDispatchPlan(planId)
-    const vehicleIds = Array.from(
-      new Set((plan.items || []).map((i) => i.vehicleId).filter((v): v is number => !!v))
-    )
-    for (const vehicleId of vehicleIds) {
-      loading.setText(`④ 正在发车核验（车辆 ${vehicleId}）…`)
-      await DispatchApi.checkDeparture({ planId, vehicleId, pass: true })
-    }
     loading.close()
     await ElMessageBox.alert(
-      `归集订单：${collected} 单\n方案：#${planId}（订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? vehicleIds.length} 台 / 场站 ${plan.depotStationName || '自动选择'}）\n\n接下来请到小程序端演示：司机端「工作台 → 发车」、用户端「快递页看车快到了提醒 / 实时公交」。`,
-      '一键演示完成',
+      `归集订单：${collected} 单\n方案：#${planId}（订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}）\n\n接下来去小程序【司机端】工作台：扫码装车 → 发车 → 到站妥投。\n用户端可在「快递」页看到车辆动态与「车快到了」提醒。\n\n（如需管理员代核验，请在下方「调度方案」列表对单台车执行发车核验）`,
+      '调度完成（发车留给司机端）',
       { type: 'success', confirmButtonText: '知道了' }
     )
     getPlanList()
