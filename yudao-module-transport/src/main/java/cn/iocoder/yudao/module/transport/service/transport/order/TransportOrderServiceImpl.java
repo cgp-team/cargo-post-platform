@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
@@ -133,12 +134,15 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .build();
         orderMapper.insert(order);
         // 货运子表：寄货货物信息
+        // 货物类型/件数/体积/生鲜由村民在寄货页填写（缺省兼容旧客户端：农产品 / 1 件 / 0 m³ / 非生鲜）。
+        // 说明：freshFlag 曾硬编码 true，导致所有寄货订单都被判为「生鲜需人工审核」，此处按客户勾选落库。
         CargoOrderDO sub = CargoOrderDO.builder()
                 .orderId(order.getId())
-                .cargoCategory("农产品")
-                .freshFlag(true)
-                .itemCount(1)
+                .cargoCategory(StrUtil.blankToDefault(reqVO.getCargoCategory(), "农产品"))
+                .freshFlag(Boolean.TRUE.equals(reqVO.getFreshFlag()))
+                .itemCount(reqVO.getItemCount() != null && reqVO.getItemCount() > 0 ? reqVO.getItemCount() : 1)
                 .weightKg(reqVO.getGoodsWeight())
+                .volumeM3(reqVO.getVolumeM3() != null ? reqVO.getVolumeM3() : BigDecimal.ZERO)
                 .goodsName(reqVO.getGoodsName())
                 .goodsNote(reqVO.getGoodsNote())
                 .photoUrl(reqVO.getPhotoUrl())
