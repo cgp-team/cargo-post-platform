@@ -3,11 +3,16 @@ package cn.iocoder.yudao.module.transport.service.order;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewReasonCodeEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ServiceModeEnum;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import static cn.iocoder.yudao.module.transport.enums.order.ReviewReasonCodeEnum.*;
@@ -31,6 +36,14 @@ public class CargoReviewServiceImpl implements CargoReviewService {
     private static final String[] FRESH_KEYWORDS = {"生鲜", "冻品", "冷冻", "冷藏", "活体", "海鲜", "冰淇淋"};
     /** 大件/超规关键词（命中需客户送站或特殊安排 → CONDITIONAL） */
     private static final String[] OVERSIZE_KEYWORDS = {"大件", "家具", "家电", "冰箱", "洗衣机", "床垫", "超长", "超宽"};
+
+    /** 场站级站点（transport_station.station_level = 1）：可直接作为客户送站交接点 */
+    private static final int STATION_LEVEL_DEPOT = 1;
+    /** 站点状态：启用 */
+    private static final int STATUS_ENABLED = 0;
+
+    @Resource
+    private StationMapper stationMapper;
 
     @Override
     public CargoReviewResult review(String goodsName, BigDecimal weightKg, Boolean freshFlag,
@@ -58,15 +71,17 @@ public class CargoReviewServiceImpl implements CargoReviewService {
             return rejected(reasons);
         }
 
-        // 3. 大件/超规 → 需客户送站（CONDITIONAL）：送达转 CUSTOMER_TO_STATION，推荐送达站点
+        // 3. 大件/超规 → 需客户送站（CONDITIONAL）：匹配"就近可交接站点"，由前端通知客户前往
         if (containsAny(name, OVERSIZE_KEYWORDS) || containsAny(note, OVERSIZE_KEYWORDS)) {
+            Long servicePoint = selectServicePointStation(pickupStationId, deliveryStationId,
+                    stationMapper == null ? List.of() : stationMapper.selectList());
             return CargoReviewResult.builder()
                     .reviewStatus(ReviewStatusEnum.CONDITIONAL.getStatus())
                     .reasonCodes(List.of(CUSTOMER_ACTION_REQUIRED.getCode()))
                     .pickupServiceMode(ServiceModeEnum.STATION_TO_STATION.getCode())
                     .deliveryServiceMode(ServiceModeEnum.CUSTOMER_TO_STATION.getCode())
-                    .servicePointStationId(deliveryStationId)
-                    .message("大件/超规货物需到指定站点交接，请将货物送到最近服务站点")
+                    .servicePointStationId(servicePoint)
+                    .message("大件/超规货物需到指定站点交接，请将货物送到就近服务站点")
                     .build();
         }
 
@@ -112,6 +127,43 @@ public class CargoReviewServiceImpl implements CargoReviewService {
             }
         }
         return false;
+    }
+
+    /**
+     * 匹配"就近可交接站点"（客户送站时的目标站点），确定性规则：
+     * 1. 取货站点本身就是启用中的场站级站点（station_level=1）→ 直接在该站交接；
+     * 2. 否则在启用站点中取**距取货站点 Haversine 最近**的一个（排除取货站点本身），同距离取站点 ID 升序；
+     * 3. 站点数据缺失/无候选 → 退回原逻辑（送达站点），保证流程不断。
+     *
+     * 说明：客户位置以自己选择的取货站点为代表（寄货页已按站点选集货），
+     * 因此"就近"= 距取货站点最近的可用交接点，客户实际可步行/就近送达。
+     */
+    static Long selectServicePointStation(Long pickupStationId, Long deliveryStationId, List<StationDO> stations) {
+        if (stations == null || stations.isEmpty()) {
+            return deliveryStationId;
+        }
+        List<StationDO> enabled = stations.stream()
+                .filter(s -> s.getId() != null && s.getLongitude() != null && s.getLatitude() != null)
+                .filter(s -> s.getStatus() == null || s.getStatus() == STATUS_ENABLED)
+                .toList();
+        StationDO pickup = enabled.stream()
+                .filter(s -> s.getId().equals(pickupStationId)).findFirst().orElse(null);
+        // 1) 取货站本身就是可用场站 → 就在该站交接
+        if (pickup != null && pickup.getStationLevel() != null && pickup.getStationLevel() == STATION_LEVEL_DEPOT) {
+            return pickup.getId();
+        }
+        if (pickup == null) {
+            return deliveryStationId;
+        }
+        // 2) 最近可用站点（排除取货站本身；若没有其他站点则退回取货站）
+        return enabled.stream()
+                .filter(s -> !s.getId().equals(pickupStationId))
+                .min(Comparator.comparingDouble((StationDO s) -> GeoDistanceUtil.haversineKm(
+                                pickup.getLongitude().doubleValue(), pickup.getLatitude().doubleValue(),
+                                s.getLongitude().doubleValue(), s.getLatitude().doubleValue()))
+                        .thenComparing(StationDO::getId))
+                .map(StationDO::getId)
+                .orElse(deliveryStationId);
     }
 
     /** 原因码列表 → 逗号分隔字符串（落库） */
