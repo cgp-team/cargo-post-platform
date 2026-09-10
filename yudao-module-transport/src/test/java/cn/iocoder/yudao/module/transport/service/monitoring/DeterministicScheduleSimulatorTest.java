@@ -71,9 +71,10 @@ class DeterministicScheduleSimulatorTest {
 
     @Test
     void compute_inTransit_interpolatesBetweenStationsWithFullContext() {
-        LocalTime now = LocalTime.now();
+        // 固定时刻（不用 LocalTime.now()）：避免临近午夜时 +N 分钟跨日回绕导致用例抖动
+        LocalTime now = LocalTime.of(10, 0);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
-                .plannedDepartureTime(now.minusMinutes(30)).plannedDurationMinutes(60).status(0).build();
+                .plannedDepartureTime(LocalTime.of(9, 30)).plannedDurationMinutes(60).status(0).build();
 
         VehicleLocationSnapshot snapshot =
                 DeterministicScheduleSimulator.compute(VEHICLE, shift, ROUTE, ROUTE_STATIONS, STATIONS, now);
@@ -91,16 +92,16 @@ class DeterministicScheduleSimulatorTest {
         assertEquals("青山镇站", snapshot.getNextStationName());
         assertEquals(50, snapshot.getProgress().intValue());
         assertEquals(20.0, snapshot.getSpeedKmh(), 0.01); // 20km / 60min
-        // 半程位置：104.05 / 30.05（允许 0.01 度误差，避免用例跨分钟抖动）
-        assertEquals(104.05, snapshot.getLongitude(), 0.01);
-        assertEquals(30.05, snapshot.getLatitude(), 0.01);
+        // 半程位置：104.05 / 30.05（固定时刻后可精确断言）
+        assertEquals(104.05, snapshot.getLongitude(), 1e-9);
+        assertEquals(30.05, snapshot.getLatitude(), 1e-9);
     }
 
     @Test
     void compute_beforeDeparture_parksAtFirstStation() {
-        LocalTime now = LocalTime.now();
+        LocalTime now = LocalTime.of(10, 0);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
-                .plannedDepartureTime(now.plusMinutes(10)).plannedDurationMinutes(60).build();
+                .plannedDepartureTime(LocalTime.of(10, 10)).plannedDurationMinutes(60).build();
 
         VehicleLocationSnapshot snapshot =
                 DeterministicScheduleSimulator.compute(VEHICLE, shift, ROUTE, ROUTE_STATIONS, STATIONS, now);
@@ -114,9 +115,9 @@ class DeterministicScheduleSimulatorTest {
 
     @Test
     void compute_afterSchedule_parksAtLastStationWithoutFakeDriving() {
-        LocalTime now = LocalTime.now();
+        LocalTime now = LocalTime.of(12, 0);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
-                .plannedDepartureTime(now.minusMinutes(120)).plannedDurationMinutes(60).build();
+                .plannedDepartureTime(LocalTime.of(10, 0)).plannedDurationMinutes(60).build();
 
         VehicleLocationSnapshot snapshot =
                 DeterministicScheduleSimulator.compute(VEHICLE, shift, ROUTE, ROUTE_STATIONS, STATIONS, now);
@@ -131,7 +132,7 @@ class DeterministicScheduleSimulatorTest {
 
     @Test
     void compute_withoutRouteOrStations_returnsNull() {
-        LocalTime now = LocalTime.now();
+        LocalTime now = LocalTime.of(10, 0);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
                 .plannedDepartureTime(now).plannedDurationMinutes(60).build();
         assertNull(DeterministicScheduleSimulator.compute(VEHICLE, shift, null, ROUTE_STATIONS, STATIONS, now));

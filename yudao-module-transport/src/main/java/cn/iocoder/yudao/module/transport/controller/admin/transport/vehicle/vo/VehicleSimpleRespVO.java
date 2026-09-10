@@ -10,4 +10,9 @@ public class VehicleSimpleRespVO {
     private Long id;
     @Schema(description = "车牌号", requiredMode = Schema.RequiredMode.REQUIRED)
     private String plateNo;
+    // 绑定司机：发货/派单时选车就能看到"这车谁开"，避免派给没有司机的车（司机端看不到任务）
+    @Schema(description = "当前绑定司机姓名（未绑定为 null）")
+    private String driverName;
+    @Schema(description = "当前绑定司机电话")
+    private String driverMobile;
 }

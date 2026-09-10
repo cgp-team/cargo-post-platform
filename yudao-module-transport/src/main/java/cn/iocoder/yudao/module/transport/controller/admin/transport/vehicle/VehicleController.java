@@ -5,6 +5,10 @@ import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.vehicle.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.service.transport.vehicle.VehicleService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -22,6 +26,8 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 @Validated
 public class VehicleController {
     @Resource private VehicleService vehicleService;
+    @Resource private DriverVehicleMapper driverVehicleMapper;
+    @Resource private DriverMapper driverMapper;
 
     @PostMapping("/create")
     @Operation(summary="Create")
@@ -53,7 +59,23 @@ public class VehicleController {
     @GetMapping("/simple-list")
     @Operation(summary="Get Simple List")
     public CommonResult<java.util.List<VehicleSimpleRespVO>> simpleList() {
-        return success(BeanUtils.toBean(vehicleService.getSimpleList(), VehicleSimpleRespVO.class));
+        java.util.List<VehicleSimpleRespVO> list = BeanUtils.toBean(vehicleService.getSimpleList(), VehicleSimpleRespVO.class);
+        // 带上当前绑定司机：选车就能看到"这车谁开"（发货/派单都靠它判断司机端能否看到任务）
+        java.util.Map<Long, DriverVehicleDO> bindingMap = driverVehicleMapper.selectActiveBindings().stream()
+                .filter(b -> b.getVehicleId() != null)
+                .collect(java.util.stream.Collectors.toMap(DriverVehicleDO::getVehicleId, b -> b, (a, b) -> a));
+        for (VehicleSimpleRespVO vo : list) {
+            DriverVehicleDO binding = bindingMap.get(vo.getId());
+            if (binding == null || binding.getDriverId() == null) {
+                continue;
+            }
+            DriverDO driver = driverMapper.selectById(binding.getDriverId());
+            if (driver != null) {
+                vo.setDriverName(driver.getName());
+                vo.setDriverMobile(driver.getMobile());
+            }
+        }
+        return success(list);
     }
 
     @GetMapping("/expiring-list")

@@ -186,7 +186,8 @@ public class AppBusServiceImpl implements AppBusService {
                 }
                 List<TransitProvider.TransitStation> found =
                         provider.searchNearbyStations(latitude, longitude, radM);
-                if (TransitProvider.REAL_TRANSIT.equals(provider.name())) {
+                // 注意：用 dataSource()（REAL_TRANSIT/PROJECT_TRANSIT）判断分层，name() 是展示名（AMAP/PROJECT）
+                if (TransitProvider.REAL_TRANSIT.equals(provider.dataSource())) {
                     realTransitAvailable = true;
                     transitProvider = provider.name();
                 }
@@ -233,6 +234,8 @@ public class AppBusServiceImpl implements AppBusService {
                 nearbyStations.add(ns);
             }
         }
+        // 分层合并后统一去重：同名同坐标（5 位小数）合并为一条，线路取并集（现实层优先保留来源标识）
+        nearbyStations = dedupeNearbyStations(nearbyStations);
         nearbyStations.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyStation::getDistanceKm,
                 Comparator.nullsLast(Comparator.naturalOrder())));
         // 兜底：精确坐标下若项目线路层未产出任何站点（未装配 TransitProvider / 半径内无站点），
@@ -257,6 +260,7 @@ public class AppBusServiceImpl implements AppBusService {
                 ns.setLines(stationLines.getOrDefault(station.getId(), List.of()));
                 nearbyStations.add(ns);
             }
+            nearbyStations = dedupeNearbyStations(nearbyStations);
             nearbyStations.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyStation::getDistanceKm,
                     Comparator.nullsLast(Comparator.naturalOrder())));
             resp.setNearbyStations(nearbyStations);
@@ -341,7 +345,7 @@ public class AppBusServiceImpl implements AppBusService {
         if (located) {
             // 现实线路层（高德等）：项目线路已由 buildLines 给出（含起终点），这里只补现实来源
             for (TransitProvider provider : transitProviders) {
-                if (!provider.available() || TransitProvider.PROJECT_TRANSIT.equals(provider.name())) {
+                if (!provider.available() || TransitProvider.PROJECT_TRANSIT.equals(provider.dataSource())) {
                     continue;
                 }
                 for (TransitProvider.TransitLine line : provider.searchNearbyLines(latitude, longitude, radM)) {
@@ -371,6 +375,43 @@ public class AppBusServiceImpl implements AppBusService {
     }
 
     /** 站点 → 途经线路名（项目自建线路；基于已加载线路经停点，无额外查库） */
+    /**
+     * 附近站点去重（同名 + 5 位小数坐标）：距离取更近、线路取并集、现实层来源优先、名称取更简洁的。
+     * 现实层（高德）同一站点常有多条 POI 记录，项目层也可能与之一一重叠，不去重会出现重复卡片。
+     */
+    private List<AppBusNearbyRespVO.NearbyStation> dedupeNearbyStations(List<AppBusNearbyRespVO.NearbyStation> stations) {
+        Map<String, AppBusNearbyRespVO.NearbyStation> map = new LinkedHashMap<>();
+        for (AppBusNearbyRespVO.NearbyStation station : stations) {
+            if (station == null || station.getLatitude() == null || station.getLongitude() == null) {
+                continue;
+            }
+            String key = TransitProvider.normalizeStationName(station.getName()) + "|"
+                    + String.format("%.5f", station.getLatitude()) + "|" + String.format("%.5f", station.getLongitude());
+            AppBusNearbyRespVO.NearbyStation exist = map.get(key);
+            if (exist == null) {
+                map.put(key, station);
+                continue;
+            }
+            if (exist.getDistanceKm() == null
+                    || (station.getDistanceKm() != null && station.getDistanceKm() < exist.getDistanceKm())) {
+                exist.setDistanceKm(station.getDistanceKm());
+            }
+            Set<String> lines = new java.util.LinkedHashSet<>(exist.getLines() == null ? List.of() : exist.getLines());
+            if (station.getLines() != null) {
+                lines.addAll(station.getLines());
+            }
+            exist.setLines(new ArrayList<>(lines));
+            if (TransitProvider.REAL_TRANSIT.equals(station.getDataSource())) {
+                exist.setDataSource(TransitProvider.REAL_TRANSIT);
+            }
+            if (exist.getName() != null && station.getName() != null
+                    && station.getName().length() < exist.getName().length()) {
+                exist.setName(station.getName());
+            }
+        }
+        return new ArrayList<>(map.values());
+    }
+
     private Map<Long, List<String>> stationLines(MonitoringMapDataRespVO mapData) {
         if (mapData.getRoutes() == null) {
             return Map.of();

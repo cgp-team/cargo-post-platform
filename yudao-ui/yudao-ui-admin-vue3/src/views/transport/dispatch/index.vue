@@ -5,14 +5,9 @@
       <el-form :inline="true" :model="poolQuery" @submit.prevent="getPoolList">
         <el-form-item label="订单状态">
           <el-select v-model="poolQuery.status" placeholder="请选择" clearable style="width:140px">
+            <!-- 订单池按后端定义只含「待入池/已入池」：审核通过还没归集的、以及已归集待调度的 -->
             <el-option label="待入池" :value="8" />
             <el-option label="已入池" :value="1" />
-            <el-option label="已分配" :value="2" />
-            <el-option label="已发车" :value="3" />
-            <el-option label="已完成" :value="4" />
-            <el-option label="已取消" :value="5" />
-            <el-option label="待客户操作" :value="7" />
-            <el-option label="待审核" :value="6" />
           </el-select>
         </el-form-item>
         <el-form-item label="订单类型">
@@ -129,6 +124,7 @@
             <el-button link type="primary" v-if="scope.row.status === 1 || scope.row.status === 2" v-hasPermi="['transport:dispatch:check']" @click="openCheck(scope.row)">
               发车核验
             </el-button>
+            <el-button link type="success" @click="openVisual([scope.row.id!])">可视化</el-button>
             <el-button link type="primary" @click="openDetail(scope.row)">详情</el-button>
           </template>
         </el-table-column>
@@ -411,17 +407,22 @@
         <template #default="scope">{{ vehicleName(scope.row.vehicleId) }}</template>
       </el-table-column>
       <el-table-column label="站点" prop="stationId" align="center">
-        <template #default="scope">{{ stationName(scope.row.stationId) }}</template>
+        <template #default="scope">{{ scope.row.stationName || stationName(scope.row.stationId) }}</template>
       </el-table-column>
       <el-table-column label="动作" prop="actionType" align="center" width="90">
         <template #default="scope">
           <el-tag :type="actionTag(scope.row.actionType)" size="small">{{ actionLabel(scope.row.actionType) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="订单号" prop="orderId" align="center" />
+      <el-table-column label="订单号" align="center">
+        <template #default="scope">{{ scope.row.orderNo || scope.row.orderId || '-' }}</template>
+      </el-table-column>
       <el-table-column label="预计到达时间" prop="estimatedArrivalTime" align="center" width="180" />
     </el-table>
   </Dialog>
+
+  <!-- 调度结果可视化：方案摘要 + 每车任务段时间线 + 地图路线 + ▶播放 -->
+  <DispatchVisualDialog v-model="visualVisible" :plan-ids="visualPlanIds" />
 </template>
 
 <script setup lang="ts">
@@ -429,12 +430,22 @@ import * as DispatchApi from '@/api/transport/dispatch'
 import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
 import { Dialog } from '@/components/Dialog'
+import DispatchVisualDialog from './DispatchVisualDialog.vue'
 // 一键演示需要"确认框 + 步骤 loading 文案"：按项目约定显式引入（不做全局挂载）
 import { ElLoading, ElMessageBox } from 'element-plus'
 
 defineOptions({ name: 'TransportDispatch' })
 
 const message = useMessage()
+
+// 调度结果可视化：一键演示/一键智能调度后就地展开（任务段时间线 + 地图路线 + ▶播放）
+const visualVisible = ref(false)
+const visualPlanIds = ref<number[]>([])
+const openVisual = (planIds: number[]) => {
+  if (!planIds.length) return
+  visualPlanIds.value = [...planIds]
+  visualVisible.value = true
+}
 
 type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
 
@@ -473,7 +484,13 @@ const vehicleList = ref<VehicleApi.VehicleVO[]>([])
 const stationName = (id?: number) => (id === undefined ? '-' : stationList.value.find((s) => s.id === id)?.stationName ?? id)
 /** 总里程展示：后端已按经停坐标换算为公里，保留 1 位小数 */
 const totalDistanceText = (v?: number) => (v == null ? '-' : Number(v).toFixed(1))
-const vehicleName = (id?: number) => (id === undefined ? '-' : vehicleList.value.find((v) => v.id === id)?.plateNo ?? id)
+const vehicleName = (id?: number) => {
+  if (id === undefined) return '-'
+  const v = vehicleList.value.find((x) => x.id === id)
+  if (!v) return id
+  // 带上绑定司机：现场演示时一眼看到"这车谁开"，司机端就用这个账号登录
+  return v.driverName ? `${v.plateNo}（${v.driverName}）` : v.plateNo
+}
 const loadSimpleLists = async () => {
   try {
     stationList.value = await StationApi.getSimpleStationList()
@@ -496,7 +513,9 @@ type PoolQueryParams = {
   status?: number
   orderType?: number
 }
-const poolQuery = reactive<PoolQueryParams>({ pageNo: 1, pageSize: 10, status: 1, orderType: undefined })
+// 默认不带状态过滤：刚在「订单管理」审核通过的订单是「待入池(8)」，若默认只看「已入池(1)」，
+// 管理员会以为订单没进来（演示第一屏就断）。默认展示全部流转态，可按状态再筛。
+const poolQuery = reactive<PoolQueryParams>({ pageNo: 1, pageSize: 10, status: undefined, orderType: undefined })
 
 const getPoolList = async () => {
   poolLoading.value = true
@@ -509,7 +528,7 @@ const getPoolList = async () => {
   }
 }
 const resetPoolQuery = () => {
-  Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: 1, orderType: undefined })
+  Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: undefined, orderType: undefined })
   getPoolList()
 }
 // 待入池(status=8)可勾选归集入池；已入池(status=1)可勾选手工/智能派单
@@ -684,6 +703,40 @@ const submitSmart = async () => {
  * 一键智能调度：后端自动选场站 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
  * 进度条按阶段演示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
  */
+/** 一键调度最多连出几套方案（订单池里可能有多个片区：重庆邮电大学片区 + 成都片区…） */
+const MAX_AUTO_ROUNDS = 4
+/** 订单池中「已入池(待调度)」订单数 */
+const pooledTotal = async () => {
+  const res = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 1, status: 1 })
+  return res.total || 0
+}
+/**
+ * 一键调度（分片区分批）：后端每次只调度"最新那单所在片区"，跨片区（城市）订单留在池里，
+ * 下一轮自动成第二套方案。这样既不会出现"跨城混批 → 算法无解"，又能让所有片区都出方案。
+ */
+const runAutoPlans = async (onStage?: (text: string) => void): Promise<number[]> => {
+  const planIds: number[] = []
+  let failed = 0
+  for (let round = 0; round < MAX_AUTO_ROUNDS; round++) {
+    const remaining = await pooledTotal()
+    if (!remaining) break
+    onStage?.(`第 ${planIds.length + 1} 套方案：正在调度 ${remaining} 单…`)
+    try {
+      planIds.push(await DispatchApi.createSmartPlan({ auto: true }))
+    } catch (e) {
+      failed += 1
+      break
+    }
+  }
+  if (!planIds.length) {
+    throw new Error('智能调度失败：订单池为空或算法无可行解')
+  }
+  if (failed) {
+    message.warning('部分片区订单本次未能生成方案，详情见列表与错误提示')
+  }
+  return planIds
+}
+
 const runAutoSmart = async () => {
   smartLoading.value = true
   autoRunning.value = true
@@ -700,14 +753,17 @@ const runAutoSmart = async () => {
       autoProgress.value = 1
       message.warning('运力不足：算法会自动增加车辆或给出不可行原因，可继续提交')
     }
-    // 2) 智能调度（算法决定实际使用几辆车）
-    const planId = await DispatchApi.createSmartPlan({ auto: true })
+    // 2) 智能调度（按片区分批，算法决定实际使用几辆车）
+    const planIds = await runAutoPlans()
     // 3) 读取方案摘要（订单数/车辆数/里程/算法版本）
-    const plan = await DispatchApi.getDispatchPlan(planId)
+    const plan = await DispatchApi.getDispatchPlan(planIds[0])
     autoResult.value = plan
     autoProgress.value = autoStages.length
-    message.success(`智能调度完成，方案号：${planId}`)
+    message.success(`智能调度完成，共 ${planIds.length} 套方案：${planIds.map((id) => '#' + id).join('、')}`)
     getPlanList()
+    // 4) 就地展开调度结果可视化（任务段时间线 + 地图路线 + 播放）
+    smartVisible.value = false
+    openVisual(planIds)
   } finally {
     window.clearInterval(timer)
     autoRunning.value = false
@@ -746,21 +802,24 @@ const runOneClickDemo = async () => {
   try {
     // ① 归集全部待入池订单
     const collected = await DispatchApi.collectOrders({ all: true })
-    loading.setText(`① 已归集 ${collected} 单，② 正在智能调度…`)
+    loading.setText(`① 已归集 ${collected} 单，② 正在按片区智能调度…`)
     getPoolList()
-    // ② 一键智能调度（后端自动选场站与候选车辆，算法决定实际车辆数）
-    const planId = await DispatchApi.createSmartPlan({ auto: true })
-    loading.setText('③ 正在审核方案…')
-    // ③ 方案审核通过
-    await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
-    const plan = await DispatchApi.getDispatchPlan(planId)
+    // ② 一键智能调度（按片区分批：重邮片区一套、成都片区一套…；后端自动选场站与候选车辆）
+    const planIds = await runAutoPlans((text) => loading.setText(`② ${text}`))
+    // ③ 方案审核通过（每套方案都审）
+    for (const planId of planIds) {
+      loading.setText(`③ 正在审核方案 #${planId}…`)
+      await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
+    }
+    const plan = await DispatchApi.getDispatchPlan(planIds[0])
     loading.close()
     await ElMessageBox.alert(
-      `归集订单：${collected} 单\n方案：#${planId}（订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}）\n\n接下来去小程序【司机端】工作台：扫码装车 → 发车 → 到站妥投。\n用户端可在「快递」页看到车辆动态与「车快到了」提醒。\n\n（如需管理员代核验，请在下方「调度方案」列表对单台车执行发车核验）`,
+      `归集订单：${collected} 单\n生成方案：${planIds.map((id) => '#' + id).join('、')}（共 ${planIds.length} 套，按片区分别成方案）\n首套方案：订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}\n\n接下来：关闭本弹窗可看「调度结果可视化」（任务段时间线 + 地图路线 + ▶播放）。\n司机端工作台：扫码装车 → 发车 → 到站妥投；用户端「快递」页可看到车辆动态与「车快到了」提醒。`,
       '调度完成（发车留给司机端）',
       { type: 'success', confirmButtonText: '知道了' }
     )
     getPlanList()
+    openVisual(planIds)
   } catch (e) {
     loading.close()
     // 业务错误已由 axios 统一提示；这里补充语义化说明，便于现场判断卡在哪一步

@@ -45,6 +45,22 @@ export interface DispatchPlanItemVO {
   visitSequence?: number
   actionType?: number
   estimatedArrivalTime?: string
+  /** 展示用（后端 getPlan 补齐）：站点名 */
+  stationName?: string
+  /** 展示用（后端 getPlan 补齐）：订单号 */
+  orderNo?: string
+  /** 计划离站时间 */
+  plannedDepartureTime?: string
+  /** 本站作业时长(秒) */
+  serviceDurationSeconds?: number
+  /** 分段里程(km) */
+  segmentDistanceKm?: number
+  /** 数量（BOARD/ALIGHT=人数，PICKUP/DELIVER=件数） */
+  quantity?: number
+  /** 服务方式（ServiceModeEnum.code，仅货运经停） */
+  serviceMode?: string
+  /** 任务段状态（TaskItemStatusEnum） */
+  status?: number
 }
 
 /** 调度方案详情(对应 DispatchPlanRespVO) */

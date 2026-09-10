@@ -57,6 +57,21 @@ public class AppSendOrderCreateReqVO {
     @Schema(description = "收货地址")
     private String receiverAddress;
 
+    // ========== 用户原始位置（"位置 ≠ 车辆能到的地方"：原始地址与服务站分开保存，不互相覆盖） ==========
+
+    @Schema(description = "用户原始寄货地址（如 重庆邮电大学；高德逆地理结果或用户填写）")
+    private String originalAddress;
+
+    @Schema(description = "用户原始纬度(GCJ-02)")
+    private BigDecimal originalLatitude;
+
+    @Schema(description = "用户原始经度(GCJ-02)")
+    private BigDecimal originalLongitude;
+
+    @Schema(description = "取货服务方式（ServiceModeEnum.code）：小程序用当前位置寄货时由可达性评估给出"
+            + "（NEAREST_STATION 最近站点交接 / DOOR_PICKUP 上门）；不传则由承运审核推导")
+    private String pickupServiceMode;
+
     @Schema(description = "最早取货时间")
     private LocalDateTime earliestPickupTime;
 }

@@ -34,6 +34,24 @@ jar 内 `application-dev.yaml` 的 Redis 默认地址是 yudao 公共演示 Redi
 
 ### 文件（照片）URL 必须带 `/api` 前缀
 
+### 演示登录：短信渠道不可用时用密码登录
+
+dev 服务器的 `system_sms_channel` 用的是上游示例凭据（`DEBUG_DING_TALK`），`/app-api/member/auth/send-sms-code` 会返回 `500 系统异常`，
+因此**短信验证码登录在现场演示时不可用**（商城下单/我的寄货都要求登录）。执行 `sql/mysql/demo-member.sql` 预置一个已知密码的演示会员：
+
+| 账号 | 密码 | 登录方式 |
+|---|---|---|
+| `13800000000` | `123456` | 小程序登录页 → 切到「密码登录」 |
+
+```bash
+set -a; source /opt/cargo-post-platform/.env; set +a
+docker compose --env-file /opt/cargo-post-platform/.env -f deploy/docker-compose.yml \
+  exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}" "${DB_NAME}" < sql/mysql/demo-member.sql
+```
+
+若要连短信流程一起演示，需要在管理端「系统管理 → 短信管理」配置一个真实可用渠道（阿里云/腾讯云，需实名与模板报备），
+或增加一个"开发调试渠道"（只写日志不真发短信）——后者可作为后续增强项。
+
 `deploy/nginx/nginx.conf` 只把 `/api/` 转发到后端（转发时**剥掉** `/api` 前缀），其余路径落到前端 SPA。
 因此 `infra_file_config.config.domain` 必须是 **`http://1.15.29.107/api`**（不是 `http://1.15.29.107`）：
 否则 DB 存储生成的文件 URL 形如 `http://1.15.29.107/admin-api/infra/file/4/get/xxx.jpg`，浏览器请求会命中前端路由拿到 `index.html`

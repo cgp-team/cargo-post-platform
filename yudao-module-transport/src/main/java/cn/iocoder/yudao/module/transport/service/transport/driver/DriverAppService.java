@@ -46,6 +46,12 @@ public interface DriverAppService {
     /** 取件核销：邮快件收件人取件，司机确认（校验取件码，主表 3→4 + 子表已取件） */
     void pickupVerify(AppDriverOrderActionReqVO reqVO);
 
+    /** 司机端：商城订单装车确认（拍照核验凭证，订单仍为已发货/配送中） */
+    void productLoad(AppDriverOrderActionReqVO reqVO);
+
+    /** 司机端：商城订单妥投完成（交付凭证，订单转已完成，用户端可见） */
+    void productDeliver(AppDriverOrderActionReqVO reqVO);
+
     /** 上报车辆实时位置（按车辆 upsert） */
     void reportLocation(AppDriverLocationReqVO reqVO);
 

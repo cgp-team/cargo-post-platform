@@ -25,6 +25,12 @@ public interface TransitProvider {
     /** 数据源名：AMAP / PROJECT */
     String name();
 
+    /**
+     * 该数据源产出的站点/线路属于哪一层：{@link #REAL_TRANSIT}（现实公交）或 {@link #PROJECT_TRANSIT}（项目自建）。
+     * 注意与 {@link #name()} 区分：name 是展示用的数据源名（AMAP/PROJECT），layer 是分层标识。
+     */
+    String dataSource();
+
     /** 当前是否可用（未配置 key、依赖缺失均返回 false，调用方据此降级） */
     boolean available();
 
@@ -43,5 +49,19 @@ public interface TransitProvider {
 
     /** 附近线路 */
     record TransitLine(String routeName, String startStation, String endStation, String dataSource) {
+    }
+
+    /**
+     * 站点名称规范化：去掉「(公交站)」「（XX）」等后缀与空白，使「曾家岩(公交站)」与「曾家岩」归为同一键。
+     * 站点去重键 = 规范化名称 + 5 位小数经纬度（客户端与后端共用同一套规则）。
+     */
+    static String normalizeStationName(String name) {
+        if (name == null) {
+            return "";
+        }
+        return name.replaceAll("[（(][^）)]*[）)]", "")
+                .replaceAll("(公交车?站|站点|站)$", "")
+                .replaceAll("\\s+", "")
+                .trim();
     }
 }

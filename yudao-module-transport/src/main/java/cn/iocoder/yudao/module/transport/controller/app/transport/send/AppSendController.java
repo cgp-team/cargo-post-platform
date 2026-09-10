@@ -9,6 +9,8 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.S
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendArrangementRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendRoutePreviewReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.RoutePreviewRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
@@ -18,19 +20,23 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.send.AppSendRouteInfoService;
+import cn.iocoder.yudao.module.transport.service.transport.send.AppSendReachabilityService;
 import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider;
 import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
@@ -68,12 +74,14 @@ public class AppSendController {
     @Resource private TransportOrderService transportOrderService;
     @Resource private StationService stationService;
     @Resource private AppSendRouteInfoService sendRouteInfoService;
+    @Resource private AppSendReachabilityService sendReachabilityService;
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private VehicleMapper vehicleMapper;
     @Resource private ShiftMapper shiftMapper;
+    @Resource private DriverMapper driverMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     /** 统一车辆位置（REAL > 模拟引擎 > 确定性班次模拟）：演示无司机上报时也能出"车快到了" */
     @Resource private VehicleLocationProvider vehicleLocationProvider;
@@ -167,6 +175,8 @@ public class AppSendController {
         if (eta != null && eta.isAfter(LocalDateTime.now())) {
             vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
         }
+        // 司机到站/作业进度：与车辆位置无关，直接按经停明细状态给（用户端"司机已到达"提醒）
+        fillCarrierArrival(vo, item, driverById(item.getDriverId()));
         // 车来取货/送货提醒：仅在途订单填充（完成/取消的经停明细仍在，不提醒，防误导）
         if (carrierReminderEligible(order.getStatus())) {
             Map<Long, VehicleLocationSnapshot> carrierLocMap = new HashMap<>();
@@ -208,9 +218,10 @@ public class AppSendController {
         if (list.isEmpty()) {
             return;
         }
-        // 仅在途订单（已分配/已发车）展示提醒；完成/取消单的经停明细仍在，预过滤防误显示
+        // 在途订单（已分配/已发车）展示"车快到了"；已完成订单也可能有"司机已到达/已妥投"要展示，
+        // 因此批次里带上"有经停明细且在途或已完成"的订单，取消单不参与
         List<Long> orderIds = orders.stream()
-                .filter(o -> carrierReminderEligible(o.getStatus()))
+                .filter(o -> carrierReminderEligible(o.getStatus()) || carrierArrivalEligible(o.getStatus()))
                 .map(TransportOrderDO::getId).toList();
         if (orderIds.isEmpty()) {
             return;
@@ -237,16 +248,86 @@ public class AppSendController {
                 .collect(Collectors.toMap(VehicleDO::getId, Function.identity(), (a, b) -> a));
         Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
                 .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        // 司机档案一次加载（"张师傅已到达"）
+        Map<Long, DriverDO> driverMap = driverMapOf(items.stream().map(DispatchPlanItemDO::getDriverId)
+                .filter(Objects::nonNull).collect(Collectors.toSet()));
         for (int i = 0; i < list.size(); i++) {
-            // 状态收口兜底：即使查询结果混入非在途订单也不填充（与 orderIds 预过滤同口径）
-            if (!carrierReminderEligible(orders.get(i).getStatus())) {
+            Integer status = orders.get(i).getStatus();
+            // 状态收口兜底：即使查询结果混入已取消订单也不填充（与 orderIds 预过滤同口径）
+            if (!carrierReminderEligible(status) && !carrierArrivalEligible(status)) {
                 continue;
             }
             DispatchPlanItemDO item = orderItemMap.get(orders.get(i).getId());
-            if (item != null) {
+            if (item == null) {
+                continue;
+            }
+            // 到站/作业进度：不依赖车辆位置（车辆没上报也能看到"司机已到达"）
+            // 注意：Map.of() 不可 get(null)，driverId 为空时必须先判空
+            fillCarrierArrival(list.get(i), item,
+                    item.getDriverId() == null ? null : driverMap.get(item.getDriverId()));
+            if (carrierReminderEligible(status)) {
                 fillCarrierLiveInfo(list.get(i), item, locMap, vehicleMap, stationMap);
             }
         }
+    }
+
+    /** 订单是否可展示"司机已到达/已完成"进度：在途 + 已完成（取消单不显示） */
+    static boolean carrierArrivalEligible(Integer status) {
+        return Objects.equals(status, TransportOrderStatusEnum.COMPLETED.getStatus());
+    }
+
+    /**
+     * 填充"司机到站/作业进度"（用户端「司机已到达」提醒）。
+     *
+     * 数据源为派单经停明细状态（后端为源，司机端到站/装车/妥投都会回写）：
+     * 已到站(2)/揽收中(5)/派送中(6) → carrierArrived=true（司机已到交接点）；
+     * 已完成(7) → 揽收明细为 carrierLoaded、派送明细为 carrierDelivered。
+     * 状态时间为明细 update_time（近似现场时间，仅作展示）。
+     */
+    private void fillCarrierArrival(AppSendOrderRespVO vo, DispatchPlanItemDO item, DriverDO driver) {
+        Integer status = item.getStatus();
+        if (driver != null) {
+            vo.setDriverName(driver.getName());
+            vo.setDriverMobile(driver.getMobile());
+        }
+        vo.setCarrierTaskStatus(TaskItemStatusEnum.nameOf(status));
+        if (status == null) {
+            return;
+        }
+        int s = status;
+        // 已到站(2)~已完成(7) 视为"司机已到过该交接点"；失败(8)不算到达
+        boolean arrived = s >= TaskItemStatusEnum.ARRIVED.getStatus()
+                && s <= TaskItemStatusEnum.COMPLETED.getStatus();
+        vo.setCarrierArrived(arrived);
+        if (arrived) {
+            vo.setCarrierArrivedTime(item.getUpdateTime());
+            if (item.getStationId() != null) {
+                vo.setCarrierArrivedStation(stationNameOf(item.getStationId()));
+            }
+        }
+        boolean done = s == TaskItemStatusEnum.COMPLETED.getStatus();
+        Integer action = item.getActionType();
+        vo.setCarrierLoaded(done && action != null && action == 4);
+        vo.setCarrierDelivered(done && action != null && action == 3);
+    }
+
+    /** 站点名（单条查询，用于 track/列表的到站提示） */
+    private String stationNameOf(Long stationId) {
+        return stationService.getSimpleList().stream()
+                .filter(s -> Objects.equals(s.getId(), stationId))
+                .map(StationDO::getStationName).findFirst().orElse(null);
+    }
+
+    private DriverDO driverById(Long driverId) {
+        return driverId == null || driverMapper == null ? null : driverMapper.selectById(driverId);
+    }
+
+    private Map<Long, DriverDO> driverMapOf(Set<Long> driverIds) {
+        if (driverIds.isEmpty() || driverMapper == null) {
+            return Map.of();
+        }
+        return driverMapper.selectBatchIds(driverIds).stream()
+                .collect(Collectors.toMap(DriverDO::getId, Function.identity(), (a, b) -> a));
     }
 
     /** 填充承运车辆实时位置 + 距目标站点距离/分钟（车来取货/送货提醒）。
@@ -310,6 +391,13 @@ public class AppSendController {
     @PermitAll
     public CommonResult<RoutePreviewRespVO> routePreview(@Valid @RequestBody AppSendRoutePreviewReqVO reqVO) {
         return success(sendRouteInfoService.routePreview(reqVO.getPickupStationId(), reqVO.getDeliveryStationId()));
+    }
+
+    @PostMapping("/reachability")
+    @Operation(summary = "当前位置可达性评估（车辆能否直接到达 → 不可达时推荐最近可服务站点与步行时间）")
+    @PermitAll
+    public CommonResult<AppSendReachabilityRespVO> reachability(@Valid @RequestBody AppSendReachabilityReqVO reqVO) {
+        return success(sendReachabilityService.evaluate(reqVO.getLatitude(), reqVO.getLongitude()));
     }
 
     @GetMapping("/arrangements")
@@ -409,6 +497,9 @@ public class AppSendController {
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());
+                vo.setOriginalAddress(cargo.getOriginalAddress());
+                vo.setOriginalLatitude(cargo.getOriginalLatitude());
+                vo.setOriginalLongitude(cargo.getOriginalLongitude());
             }
         }
         return vo;

@@ -52,4 +52,10 @@ public class CargoOrderDO extends TenantBaseDO {
     private String receiverMobile;
     /** 收货地址 */
     private String receiverAddress;
+    /** 用户原始寄货地址（如 重庆邮电大学；与服务站点分开保存，不互相覆盖） */
+    private String originalAddress;
+    /** 用户原始纬度(GCJ-02) */
+    private BigDecimal originalLatitude;
+    /** 用户原始经度(GCJ-02) */
+    private BigDecimal originalLongitude;
 }

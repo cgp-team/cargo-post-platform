@@ -12,10 +12,38 @@ import java.util.List;
 public class AppProductOrderTraceRespVO {
     @Schema(description = "订单编号", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long orderId;
+    @Schema(description = "业务订单号（用户端展示二维码/司机扫码用）")
+    private String orderNo;
+    @Schema(description = "订单状态(0待发货 1已发货 2已完成 3已取消)")
+    private Integer status;
+    @Schema(description = "订单状态名")
+    private String statusName;
     @Schema(description = "商品名称(订单首个商品)")
     private String productName;
+    @Schema(description = "收货人/收货地址（司机端交付核对同一份）")
+    private String receiverName;
+    @Schema(description = "收货电话")
+    private String receiverMobile;
+    @Schema(description = "收货地址（自由文本，非站点）")
+    private String receiverAddress;
     @Schema(description = "承运车牌号")
     private String vehiclePlate;
+    @Schema(description = "承运司机姓名")
+    private String driverName;
+    @Schema(description = "承运司机电话")
+    private String driverMobile;
+    @Schema(description = "交付/自提站点名称（发货时=班次线路终点站）")
+    private String deliverStationName;
+    @Schema(description = "司机是否已到达交付站点（用户端\"司机已到达\"提醒）")
+    private Boolean driverArrived;
+    @Schema(description = "司机装车时间（装车拍照核验凭证）")
+    private LocalDateTime loadTime;
+    @Schema(description = "司机装车照片URL")
+    private String loadPhotoUrl;
+    @Schema(description = "司机妥投时间（交付凭证）")
+    private LocalDateTime deliverTime;
+    @Schema(description = "司机妥投照片URL")
+    private String deliverPhotoUrl;
     @Schema(description = "承运班次编码")
     private String shiftCode;
     @Schema(description = "线路名称")
