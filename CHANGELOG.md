@@ -1,3 +1,25 @@
+# 2026-09-10 寄货物体体积/信息 + 实时公交演示兜底 + 写链路故障自愈
+
+- **寄货新增物体体积与物体信息**：`pages/send/send` 增加货物类型（农产品/生鲜果蔬/日用品/文件票据/其他）、件数、长×宽×高（cm，前端折算 m³ 保留 4 位小数）、是否生鲜；`AppSendOrderCreateReqVO` 新增 `cargoCategory/itemCount/volumeM3/freshFlag` 并落 `transport_cargo_order`，「我的寄货」按标签回显。
+- **修复寄货全单转人工审核**：`TransportOrderServiceImpl.createSendOrder` 曾把 `freshFlag` 硬编码 `true`，导致每单都被承运审核判为「生鲜需人工确认」；现按客户勾选落库（缺省 false），普通货物正常流转到「待入池」。
+- **前端限重与后端规则对齐**：单件 30kg（60 斤）在提交前提示，避免提交后被判拒运；`utils/util.cmSizeToM3` 体积折算与 `miniprogram/tests/util.test.js` 单测。
+- **实时公交演示兜底**：`MonitoringServiceImpl.fillTimetableSimulation` 恢复「班次时刻表插值」——无司机上报、未启动模拟引擎时按当前班次窗口在经停站 `planned_minutes` 上插值给出位置，`dataSource=SIMULATED`，供 `/bus/lines`、`/bus/realtime`、`/bus/nearby` 展示；真实上报车辆优先，且需回填班次/线路才进公交列表（`AppBusRespVO` 新增 `dataSource`）；开发模式模拟运行（含 GPS 关闭）不叠加演示位置。
+- **模拟位置显式标注**：公交页/车辆详情/首页附近公交对 `SIMULATED` 显示「模拟演示」，`REAL_FRESH` 才显示「实时」。
+- **下单失败可读化**：商城下单失败改用弹窗展示后端原因（不再是一闪而过的「失败」）；`api.js` 的 401 记录来源页，重新登录后回到原页，已填收货信息不丢。
+- **部署自愈：后端 Redis 可写性**：`deploy-dev.yml` 新增 `Ensure backend has a writable Redis`——先探测后端写 Redis 是否 500，只有确认写失败且本机 Redis 容器 SET/GET 自检通过时，才把 `SPRING_DATA_REDIS_*` 幂等写入 `app.env` 并重启验证，不健康自动回滚；新增 `deploy/scripts/diagnose-backend.sh` 一次性排查（健康/读写链路/磁盘/Redis/MySQL/日志）。
+- **修复小程序商城订单页线上报错**：`pages/orders/orders.js` 不再传 `status: undefined`（wx.request 会把它序列化成字符串 `"undefined"`，后端 `ProductOrderPageReqVO.status(Integer)` 绑定失败：`For input string: "undefined"`），切 tab 的 dataset 值统一归一为数字；`utils/api.js` 新增统一 `cleanParams`（过滤 undefined/null/空串，保留 0/false），`request()` 对 GET/POST 统一清理，附近公交的手写过滤收敛到该处，页面侧不再出现 `undefined` 字面量；新增 `tests/api-params.test.js`、`tests/orders-params.test.js` 回归测试。后端 DTO 保持不变。
+- **统一位置模型（REAL / SIMULATED / OFFLINE）**：新增 `DeterministicScheduleSimulator`（班次时刻表确定性模拟，无需启动 SimulationEngine），`VehicleLocationProvider` 三级回退 REAL → 模拟引擎 → 班次模拟 → OFFLINE；`VehicleLocationSnapshot` 补全班次/线路/当前站/下一站/进度/ETA 上下文；实时公交不再因 REAL 车辆 `shiftCode=null` 被过滤；OFFLINE 只表示真正没有位置。
+- **附近公交分层数据源**：新增 `TransitProvider` 抽象 + `AmapTransitProvider`（现实公交站点，未配 key 自动禁用不伪造）+ `ProjectTransitProvider`（项目自建线路），`/transport/bus/nearby` 返回 `dataSource/nearbyStations.lines/lineCount/realTransitAvailable` 等分层字段；首页与「实时公交」页共用同一 nearby 接口与文案语义（"附近有 N 条线路 / 当前暂无实时车辆数据" vs "附近暂无公交线路"）。
+- **定位精度修复**：微信定位改 GCJ-02（与站点表/高德一致），新增 `GeoCoordUtil` WGS84/GCJ02/BD09 互转；定位缓存"秒出"阈值 90s（超时同步重取，避免用旧坐标查公交）；精度不足（>200m）自动补测取更准结果；高精度窗口 6s→10s；新增"定位精度较低，点此重新定位"与精度自适应搜索半径；定位失败不再显示默认"云山村"；新增 `[Location] ...` 日志与 19 项定位单测。
+- **一键智能调度**：新增 `AutoDispatchPlanner`（自动选场站：场站级候选按到订单站点距离和最小/同分取 ID；自动选候选车辆：运力降序取前 3 台，实际车辆数由算法决定；算法默认参数 ant_count=30 等 7 项），`DispatchSmartPlanReqVO/DispatchValidateReqVO` 增加 `auto`（旧字段兼容），管理端弹窗改「一键开始智能调度 + 高级设置折叠」，`getPlan` 补 `orderCount/vehicleCount/depotStationName` 摘要。
+- **一键演示（后台）**：`POST /transport/dispatch/order-pool/collect` 新增 `all=true`（免勾选归集全部「待入池」订单）；管理端「班次调度」页新增「一键演示（归集→调度→审核→核验）」按钮，链式调用正式接口并逐步显示 loading 文案，完成后给方案摘要，现场演示只点一次。
+- **车来取货/送货提醒改为演示可见**：`AppSendController` 位置改走统一位置模型 `VehicleLocationProvider.getLocations(vehicles, true)`（真实上报 > 模拟引擎 > 确定性班次模拟），因此**无需司机开 GPS 也有倒计时**；响应新增 `carrierLocationSource`（REAL_FRESH / REAL_STALE / SIMULATED）与 `carrierApproaching`（≤10 分钟）；小程序「我的寄货」列表与单号查询在 ≤10 分钟时显示高亮「车快到了」横幅并弹一次提示（同单不重复）。
+- **高德双 key 接入与文档**：小程序端 `AMAP_MINI_KEY`（微信小程序类型 key，`libs/amap-wx.js` + `https://restapi.amap.com` 合法域名，已配）；后端/算法侧 `AMAP_KEY`（Web 服务类型 key，`.env` 一处配置，部署流水线新增 `Sync AMAP_KEY to backend env` 幂等同步到后端 systemd env）；两种 key 类型不可互换（混用会 `USERKEY_PLAT_NOMATCH`）。真实高德公交站 POI 的 `address` 实为途经线路，已在前后端解析为线路标签。
+- **修复后台看不到寄货/司机照片**：`infra_file_config.domain` 被修成 `http://1.15.29.107`（缺 `/api`），生成的文件 URL 形如 `/admin-api/infra/file/4/get/xxx.jpg`；而 nginx 只把 `/api/` 转发后端（剥前缀），其余落到前端 SPA → 浏览器拿到 index.html（实测 `text/html`），后台订单列表/审核弹窗里的照片全是裂图。新增 V018 迁移：domain 与历史 URL 统一补齐 `/api` 前缀（含 `infra_file.url`、`transport_cargo_order.photo_url/driver_photo_url`、`system_users.avatar`），部署流水线新增"文件 URL 必须带 /api"的硬校验。
+- **就近站点匹配 + 通知客户前往**：`CargoReviewServiceImpl.selectServicePointStation` 按确定性规则匹配交接站点（取货站本身是场站级 → 本站交接；否则取距取货站最近的启用站点，同距取 ID 升序；无站点数据回退送达站点）；响应补 `servicePointStationName/坐标/距取货点公里数`，小程序寄货成功卡与「快递」页在"需客户操作"时显示"请送往就近站点 X（约 Y km）"并提供**导航前往**（`wx.openLocation`）。
+
+---
+
 # 2026-08-17 取件核销/货运审核加固 + 调度结算口径修正 + 10 列回流 schema
 
 - **track 接口取件码按归属分层返回**：包裹追踪接口按订单归属决定取件码是否返回，防凭单号枚举他人取件码。
