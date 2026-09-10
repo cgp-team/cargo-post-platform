@@ -119,6 +119,32 @@
 2. 启动本机后端（默认 48080），并确认数据库已执行 `transport-menu.sql`（含 `member_user`、`member_address` 与全部菜单）；商城联调还需 `transport-schema.sql` 中的 `transport_product` 表与 `transport-demo-data.sql` 中的商品演示数据；司机端写操作需 `transport_shift_execution` 与 `transport_vehicle_location` 两张表（新库直接 SOURCE 全量 `transport-schema.sql`，老库按序执行 `sql/incremental/` 的 V005~V009 入口；公告/反馈/轨迹表同理，新库全量、老库 V007/V008/V009）。
 3. 勾选「不校验合法域名」后编译，走短信或账号密码登录验证 `/app-api` 连通性。
 
+## 实时公交页（车来了式）与统一定位
+
+页面结构（`pages/bus/index`）：**定位状态条 → 概览（附近 N 个公交站 · M 条线路）→ 地图（45vh，第一视觉焦点）
+→ 附近线路（默认 6 条，可展开全部）→ 正在运行车辆列表**。地图上含：我的位置（`marker-me.png`）、公交站、
+运行车辆（真实=绿色 `/images/marker-bus-real.png`，模拟=橙色 `/images/marker-bus-sim.png`）、当前线路 polyline。
+
+- **统一定位**：全项目只有 `utils/location.js` 调用 `wx.getLocation({type:'gcj02'})`（页面禁止直调）；
+  高德链路 = 设备定位（拿 accuracy）+ `amap-wx.js` 逆地理（拿 city/district），全程 **GCJ-02**，不做页面级坐标换算。
+  统一输出 `{success, latitude, longitude, accuracy, timestamp, source, level, district, city}`，
+  `source ∈ AMAP | CACHE | DEMO | UNKNOWN`；日志前缀 `[AMAP_LOCATION]`。
+- **搜索半径**（唯一实现 `location.nearbyRadius`）：accuracy ≤100m → 5000m；100~500m → 8000m；>500m → 15000m（后端另有上限）。
+- **定位状态文案**：`已定位 · 精度 35m` / `定位精度较低 · 已扩大搜索范围` / `无法获取当前位置`；地图上有「回到我的位置」。
+- **站点去重**：键 = 规范化名称（去掉 `(公交站)` 等后缀）+ 5 位小数坐标；同名同坐标合并为一条，**线路取并集**（客户端
+  `transit-amap.dedupeStations`、后端 `AmapTransitProvider.dedupe`、合并层 `AppBusServiceImpl.dedupeNearbyStations` 同规则）。
+- **车辆移动**：15s 刷新只更新目标坐标，`utils/bus-motion.js` 用**单一定时器**在 1.2s 内插值平滑移动（约 12 帧），
+  只重设 markers，不重置地图中心/polyline；用户拖动地图后不再抢回中心；`onHide/onUnload` 清理刷新定时器与动画。
+- **来源不伪装**：现实公交站点/线路来自高德并标注"现实公交"；项目客货邮线路标注"客货邮"；模拟车辆标注"模拟演示"，真实上报才显示"实时"。
+
+真机演示步骤：
+
+1. 打开小程序 → 「实时公交」：先看到定位状态与地图（而不是几十个站点列表）；
+2. 地图上应有蓝点「我的位置」+ 周边公交站 + 运行车辆（橙色 = 模拟演示）；拖动地图后中心不会被刷新抢回；
+3. 点「附近线路」中某条线路 → 地图 polyline 与车辆切到该线路；点车辆 marker 或列表卡片 → 进详情（详情页含地图 +
+   车辆实时位置 + 下一站 + ETA + 数据来源）；
+4. 走动几十~几百米后下拉刷新或点「定位」→ 附近站点/车辆随位置变化。
+
 ## 故障排查：「登录/商城下单/寄货提交」统一失败
 
 现象：商品能浏览、公交/站点能加载（读接口正常），但发短信验证码、登录、商城下单、寄货提交一律失败，后端返回 `{"code":500,"msg":"系统异常"}`。
