@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.integration.algorithm;
 
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.*;
+import cn.hutool.core.util.StrUtil;
 import org.springframework.util.CollectionUtils;
 
 import java.util.*;
@@ -37,14 +38,21 @@ public final class AlgorithmResultValidator {
     }
 
     private static void validateInfeasible(AlgorithmPlanRespDTO response) {
-        if (response.getReasonCode() == null) {
-            throw exception(ALGORITHM_RESULT_INVALID, "无解结果缺少 reasonCode");
+        // 结果标准化（不删校验）：
+        // 1) 旧接口可能返回 reason_code（JSON 别名已接入 DTO）；
+        // 2) 若确实没给原因码，兜底 INFEASIBLE，保证业务侧始终能拿到原因码做展示与统计，
+        //    而不是把"无解"变成一次接口异常（此前会导致调度直接失败、演示中断）。
+        if (StrUtil.isBlank(response.getReasonCode())) {
+            response.setReasonCode(REASON_INFEASIBLE_FALLBACK);
         }
         // PARTIAL_ONLY 语义待澄清，当前按"只给状态不给方案"处理：无解不得携带方案
         if (!CollectionUtils.isEmpty(response.getVehiclePlans())) {
             throw exception(ALGORITHM_RESULT_INVALID, "无解结果不得携带车辆方案");
         }
     }
+
+    /** 无解兜底原因码（算法未给原因时的最后防线） */
+    public static final String REASON_INFEASIBLE_FALLBACK = "INFEASIBLE";
 
     private static void validateFeasible(AlgorithmPlanReqDTO request, AlgorithmPlanRespDTO response) {
         if (CollectionUtils.isEmpty(response.getVehiclePlans()) && !CollectionUtils.isEmpty(request.getOrders())) {

@@ -149,6 +149,10 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .receiverName(reqVO.getReceiverName())
                 .receiverMobile(reqVO.getReceiverMobile())
                 .receiverAddress(reqVO.getReceiverAddress())
+                // 用户原始位置单独留痕：服务站（pickupStationId）由可达性评估推荐，二者都不丢
+                .originalAddress(reqVO.getOriginalAddress())
+                .originalLatitude(reqVO.getOriginalLatitude())
+                .originalLongitude(reqVO.getOriginalLongitude())
                 .build();
         cargoOrderMapper.insert(sub);
 
