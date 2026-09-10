@@ -57,4 +57,15 @@ public class DispatchPlanRespVO {
     @Schema(description = "方案明细（经停序列）")
     private List<DispatchPlanItemDO> items;
 
+    // ========== 摘要（getPlan 计算）：供"智能调度完成"结果卡与列表展示，避免前端再拉明细 ==========
+
+    @Schema(description = "调度场站名称（取方案首条明细的站点）")
+    private String depotStationName;
+
+    @Schema(description = "方案覆盖订单数（去重）")
+    private Integer orderCount;
+
+    @Schema(description = "方案使用车辆数（去重）")
+    private Integer vehicleCount;
+
 }

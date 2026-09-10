@@ -31,6 +31,9 @@ public class AppBusRespVO {
     @Schema(description = "下一站名称")
     private String nextStation;
 
+    @Schema(description = "当前站/所在区间起点站名称")
+    private String currentStation;
+
     @Schema(description = "经度（供地图标记车辆位置）")
     private Double longitude;
 
@@ -45,5 +48,8 @@ public class AppBusRespVO {
 
     @Schema(description = "速度(km/h)")
     private Double speedKmh;
+
+    @Schema(description = "数据来源：REAL 司机真实上报 / SIMULATED 时刻表模拟演示（前端据此标注，不冒充真实）")
+    private String dataSource;
 
 }

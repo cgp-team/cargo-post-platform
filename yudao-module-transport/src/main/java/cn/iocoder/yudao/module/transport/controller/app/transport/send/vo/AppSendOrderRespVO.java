@@ -42,10 +42,24 @@ public class AppSendOrderRespVO {
     private Long servicePointStationId;
     @Schema(description = "建议服务站点名")
     private String servicePointStationName;
+    @Schema(description = "建议服务站点经度（客户送站导航用）")
+    private Double servicePointLongitude;
+    @Schema(description = "建议服务站点纬度")
+    private Double servicePointLatitude;
+    @Schema(description = "取货站点到建议服务站点的直线距离(km)：前端提示\"就近前往\"")
+    private Double servicePointDistanceKm;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")
     private BigDecimal goodsWeight;
+    @Schema(description = "货物类型（农产品/生鲜果蔬/日用品/文件票据/其他）")
+    private String cargoCategory;
+    @Schema(description = "货物件数")
+    private Integer itemCount;
+    @Schema(description = "货物体积(m³)")
+    private BigDecimal volumeM3;
+    @Schema(description = "是否生鲜/需冷链")
+    private Boolean freshFlag;
     @Schema(description = "货物备注")
     private String goodsNote;
     @Schema(description = "货物照片")
@@ -80,4 +94,8 @@ public class AppSendOrderRespVO {
     private BigDecimal carrierDistanceKm;
     @Schema(description = "承运车辆预计到达目标站点分钟数（实时位置估算）")
     private Integer carrierEtaMinutes;
+    @Schema(description = "承运车辆位置来源：REAL_FRESH 真实上报 / REAL_STALE 位置可能过期 / SIMULATED 模拟演示（班次插值或模拟引擎）")
+    private String carrierLocationSource;
+    @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟）：前端据此高亮并提示\"车快到了\"")
+    private Boolean carrierApproaching;
 }

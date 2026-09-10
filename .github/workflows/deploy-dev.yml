@@ -310,11 +310,26 @@ jobs:
             FAIL=1
           fi
 
+          # 3. 文件 URL 必须带 /api 前缀：nginx 只把 /api/ 转发到后端（转发时剥前缀），
+          #    缺前缀的 URL 会落到前端 SPA，浏览器拿到 index.html → 后台照片显示裂图
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') NOT LIKE '%/api'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: infra_file_config.domain 未带 /api 前缀（${CNT} 条）——图片 URL 会被 nginx 转发到前端"
+            FAIL=1
+          fi
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM transport_cargo_order WHERE (photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%') OR (driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%')")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: transport_cargo_order 仍有 ${CNT} 条缺 /api 前缀的照片 URL"
+            FAIL=1
+          fi
+
           if [ "${FAIL}" = "1" ]; then
             echo "Historical URL validation FAILED."
             exit 1
           fi
-          echo "Historical URL validation PASS: no legacy/test URLs found."
+          echo "Historical URL validation PASS: no legacy/test URLs found, file URLs carry /api prefix."
 
       # 自研算法服务（algorithm/，HACO-CPS）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
@@ -424,6 +439,102 @@ jobs:
           HEALTH=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>/dev/null || echo "unreachable")
           echo "algorithm health: ${HEALTH}"
           echo "algorithm 部署完成"
+
+      # 后端 Redis 自愈：jar 内 application-dev.yaml 默认指向 yudao 公共演示 Redis，
+      # 该类共享实例写命令被拒时（读命令正常，健康检查/监控看不出来），
+      # 登录、短信验证码、商城下单、寄货提交等写 Redis 的链路会统一 500「系统异常」。
+      # 本步骤先探测"当前后端能否写 Redis"，只有确认写失败、且服务器本机 Redis 容器读写自检通过时，
+      # 才把 Redis 指向本机容器（幂等写 /opt/cargo-post/app.env）；任何一步不满足都只告警、不动配置。
+      - name: Ensure backend has a writable Redis
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+
+          probe=$(curl -s --max-time 10 -X POST -H 'Content-Type: application/json' \
+            -d '{"mobile":"13800000000","scene":1}' \
+            http://127.0.0.1:48080/app-api/member/auth/send-sms-code || true)
+          echo "current backend send-sms-code: ${probe}"
+          if ! printf '%s' "${probe}" | grep -q '"code":500'; then
+            echo "后端 Redis 写链路自检通过（非 500），保持现有 Redis 配置不变。"
+            exit 0
+          fi
+          echo "检测到后端写 Redis 失败（send-sms-code 返回 500 系统异常），准备切到本机 Redis 容器。"
+
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "WARN: ${ENV_FILE} 不存在，无法确认本机 Redis 口令，跳过（配置未改动）"; exit 0
+          fi
+          set -a; source "${ENV_FILE}"; set +a
+          if [ -z "${REDIS_PASSWORD:-}" ]; then
+            echo "WARN: .env 缺少 REDIS_PASSWORD，跳过（配置未改动）"; exit 0
+          fi
+          if [ ! -w "${APP_ENV}" ] && [ ! -w "$(dirname "${APP_ENV}")" ]; then
+            echo "WARN: ${APP_ENV} 不可写（非 deploy 属主），跳过（配置未改动）；请手工追加 SPRING_DATA_REDIS_* 后重启服务"; exit 0
+          fi
+
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          if ! "${COMPOSE[@]}" ps redis 2>/dev/null | grep -q redis; then
+            echo "WARN: 本机 redis 容器未运行，跳过（配置未改动）"; exit 0
+          fi
+          if ! "${COMPOSE[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning set cargo-post:redis-probe ok | grep -q OK; then
+            echo "WARN: 本机 Redis 写入自检失败，跳过（配置未改动）"; exit 0
+          fi
+          if ! "${COMPOSE[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning get cargo-post:redis-probe | grep -q ok; then
+            echo "WARN: 本机 Redis 读回自检失败，跳过（配置未改动）"; exit 0
+          fi
+
+          APP_ENV_BAK="${APP_ENV}.before-redis-switch"
+          touch "${APP_ENV}"
+          cp -a "${APP_ENV}" "${APP_ENV_BAK}"
+          for kv in "SPRING_DATA_REDIS_HOST=127.0.0.1" "SPRING_DATA_REDIS_PORT=${REDIS_PORT:-6379}" \
+                    "SPRING_DATA_REDIS_DATABASE=1" "SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD}"; do
+            key="${kv%%=*}"
+            sed -i "/^${key}=/d" "${APP_ENV}"
+            echo "${kv}" >> "${APP_ENV}"
+          done
+          chmod 600 "${APP_ENV}" 2>/dev/null || true
+          echo "已把后端 Redis 指向本机容器 127.0.0.1:${REDIS_PORT:-6379}（app.env 幂等更新，重启服务后生效）。"
+
+          # 切换后立即重启并验证；起不来就回滚 app.env 再重启，避免把服务留在坏配置上。
+          sudo /usr/bin/systemctl restart cargo-post
+          REDIS_SWITCH_OK=0
+          for i in $(seq 1 30); do
+            sleep 3
+            if curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
+              REDIS_SWITCH_OK=1; echo "Redis 切换后后端已恢复（第 ${i} 次探测）"; break
+            fi
+          done
+          if [ "${REDIS_SWITCH_OK}" != "1" ]; then
+            echo "ERROR: 切换本机 Redis 后后端未恢复，回滚 app.env 并重启。" >&2
+            cp -a "${APP_ENV_BAK}" "${APP_ENV}"
+            sudo /usr/bin/systemctl restart cargo-post
+            systemctl status cargo-post -n 30 --no-pager >&2 || true
+            exit 1
+          fi
+
+      # 高德 Web 服务 key 透传：仓库 .env 的 AMAP_KEY（算法容器同一把，用于路网距离）
+      # 幂等写入后端 systemd env，让"附近公交现实站点层"与"算法路网距离/ETA"共用同一把 key。
+      # 注意：必须是「Web 服务」类型 key；小程序类型 key 放后端会被高德拒绝（USERKEY_PLAT_NOMATCH）。
+      - name: Sync AMAP_KEY to backend env
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "skip: ${ENV_FILE} 不存在"; exit 0
+          fi
+          set -a; source "${ENV_FILE}"; set +a
+          if [ -z "${AMAP_KEY:-}" ]; then
+            echo "AMAP_KEY 未配置：现实公交层走项目线路+模拟车辆，路网距离走直线估算（正常降级）"; exit 0
+          fi
+          if [ ! -w "${APP_ENV}" ] && [ ! -w "$(dirname "${APP_ENV}")" ]; then
+            echo "WARN: ${APP_ENV} 不可写，跳过（可手工追加 AMAP_KEY=... 后重启服务）"; exit 0
+          fi
+          touch "${APP_ENV}"
+          sed -i "/^AMAP_KEY=/d" "${APP_ENV}"
+          echo "AMAP_KEY=${AMAP_KEY}" >> "${APP_ENV}"
+          chmod 600 "${APP_ENV}" 2>/dev/null || true
+          echo "已同步 AMAP_KEY 到后端 env（下次后端重启生效；若本次有后端变更会紧随其后重启）"
 
       - name: Deploy backend and restart
         if: steps.changes.outputs.backend == 'true'

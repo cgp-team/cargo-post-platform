@@ -13,6 +13,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
+import cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,8 @@ import org.springframework.validation.annotation.Validated;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,6 +47,8 @@ public class AppBusServiceImpl implements AppBusService {
     @Resource private ShiftMapper shiftMapper;
     @Resource private StationMapper stationMapper;
     @Resource private AlgorithmClient algorithmClient;
+    /** 附近公交数据源分层：现实公交（高德，可缺省）+ 项目自建线路；各自标注来源，不互相伪装 */
+    @Resource private List<TransitProvider> transitProviders;
 
     /** radius 默认值：5000 米 */
     private static final double DEFAULT_RADIUS_M = 5000;
@@ -77,27 +82,33 @@ public class AppBusServiceImpl implements AppBusService {
                         s -> s.getPlannedDurationMinutes() != null ? s.getPlannedDurationMinutes() : 60,
                         (a, b) -> a));
         return vehicles.stream()
-                // 只有分配到班次的车辆才进入公交列表（在途行驶中 / 空闲停靠起点）
-                .filter(v -> v.getShiftCode() != null)
+                // 有班次（线路已知）或有坐标的真实上报车辆都进列表：
+                // 不能因为 REAL 车辆缺 shiftCode 就把它过滤掉（否则司机端刚上报也看不到车）
+                .filter(v -> v.getShiftCode() != null || v.getLongitude() != null)
                 .map(v -> {
                     AppBusRespVO vo = new AppBusRespVO();
                     vo.setBusId(v.getVehicleId());
                     vo.setPlateNo(v.getPlateNo());
                     vo.setShiftCode(v.getShiftCode());
                     vo.setRouteName(v.getRouteName());
-                    MonitoringMapDataRespVO.Route route = routeByName.get(v.getRouteName());
+                    MonitoringMapDataRespVO.Route route = v.getRouteName() == null ? null
+                            : routeByName.get(v.getRouteName());
                     if (route != null && route.getPoints() != null && !route.getPoints().isEmpty()) {
                         vo.setStartStation(route.getPoints().get(0).getStationName());
                         vo.setEndStation(route.getPoints().get(route.getPoints().size() - 1).getStationName());
                     }
                     vo.setStatus(v.getStatus());
                     vo.setNextStation(v.getNextStationName());
+                    vo.setCurrentStation(v.getCurrentStationName());
                     vo.setLongitude(v.getLongitude());
                     vo.setLatitude(v.getLatitude());
                     vo.setProgress(v.getProgress());
                     vo.setSpeedKmh(v.getSpeedKmh());
+                    // 数据来源（REAL / SIMULATED）：小程序据此标注「模拟演示」，不拿模拟位置冒充真实上报
+                    vo.setDataSource(v.getDataSource());
                     // ETA = 剩余进度占比 × 班次计划时长（向下取整至少 1 分钟）
-                    int duration = durationByShiftCode.getOrDefault(v.getShiftCode(), 60);
+                    int duration = v.getShiftCode() == null ? 60
+                            : durationByShiftCode.getOrDefault(v.getShiftCode(), 60);
                     int progress = v.getProgress() != null ? v.getProgress() : 0;
                     vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
                     return vo;
@@ -151,51 +162,116 @@ public class AppBusServiceImpl implements AppBusService {
         double radM = radius != null && radius > 0 ? Math.min(radius, MAX_RADIUS_M) : DEFAULT_RADIUS_M;
         double radKm = radM / 1000.0;
 
-        // 附近站点：有精确坐标按 Haversine 过滤；无坐标按区域名（站点名称/地址）模糊匹配
-        List<AppBusNearbyRespVO.NearbyStation> nearbyStations = new ArrayList<>();
+        // 项目线路数据（一次加载：站点聚合 / 车辆线路关联复用）
+        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
+        Map<String, MonitoringMapDataRespVO.Route> routeByName = mapData.getRoutes() == null ? Map.of()
+                : mapData.getRoutes().stream().collect(Collectors.toMap(
+                        MonitoringMapDataRespVO.Route::getRouteName, Function.identity(), (a, b) -> a));
+        Map<Long, List<String>> stationLines = stationLines(mapData);
         List<StationDO> stations = stationMapper.selectList();
         Map<String, StationDO> stationByName = stations.stream()
                 .filter(s -> s.getStationName() != null)
                 .collect(Collectors.toMap(StationDO::getStationName, Function.identity(), (a, b) -> a));
-        for (StationDO station : stations) {
-            if (station.getLongitude() == null || station.getLatitude() == null) {
-                continue;
-            }
-            Double distKm = null;
-            if (located) {
-                double d = GeoDistanceUtil.haversineKm(longitude, latitude,
-                        station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
-                if (d > radKm) {
+
+        // 附近站点分层：A 现实公交站点（REAL_TRANSIT，需高德 key）+ B 项目自建站点（PROJECT_TRANSIT）
+        // 关键：不能再把 transport_station 当成"现实世界公交库"；现实层没数据也不能直接判定"附近没有公交"
+        List<AppBusNearbyRespVO.NearbyStation> nearbyStations = new ArrayList<>();
+        int realStationCount = 0;
+        boolean realTransitAvailable = false;
+        String transitProvider = "NONE";
+        if (located) {
+            for (TransitProvider provider : transitProviders) {
+                if (!provider.available()) {
                     continue;
                 }
-                distKm = round2(d);
-            } else if (district != null && !district.isBlank()) {
+                List<TransitProvider.TransitStation> found =
+                        provider.searchNearbyStations(latitude, longitude, radM);
+                if (TransitProvider.REAL_TRANSIT.equals(provider.name())) {
+                    realTransitAvailable = true;
+                    transitProvider = provider.name();
+                }
+                for (TransitProvider.TransitStation station : found) {
+                    Double distKm = station.distanceKm() != null ? station.distanceKm()
+                            : round2(GeoDistanceUtil.haversineKm(longitude, latitude,
+                                    station.longitude(), station.latitude()));
+                    AppBusNearbyRespVO.NearbyStation ns = new AppBusNearbyRespVO.NearbyStation();
+                    ns.setName(station.name());
+                    ns.setLongitude(station.longitude());
+                    ns.setLatitude(station.latitude());
+                    ns.setDistanceKm(distKm);
+                    ns.setDataSource(station.dataSource());
+                    ns.setLines(station.lines());
+                    if (TransitProvider.REAL_TRANSIT.equals(station.dataSource())) {
+                        realStationCount++;
+                    } else {
+                        StationDO matched = stationByName.get(station.name());
+                        if (matched != null) {
+                            ns.setId(matched.getId());
+                        }
+                    }
+                    nearbyStations.add(ns);
+                }
+            }
+        } else if (district != null && !district.isBlank()) {
+            // 无精确坐标：district 区域 fallback（项目自建站点，名称/地址模糊匹配）
+            for (StationDO station : stations) {
+                if (station.getLongitude() == null || station.getLatitude() == null) {
+                    continue;
+                }
                 boolean hit = (station.getStationName() != null && station.getStationName().contains(district))
                         || (station.getAddress() != null && station.getAddress().contains(district));
                 if (!hit) {
                     continue;
                 }
-            } else {
-                continue;
+                AppBusNearbyRespVO.NearbyStation ns = new AppBusNearbyRespVO.NearbyStation();
+                ns.setId(station.getId());
+                ns.setName(station.getStationName());
+                ns.setLongitude(station.getLongitude().doubleValue());
+                ns.setLatitude(station.getLatitude().doubleValue());
+                ns.setDataSource(TransitProvider.PROJECT_TRANSIT);
+                ns.setLines(stationLines.getOrDefault(station.getId(), List.of()));
+                nearbyStations.add(ns);
             }
-            AppBusNearbyRespVO.NearbyStation ns = new AppBusNearbyRespVO.NearbyStation();
-            ns.setId(station.getId());
-            ns.setName(station.getStationName());
-            ns.setLongitude(station.getLongitude().doubleValue());
-            ns.setLatitude(station.getLatitude().doubleValue());
-            ns.setDistanceKm(distKm);
-            nearbyStations.add(ns);
         }
         nearbyStations.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyStation::getDistanceKm,
                 Comparator.nullsLast(Comparator.naturalOrder())));
+        // 兜底：精确坐标下若项目线路层未产出任何站点（未装配 TransitProvider / 半径内无站点），
+        // 退回按站点表 Haversine 直查，保证"项目自建线路正常展示"不因装配问题退化
+        if (located && nearbyStations.isEmpty()) {
+            for (StationDO station : stations) {
+                if (station.getLongitude() == null || station.getLatitude() == null) {
+                    continue;
+                }
+                double d = GeoDistanceUtil.haversineKm(longitude, latitude,
+                        station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+                if (d > radKm) {
+                    continue;
+                }
+                AppBusNearbyRespVO.NearbyStation ns = new AppBusNearbyRespVO.NearbyStation();
+                ns.setId(station.getId());
+                ns.setName(station.getStationName());
+                ns.setLongitude(station.getLongitude().doubleValue());
+                ns.setLatitude(station.getLatitude().doubleValue());
+                ns.setDistanceKm(round2(d));
+                ns.setDataSource(TransitProvider.PROJECT_TRANSIT);
+                ns.setLines(stationLines.getOrDefault(station.getId(), List.of()));
+                nearbyStations.add(ns);
+            }
+            nearbyStations.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyStation::getDistanceKm,
+                    Comparator.nullsLast(Comparator.naturalOrder())));
+            resp.setNearbyStations(nearbyStations);
+            resp.setNearestStation(nearbyStations.isEmpty() ? null : nearbyStations.get(0));
+            resp.setProjectStationCount(nearbyStations.size());
+        }
+        int projectStationCount = (int) nearbyStations.stream()
+                .filter(s -> TransitProvider.PROJECT_TRANSIT.equals(s.getDataSource())).count();
         resp.setNearbyStations(nearbyStations);
         resp.setNearestStation(nearbyStations.isEmpty() ? null : nearbyStations.get(0));
+        resp.setRealStationCount(realStationCount);
+        resp.setProjectStationCount(projectStationCount);
+        resp.setRealTransitAvailable(realTransitAvailable);
+        resp.setTransitProvider(transitProvider);
 
-        // 附近车辆：复用监控车辆（真实上报 5min 优先 / 模拟插值），Haversine 过滤 + 距离排序
-        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
-        Map<String, MonitoringMapDataRespVO.Route> routeByName = mapData.getRoutes() == null ? Map.of()
-                : mapData.getRoutes().stream().collect(Collectors.toMap(
-                        MonitoringMapDataRespVO.Route::getRouteName, Function.identity(), (a, b) -> a));
         // 区域 fallback 下：只返回"途经附近站点"线路上的车辆
         Set<Long> nearbyStationIds = nearbyStations.stream()
                 .map(AppBusNearbyRespVO.NearbyStation::getId).collect(Collectors.toSet());
@@ -242,6 +318,7 @@ public class AppBusServiceImpl implements AppBusService {
             bus.setLatitude(vlat);
             bus.setDataSource(v.getDataSource() == null ? AppBusNearbyRespVO.SOURCE_SIMULATED : v.getDataSource());
             bus.setNextStation(v.getNextStationName());
+            bus.setCurrentStation(v.getCurrentStationName());
             bus.setStatus(mapStatus(v));
             bus.setDistanceKm(located ? round2(GeoDistanceUtil.haversineKm(longitude, latitude, vlon, vlat)) : null);
             bus.setLocationSource(locationSource(v));
@@ -260,11 +337,60 @@ public class AppBusServiceImpl implements AppBusService {
                 Comparator.nullsLast(Comparator.naturalOrder())));
         resp.setBuses(buses);
         // 附近站点关联线路：无运营车辆也返回（前端展示"该区域有哪些线路 / 当前不在运营"）
-        resp.setLines(buildLines(mapData, nearbyRouteNames));
+        List<AppBusNearbyRespVO.NearbyLine> lines = new ArrayList<>(buildLines(mapData, nearbyRouteNames));
+        if (located) {
+            // 现实线路层（高德等）：项目线路已由 buildLines 给出（含起终点），这里只补现实来源
+            for (TransitProvider provider : transitProviders) {
+                if (!provider.available() || TransitProvider.PROJECT_TRANSIT.equals(provider.name())) {
+                    continue;
+                }
+                for (TransitProvider.TransitLine line : provider.searchNearbyLines(latitude, longitude, radM)) {
+                    AppBusNearbyRespVO.NearbyLine item = new AppBusNearbyRespVO.NearbyLine();
+                    item.setRouteName(line.routeName());
+                    item.setStartStation(line.startStation());
+                    item.setEndStation(line.endStation());
+                    item.setDataSource(line.dataSource());
+                    lines.add(item);
+                }
+            }
+        }
+        // 按「线路名 + 来源」去重，并给出条数（首页文案"附近有 N 条公交线路"）
+        Map<String, AppBusNearbyRespVO.NearbyLine> deduped = new LinkedHashMap<>();
+        for (AppBusNearbyRespVO.NearbyLine line : lines) {
+            if (line.getRouteName() == null || line.getRouteName().isBlank()) {
+                continue;
+            }
+            deduped.putIfAbsent(line.getRouteName() + "|" + line.getDataSource(), line);
+        }
+        resp.setLines(new ArrayList<>(deduped.values()));
+        resp.setLineCount(deduped.size());
         resp.setDataSource(buses.isEmpty() ? AppBusNearbyRespVO.SOURCE_NONE
                 : (hasReal && hasSimulated ? "MIXED" : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL
                         : AppBusNearbyRespVO.SOURCE_SIMULATED)));
         return resp;
+    }
+
+    /** 站点 → 途经线路名（项目自建线路；基于已加载线路经停点，无额外查库） */
+    private Map<Long, List<String>> stationLines(MonitoringMapDataRespVO mapData) {
+        if (mapData.getRoutes() == null) {
+            return Map.of();
+        }
+        Map<Long, List<String>> result = new HashMap<>();
+        for (MonitoringMapDataRespVO.Route route : mapData.getRoutes()) {
+            if (route.getPoints() == null || route.getRouteName() == null) {
+                continue;
+            }
+            for (MonitoringMapDataRespVO.Point point : route.getPoints()) {
+                if (point.getStationId() == null) {
+                    continue;
+                }
+                result.computeIfAbsent(point.getStationId(), k -> new ArrayList<>());
+                if (!result.get(point.getStationId()).contains(route.getRouteName())) {
+                    result.get(point.getStationId()).add(route.getRouteName());
+                }
+            }
+        }
+        return result;
     }
 
     /** 附近站点关联线路（按线路名去重，取起点/终点站名） */
@@ -280,6 +406,7 @@ public class AppBusServiceImpl implements AppBusService {
                     List<MonitoringMapDataRespVO.Point> pts = r.getPoints() == null ? List.of() : r.getPoints();
                     line.setStartStation(pts.isEmpty() ? null : pts.get(0).getStationName());
                     line.setEndStation(pts.isEmpty() ? null : pts.get(pts.size() - 1).getStationName());
+                    line.setDataSource(TransitProvider.PROJECT_TRANSIT);
                     return line;
                 }).toList();
     }
