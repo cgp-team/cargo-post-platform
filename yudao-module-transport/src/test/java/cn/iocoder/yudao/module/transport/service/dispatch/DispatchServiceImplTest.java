@@ -770,6 +770,34 @@ class DispatchServiceImplTest {
     // ==================== 按勾选订单归集（orderIds） ====================
 
     @Test
+    void collectAll_ready_for_pool_orders_pooled_without_selection() {
+        // 一键演示：不勾选任何订单，把所有「待入池」订单一次性入池
+        when(orderMapper.selectList(any())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build()));
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setAll(true);
+        int count = dispatchService.collectOrders(reqVO);
+
+        assertEquals(2, count);
+        ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).update(captor.capture(), any());
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(), captor.getValue().getStatus());
+    }
+
+    @Test
+    void collectAll_without_ready_orders_returns_zero() {
+        when(orderMapper.selectList(any())).thenReturn(List.of());
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setAll(true);
+
+        assertEquals(0, dispatchService.collectOrders(reqVO));
+    }
+
+    @Test
     void collectByOrderIds_all_ready_for_pool_pooled() {
         // 全部待入池（READY_FOR_POOL，Phase 2 审核通过）→ 全部入池
         when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(

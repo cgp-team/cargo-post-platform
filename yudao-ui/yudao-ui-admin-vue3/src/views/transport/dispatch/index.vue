@@ -34,6 +34,14 @@
         <Icon icon="ep:pointer" />手工派单
       </el-button>
       <el-button type="primary" v-hasPermi="['transport:dispatch:smart-plan']" @click="openSmart"><Icon icon="ep:magic-stick" />智能派单</el-button>
+      <el-button
+        type="success"
+        v-hasPermi="['transport:dispatch:smart-plan']"
+        :loading="demoRunning"
+        @click="runOneClickDemo"
+      >
+        <Icon icon="ep:video-play" />一键演示（归集→调度→审核→核验）
+      </el-button>
       <el-table
         ref="poolTableRef"
         v-loading="poolLoading"
@@ -152,15 +160,45 @@
     </template>
   </Dialog>
 
-  <!-- 智能派单弹窗（两步：约束校验 → 算法参数） -->
-  <Dialog title="智能派单" v-model="smartVisible" width="720px">
+  <!-- 智能调度弹窗：默认一键（后端自动选场站/车辆/参数），高级设置里才手动指定 -->
+  <Dialog title="智能调度" v-model="smartVisible" width="720px">
     <el-steps :active="smartStep" finish-status="success" align-center style="margin-bottom:16px">
-      <el-step title="约束校验" />
-      <el-step title="算法参数" />
+      <el-step title="智能调度" />
+      <el-step title="高级设置" />
     </el-steps>
 
     <!-- 第 1 步：约束校验 / 运力预警 -->
     <div v-show="smartStep === 0" v-loading="smartLoading">
+      <!-- 一键智能调度：不选场站、不选车辆、不填参数 -->
+      <el-descriptions :column="2" border size="small" style="margin-bottom:14px">
+        <el-descriptions-item label="待调度订单">{{ poolCount }} 单</el-descriptions-item>
+        <el-descriptions-item label="当前可用车辆">{{ vehicleList.length }} 台</el-descriptions-item>
+        <el-descriptions-item label="候选场站">自动（按订单分布推导）</el-descriptions-item>
+        <el-descriptions-item label="算法">HACO-CPS v1.4.1</el-descriptions-item>
+      </el-descriptions>
+
+      <el-steps v-if="autoRunning" :active="autoProgress" finish-status="process" align-center style="margin-bottom:12px">
+        <el-step v-for="stage in autoStages" :key="stage" :title="stage" />
+      </el-steps>
+
+      <el-alert
+        v-if="autoResult"
+        type="success"
+        :closable="false"
+        show-icon
+        style="margin-bottom:12px"
+        :title="`智能调度完成：方案 #${autoResult.id}`"
+        :description="`订单 ${autoResult.orderCount ?? '-'} 单 · 车辆 ${autoResult.vehicleCount ?? '-'} 台 · 场站 ${autoResult.depotStationName || '自动选择'} · 总里程 ${autoResult.totalDistance ?? '-'} km · 算法 ${autoResult.algorithmVersion || 'HACO-CPS v1.4.1'}`"
+      />
+
+      <el-button type="primary" size="large" :loading="smartLoading" @click="runAutoSmart">
+        <Icon icon="ep:magic-stick" /> {{ autoResult ? '重新智能调度' : '开始智能调度' }}
+      </el-button>
+      <el-button v-if="autoResult?.id" @click="viewPlan(autoResult!.id!)">查看方案</el-button>
+
+      <el-divider content-position="left">高级设置（可选）</el-divider>
+      <el-collapse v-model="smartAdvanced">
+        <el-collapse-item name="advanced" title="手动指定场站 / 车辆 / 算法参数">
       <el-form :model="smartForm" label-width="100px">
         <el-form-item label="场站">
           <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%" @change="validateResult = undefined">
@@ -183,6 +221,8 @@
           </el-button>
         </el-form-item>
       </el-form>
+        </el-collapse-item>
+      </el-collapse>
 
       <template v-if="validateResult">
         <!-- 运力不足预警 -->
@@ -389,6 +429,8 @@ import * as DispatchApi from '@/api/transport/dispatch'
 import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
 import { Dialog } from '@/components/Dialog'
+// 一键演示需要"确认框 + 步骤 loading 文案"：按项目约定显式引入（不做全局挂载）
+import { ElLoading, ElMessageBox } from 'element-plus'
 
 defineOptions({ name: 'TransportDispatch' })
 
@@ -576,6 +618,14 @@ const smartForm = ref<{ depotStationId?: number; vehicleIds: number[] }>({
   vehicleIds: [],
 })
 const validateResult = ref<DispatchApi.DispatchValidateRespVO>()
+/** 一键智能调度：进度阶段 / 结果摘要（默认路径，管理员无需任何选择） */
+const smartAdvanced = ref<string[]>([])
+const autoRunning = ref(false)
+const autoProgress = ref(0)
+const autoStages = ['分析订单与约束', '检查车辆运力', '选择调度场站', '运行 HACO-CPS', '生成调度方案']
+const autoResult = ref<DispatchApi.DispatchPlanRespVO>()
+/** 订单池中"待调度"（已入池 status=1）数量，供一键弹窗展示 */
+const poolCount = computed(() => poolList.value.filter((o) => o.status === 1).length || poolTotal.value)
 const acoForm = reactive<Record<string, number | undefined>>({
   ant_count: undefined,
   max_iterations: undefined,
@@ -627,6 +677,101 @@ const submitSmart = async () => {
     getPlanList()
   } finally {
     smartLoading.value = false
+  }
+}
+
+/**
+ * 一键智能调度：后端自动选场站 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
+ * 进度条按阶段演示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
+ */
+const runAutoSmart = async () => {
+  smartLoading.value = true
+  autoRunning.value = true
+  autoProgress.value = 0
+  autoResult.value = undefined
+  const timer = window.setInterval(() => {
+    if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1
+  }, 900)
+  try {
+    // 1) 约束校验（auto=true：后端自动推导场站与候选车辆）
+    const validated = await DispatchApi.validateDispatch({ auto: true })
+    validateResult.value = validated
+    if (validated.capacityCheck?.overCapacity) {
+      autoProgress.value = 1
+      message.warning('运力不足：算法会自动增加车辆或给出不可行原因，可继续提交')
+    }
+    // 2) 智能调度（算法决定实际使用几辆车）
+    const planId = await DispatchApi.createSmartPlan({ auto: true })
+    // 3) 读取方案摘要（订单数/车辆数/里程/算法版本）
+    const plan = await DispatchApi.getDispatchPlan(planId)
+    autoResult.value = plan
+    autoProgress.value = autoStages.length
+    message.success(`智能调度完成，方案号：${planId}`)
+    getPlanList()
+  } finally {
+    window.clearInterval(timer)
+    autoRunning.value = false
+    smartLoading.value = false
+  }
+}
+
+/** 查看方案：跳到方案列表并高亮（方案详情由列表行内查看） */
+const viewPlan = (planId: number) => {
+  smartVisible.value = false
+  message.info(`方案 #${planId} 已生成，可在下方「调度方案」列表查看详情`)
+  getPlanList()
+}
+
+/**
+ * 一键演示：归集全部待入池 → 一键智能调度 → 自动审核通过 → 自动发车核验。
+ * 现场演示只点一次，随后即可去小程序端看"我的寄货提醒 / 实时公交 / 司机端任务"。
+ * 每一步都复用正式接口与权限校验，不是特制后门。
+ */
+const demoRunning = ref(false)
+const runOneClickDemo = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将依次执行：① 归集全部「待入池」订单 ② 一键智能调度（自动选场站/车辆） ③ 方案审核通过 ④ 发车核验。是否继续？',
+      '一键演示',
+      { type: 'warning', confirmButtonText: '开始演示', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return // 用户取消
+  }
+  demoRunning.value = true
+  const loading = ElLoading.service({ text: '① 归集订单入池…', background: 'rgba(0,0,0,0.15)' })
+  try {
+    // ① 归集全部待入池订单
+    const collected = await DispatchApi.collectOrders({ all: true })
+    loading.setText(`① 已归集 ${collected} 单，② 正在智能调度…`)
+    getPoolList()
+    // ② 一键智能调度（后端自动选场站与候选车辆，算法决定实际车辆数）
+    const planId = await DispatchApi.createSmartPlan({ auto: true })
+    loading.setText('③ 正在审核方案…')
+    // ③ 方案审核通过
+    await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
+    // ④ 逐车发车核验通过
+    const plan = await DispatchApi.getDispatchPlan(planId)
+    const vehicleIds = Array.from(
+      new Set((plan.items || []).map((i) => i.vehicleId).filter((v): v is number => !!v))
+    )
+    for (const vehicleId of vehicleIds) {
+      loading.setText(`④ 正在发车核验（车辆 ${vehicleId}）…`)
+      await DispatchApi.checkDeparture({ planId, vehicleId, pass: true })
+    }
+    loading.close()
+    await ElMessageBox.alert(
+      `归集订单：${collected} 单\n方案：#${planId}（订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? vehicleIds.length} 台 / 场站 ${plan.depotStationName || '自动选择'}）\n\n接下来请到小程序端演示：司机端「工作台 → 发车」、用户端「快递页看车快到了提醒 / 实时公交」。`,
+      '一键演示完成',
+      { type: 'success', confirmButtonText: '知道了' }
+    )
+    getPlanList()
+  } catch (e) {
+    loading.close()
+    // 业务错误已由 axios 统一提示；这里补充语义化说明，便于现场判断卡在哪一步
+    message.error('一键演示中断：请确认存在「待入池」订单且后台已配置可用车辆（详见列表与上一条错误提示）')
+  } finally {
+    demoRunning.value = false
   }
 }
 
