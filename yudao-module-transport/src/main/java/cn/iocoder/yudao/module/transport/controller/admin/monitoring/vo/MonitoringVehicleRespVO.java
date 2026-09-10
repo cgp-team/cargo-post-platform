@@ -33,8 +33,17 @@ public class MonitoringVehicleRespVO {
     @Schema(description = "当前线路名称")
     private String routeName;
 
+    @Schema(description = "当前班次编号")
+    private Long shiftId;
+
+    @Schema(description = "当前线路编号")
+    private Long routeId;
+
     @Schema(description = "班次进度百分比 0-100（仅在途时有值）")
     private Integer progress;
+
+    @Schema(description = "当前站/上一站名称（模拟位置给出所在区间起点站）")
+    private String currentStationName;
 
     @Schema(description = "下一站名称（仅在途且未到终点时有值）")
     private String nextStationName;
