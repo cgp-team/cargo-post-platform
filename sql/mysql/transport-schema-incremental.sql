@@ -455,8 +455,9 @@ SET
     config = JSON_SET(config, '$.domain', 'http://1.15.29.107/api'),
     updater = 'admin',
     update_time = NOW()
-WHERE id = 4
-  AND JSON_EXTRACT(config, '$.domain') IN ('http://1.15.29.107', 'http://127.0.0.1:48080');
+WHERE JSON_EXTRACT(config, '$.domain') IN ('http://1.15.29.107', 'http://127.0.0.1:48080');
+-- 说明：不限 id——只改"指向本机服务器但缺 /api 前缀"的配置行；
+--      上游自带的 5 条示例存储配置（七牛/腾讯/阿里/火山/华为，domain 为 test.yudao.iocoder.cn / null / 空）不受影响。
 
 -- 历史 URL 补齐 /api 前缀（仅改缺前缀的，已带 /api 的保持不变）
 UPDATE infra_file
