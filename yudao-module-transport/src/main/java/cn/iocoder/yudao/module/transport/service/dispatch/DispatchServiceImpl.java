@@ -579,7 +579,11 @@ public class DispatchServiceImpl implements DispatchService {
             }
             List<VehicleDO> available = vehicleMapper.selectList();
             availableVehicleCount = AutoDispatchPlanner.selectVehicles(available, Integer.MAX_VALUE).size();
-            vehicles = AutoDispatchPlanner.selectVehicles(available, MAX_ALGORITHM_VEHICLES);
+            // 与 createSmartPlan 同口径：避开在途方案占用的车辆，全部在途时回退
+            vehicles = AutoDispatchPlanner.selectVehicles(available, MAX_ALGORITHM_VEHICLES, busyVehicleIds());
+            if (vehicles.isEmpty()) {
+                vehicles = AutoDispatchPlanner.selectVehicles(available, MAX_ALGORITHM_VEHICLES);
+            }
             if (vehicles.isEmpty()) {
                 throw exception(VEHICLE_NOT_EXISTS);
             }
