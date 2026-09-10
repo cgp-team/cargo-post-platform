@@ -25,6 +25,12 @@ public interface TransitProvider {
     /** 数据源名：AMAP / PROJECT */
     String name();
 
+    /**
+     * 该数据源产出的站点/线路属于哪一层：{@link #REAL_TRANSIT}（现实公交）或 {@link #PROJECT_TRANSIT}（项目自建）。
+     * 注意与 {@link #name()} 区分：name 是展示用的数据源名（AMAP/PROJECT），layer 是分层标识。
+     */
+    String dataSource();
+
     /** 当前是否可用（未配置 key、依赖缺失均返回 false，调用方据此降级） */
     boolean available();
 

@@ -36,6 +36,11 @@ public class ProjectTransitProvider implements TransitProvider {
     }
 
     @Override
+    public String dataSource() {
+        return PROJECT_TRANSIT;
+    }
+
+    @Override
     public boolean available() {
         return true;
     }
