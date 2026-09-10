@@ -156,7 +156,8 @@ public class MonitoringServiceImpl implements MonitoringService {
 
         // 统一位置模型：通过 VehicleLocationProvider 获取所有车辆位置
         Set<Long> vehicleIds = vehicles.stream().map(VehicleDO::getId).collect(Collectors.toSet());
-        Map<Long, VehicleLocationSnapshot> locationSnapshots = locationProvider.getLocations(vehicleIds);
+        // allowScheduleFallback=true：无真实上报 / 无模拟运行时，用"确定性班次模拟"兜底（演示可用性）
+        Map<Long, VehicleLocationSnapshot> locationSnapshots = locationProvider.getLocations(vehicleIds, true);
 
         // 模拟排班：启用班次按发车时间升序，轮转分配给可用车辆（一车多班）
         List<VehicleDO> availableVehicles = vehicles.stream()
@@ -191,12 +192,23 @@ public class MonitoringServiceImpl implements MonitoringService {
             // 统一位置模型：优先使用 VehicleLocationProvider
             VehicleLocationSnapshot snapshot = locationSnapshots.get(vehicle.getId());
             if (snapshot != null && !"OFFLINE".equals(snapshot.getSource())) {
-                vo.setStatus(STATUS_IN_TRANSIT);
+                // 待发/收车（IDLE）与在途状态由快照给出；真实上报固定为在途
+                vo.setStatus(snapshot.getStatus() != null && snapshot.getStatus() == STATUS_IDLE
+                        ? STATUS_IDLE : STATUS_IN_TRANSIT);
                 vo.setLongitude(snapshot.getLongitude());
                 vo.setLatitude(snapshot.getLatitude());
                 vo.setSpeedKmh(snapshot.getSpeedKmh());
                 vo.setDataSource(snapshot.getSource());
                 vo.setNextStationName(snapshot.getNextStationName());
+                vo.setCurrentStationName(snapshot.getCurrentStationName());
+                // 班次/线路/进度：由统一快照直接给出（REAL 上报缺班次时下面再按派单/执行回填）
+                vo.setShiftId(snapshot.getShiftId());
+                vo.setShiftCode(snapshot.getShiftCode());
+                vo.setRouteId(snapshot.getRouteId());
+                vo.setRouteName(snapshot.getRouteName());
+                if (snapshot.getProgress() != null) {
+                    vo.setProgress(snapshot.getProgress());
+                }
                 if (snapshot.getUpdatedAt() != null) {
                     vo.setLastLocationTime(snapshot.getUpdatedAt());
                 }
@@ -207,17 +219,52 @@ public class MonitoringServiceImpl implements MonitoringService {
                         vo.setProgress((int) Math.min(100, snapshot.getSimulationSeconds() * 100 / run.getTotalSimSeconds()));
                     }
                 }
-                // 补充班次/线路信息（REAL 从 shiftMap，SIMULATED 不需要）
+                // 真实上报车辆：按派单明细 / 当天班次执行回填班次与线路（取不到保持空，不猜线路）
                 if ("REAL".equals(snapshot.getSource()) || "REAL_STALE".equals(snapshot.getSource())) {
-                    // 从真实位置获取班次信息需要额外逻辑，简化处理
+                    fillRealVehicleShift(vo, vehicle.getId(), driverId, shiftMap, routeMap, enabledShifts);
                 }
                 return vo;
             }
 
-            // 离线车辆：无有效位置
+            // 真正 OFFLINE（无真实上报、无模拟运行、不在任何班次窗口）：不上图，不伪造位置
             vo.setStatus(STATUS_IDLE);
             return vo;
         }).toList();
+    }
+
+    /**
+     * 真实上报车辆补充班次/线路：优先取算法派单明细，其次取当天司机端已发车的班次执行记录。
+     * 都取不到时保持空（不进实时公交列表），不猜测线路，避免把车辆挂到错误线路。
+     */
+    private void fillRealVehicleShift(MonitoringVehicleRespVO vo, Long vehicleId, Long driverId,
+                                      Map<Long, ShiftDO> shiftMap, Map<Long, RouteDO> routeMap,
+                                      List<ShiftDO> enabledShifts) {
+        Long shiftId = dispatchPlanItemMapper.selectListByVehicleId(vehicleId).stream()
+                .filter(item -> item.getShiftId() != null)
+                .max(Comparator.comparing(DispatchPlanItemDO::getId))
+                .map(DispatchPlanItemDO::getShiftId).orElse(null);
+        if (shiftId == null && driverId != null && !enabledShifts.isEmpty()) {
+            shiftId = shiftExecutionMapper.selectListByShiftIdsAndExecDate(
+                            enabledShifts.stream().map(ShiftDO::getId).toList(), LocalDate.now()).stream()
+                    .filter(execution -> Objects.equals(execution.getDriverId(), driverId))
+                    .max(Comparator.comparing(ShiftExecutionDO::getId))
+                    .map(ShiftExecutionDO::getShiftId).orElse(null);
+        }
+        applyShiftRoute(vo, shiftId, shiftMap, routeMap);
+    }
+
+    /** 写班次编码 + 线路名（班次或线路缺失时保持原值） */
+    private void applyShiftRoute(MonitoringVehicleRespVO vo, Long shiftId,
+                                 Map<Long, ShiftDO> shiftMap, Map<Long, RouteDO> routeMap) {
+        ShiftDO shift = shiftId != null ? shiftMap.get(shiftId) : null;
+        if (shift == null) {
+            return;
+        }
+        vo.setShiftCode(shift.getShiftCode());
+        RouteDO route = shift.getRouteId() != null ? routeMap.get(shift.getRouteId()) : null;
+        if (route != null) {
+            vo.setRouteName(route.getRouteName());
+        }
     }
 
     @Override
