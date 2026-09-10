@@ -24,6 +24,20 @@ public class DispatchValidateRespVO {
     @Schema(description = "客运上下车时序问题（同上站/缺站等）")
     private List<TimeSeqIssue> timeSeqIssues;
 
+    // ========== 自动模式（一键智能调度）回显：让 UI 明确"场站/车辆是系统自动选的" ==========
+
+    @Schema(description = "是否自动模式（true=场站与候选车辆由后端自动推导）")
+    private Boolean auto;
+
+    @Schema(description = "本次校验使用的场站编号（自动模式下为系统所选）")
+    private Long depotStationId;
+
+    @Schema(description = "本次校验使用的场站名称")
+    private String depotStationName;
+
+    @Schema(description = "可用车辆总数（自动模式候选池来源）")
+    private Integer availableVehicleCount;
+
     @Schema(description = "订单统计")
     @Data
     public static class OrderStats {

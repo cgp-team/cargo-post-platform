@@ -106,12 +106,29 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     @Transactional
     public int collectOrders(DispatchCollectReqVO reqVO) {
+        // 一键归集：把当前所有「待入池」订单全部入池（演示/批量场景，免勾选）
+        if (Boolean.TRUE.equals(reqVO.getAll())) {
+            return collectAllReadyForPool();
+        }
         // 推荐：按勾选订单归集（orderIds 优先，前端勾选后按 ID 入池）
         if (reqVO.getOrderIds() != null && !reqVO.getOrderIds().isEmpty()) {
             return collectByOrderIds(reqVO.getOrderIds());
         }
         // 兼容：按时间范围归集（批次区间内待调度订单，货运需审核通过）
         return collectByTimeRange(reqVO);
+    }
+
+    /** 一键归集全部「待入池」订单（状态 8 → 1），无可见订单返回 0 */
+    private int collectAllReadyForPool() {
+        List<TransportOrderDO> orders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus()));
+        if (orders.isEmpty()) {
+            return 0;
+        }
+        TransportOrderDO updateObj = new TransportOrderDO();
+        updateObj.setStatus(TransportOrderStatusEnum.POOLED.getStatus());
+        return orderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus()));
     }
 
     /**
@@ -225,14 +242,37 @@ public class DispatchServiceImpl implements DispatchService {
             throw exception(DISPATCH_POOL_EMPTY);
         }
         List<Long> pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
-        StationDO depot = validateDepotExists(reqVO.getDepotStationId());
-        List<VehicleDO> vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
+        // 一键智能调度（auto=true）：后端自动选场站 + 自动挑候选车辆（实际车辆数由算法决定）
+        StationDO depot;
+        List<VehicleDO> vehicles;
+        if (Boolean.TRUE.equals(reqVO.getAuto())) {
+            depot = AutoDispatchPlanner.selectDepot(pooledOrders, stationMapper.selectList());
+            if (depot == null) {
+                throw exception(STATION_NOT_EXISTS);
+            }
+            vehicles = AutoDispatchPlanner.selectVehicles(vehicleMapper.selectList(), MAX_ALGORITHM_VEHICLES);
+            if (vehicles.isEmpty()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+        } else {
+            if (reqVO.getDepotStationId() == null) {
+                throw exception(STATION_NOT_EXISTS);
+            }
+            if (reqVO.getVehicleIds() == null || reqVO.getVehicleIds().isEmpty()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+            depot = validateDepotExists(reqVO.getDepotStationId());
+            vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
+            if (vehicles.size() < reqVO.getVehicleIds().size()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+        }
 
         // 先构建快照并做规模预检（只读，不占单）：无效输入快速失败，避免先 CAS 抢占后再抛错需要回滚。
         // 联合调度：指定班次时车辆按班次线路公交骨架经停，货运作为绕行插入（Phase 5）
         List<String> skeleton = resolveSkeleton(reqVO.getShiftId(), depot.getId());
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, vehicles, pooledOrders,
-                reqVO.getAlgorithmConfig(), reqVO.getScenario(), skeleton);
+                AutoDispatchPlanner.mergeAlgorithmConfig(reqVO.getAlgorithmConfig()), reqVO.getScenario(), skeleton);
         // 规模上限预检：客运按人数拆单后可能超 25 单，超限直接报错而非等算法 413
         validateScaleLimit(algorithmReq);
 
@@ -432,9 +472,21 @@ public class DispatchServiceImpl implements DispatchService {
     public DispatchPlanRespVO getPlan(Long id) {
         DispatchPlanDO plan = validatePlanExists(id);
         DispatchPlanRespVO respVO = BeanUtils.toBean(plan, DispatchPlanRespVO.class);
-        respVO.setItems(dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
                 .eq(DispatchPlanItemDO::getPlanId, id)
-                .orderByAsc(DispatchPlanItemDO::getVisitSequence)));
+                .orderByAsc(DispatchPlanItemDO::getVisitSequence));
+        respVO.setItems(items);
+        // 摘要（一键智能调度结果卡/方案列表用）：订单数、车辆数、场站名
+        respVO.setOrderCount((int) items.stream().map(DispatchPlanItemDO::getOrderId)
+                .filter(Objects::nonNull).distinct().count());
+        respVO.setVehicleCount((int) items.stream().map(DispatchPlanItemDO::getVehicleId)
+                .filter(Objects::nonNull).distinct().count());
+        Long depotStationId = items.stream().filter(i -> Objects.equals(i.getActionType(), 1))
+                .map(DispatchPlanItemDO::getStationId).filter(Objects::nonNull).findFirst().orElse(null);
+        if (depotStationId != null) {
+            StationDO depot = stationMapper.selectById(depotStationId);
+            respVO.setDepotStationName(depot != null ? depot.getStationName() : null);
+        }
         return respVO;
     }
 
@@ -448,11 +500,33 @@ public class DispatchServiceImpl implements DispatchService {
         // 订单池（与智能派单取数一致：已入池订单）
         List<TransportOrderDO> pooledOrders = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
                 .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
-        StationDO depot = validateDepotExists(reqVO.getDepotStationId());
-        List<VehicleDO> vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
-        // 车辆存在性校验（口径对齐 createManualPlan 的 validateVehicleExists）
-        if (vehicles.size() < reqVO.getVehicleIds().size()) {
-            throw exception(VEHICLE_NOT_EXISTS);
+        // 自动模式：场站与候选车辆由后端确定性规则推导（UI 只点一次「开始智能调度」）
+        boolean auto = Boolean.TRUE.equals(reqVO.getAuto());
+        StationDO depot;
+        List<VehicleDO> vehicles;
+        int availableVehicleCount;
+        if (auto) {
+            depot = AutoDispatchPlanner.selectDepot(pooledOrders, stationMapper.selectList());
+            if (depot == null) {
+                throw exception(STATION_NOT_EXISTS);
+            }
+            List<VehicleDO> available = vehicleMapper.selectList();
+            availableVehicleCount = AutoDispatchPlanner.selectVehicles(available, Integer.MAX_VALUE).size();
+            vehicles = AutoDispatchPlanner.selectVehicles(available, MAX_ALGORITHM_VEHICLES);
+            if (vehicles.isEmpty()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+        } else {
+            if (reqVO.getDepotStationId() == null || reqVO.getVehicleIds() == null || reqVO.getVehicleIds().isEmpty()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+            depot = validateDepotExists(reqVO.getDepotStationId());
+            vehicles = vehicleMapper.selectBatchIds(reqVO.getVehicleIds());
+            // 车辆存在性校验（口径对齐 createManualPlan 的 validateVehicleExists）
+            if (vehicles.size() < reqVO.getVehicleIds().size()) {
+                throw exception(VEHICLE_NOT_EXISTS);
+            }
+            availableVehicleCount = vehicles.size();
         }
         Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
                 .collect(Collectors.toMap(StationDO::getId, java.util.function.Function.identity()));
@@ -526,6 +600,10 @@ public class DispatchServiceImpl implements DispatchService {
         respVO.setCapacityCheck(capacityCheck);
         respVO.setMarkers(markerMap.values().stream().toList());
         respVO.setTimeSeqIssues(issues);
+        respVO.setAuto(auto);
+        respVO.setDepotStationId(depot.getId());
+        respVO.setDepotStationName(depot.getStationName());
+        respVO.setAvailableVehicleCount(availableVehicleCount);
         return respVO;
     }
 

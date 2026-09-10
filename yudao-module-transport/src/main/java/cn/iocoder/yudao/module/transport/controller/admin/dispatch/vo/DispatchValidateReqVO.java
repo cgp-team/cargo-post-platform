@@ -1,9 +1,6 @@
 package cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
@@ -12,13 +9,13 @@ import java.util.List;
 @Data
 public class DispatchValidateReqVO {
 
-    @Schema(description = "场站编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
-    @NotNull(message = "场站不能为空")
+    @Schema(description = "自动模式：true=一键智能调度校验（后端自动选场站/车辆）；false/不传=人工高级模式")
+    private Boolean auto;
+
+    @Schema(description = "场站编号（人工高级模式必填；auto=true 时忽略）", example = "1")
     private Long depotStationId;
 
-    @Schema(description = "可用车辆编号列表（不超过 3 台）", requiredMode = Schema.RequiredMode.REQUIRED)
-    @NotEmpty(message = "车辆不能为空")
-    @Size(max = 3, message = "可用车辆不能超过 3 台")
+    @Schema(description = "可用车辆编号列表（人工高级模式必填；auto=true 时忽略）")
     private List<Long> vehicleIds;
 
 }
