@@ -83,6 +83,7 @@
               <span class="route-name">{{ route.title }}</span>
               <span class="route-meta">
                 {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                <template v-if="route.driverText"> · 司机 {{ route.driverText }}</template>
               </span>
             </div>
             <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
@@ -107,6 +108,7 @@
 import { Dialog } from '@/components/Dialog'
 import { loadBaiduMapSdk } from '@/components/Map/src/utils'
 import * as DispatchApi from '@/api/transport/dispatch'
+import * as DriverApi from '@/api/transport/driver'
 import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
 
@@ -132,6 +134,8 @@ interface RouteView {
   stops: RouteStop[]
   /** 与 stops 下标对齐的可见坐标点（缺坐标的站会被跳过） */
   locatedStops: { stop: RouteStop; lng: number; lat: number }[]
+  /** 该车司机（姓名 + 手机号）：现场演示要按手机号登录司机端，直接展示省得对不上 */
+  driverText: string
   distanceKm: number
   distanceText: string
   points: { lng: number; lat: number }[]
@@ -143,6 +147,7 @@ const activePlanId = ref(0)
 const routes = ref<RouteView[]>([])
 const stations = ref<StationApi.StationVO[]>([])
 const vehicles = ref<VehicleApi.VehicleVO[]>([])
+const drivers = ref<DriverApi.DriverVO[]>([])
 
 /** 车辆配色：多车分色，便于"一车一条线"肉眼区分 */
 const ROUTE_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399']
@@ -206,6 +211,8 @@ const buildRoutes = () => {
         .map((stop) => ({ stop, station: stationCoord(stop.stationId) }))
         .filter((x) => x.station && x.station.longitude && x.station.latitude)
         .map((x) => ({ stop: x.stop, lng: Number(x.station!.longitude), lat: Number(x.station!.latitude) }))
+      const driverId = stops.map((s) => s.driverId).find((id) => id != null)
+      const driver = driverId != null ? drivers.value.find((d) => d.id === driverId) : undefined
       list.push({
         key: `${plan.id}-${vehicleId}`,
         planId: plan.id,
@@ -215,6 +222,7 @@ const buildRoutes = () => {
         orderCount: orderNos.length,
         stops,
         locatedStops,
+        driverText: driver ? `${driver.name}（${driver.mobile || '-'}）` : '',
         distanceKm,
         distanceText: distanceKm ? distanceKm.toFixed(1) : '-',
         points: locatedStops.map((x) => ({ lng: x.lng, lat: x.lat }))
@@ -447,12 +455,14 @@ const load = async () => {
   loading.value = true
   stopPlay()
   try {
-    const [stationList, vehicleList] = await Promise.all([
+    const [stationList, vehicleList, driverList] = await Promise.all([
       StationApi.getSimpleStationList().catch(() => []),
-      VehicleApi.getSimpleVehicleList().catch(() => [])
+      VehicleApi.getSimpleVehicleList().catch(() => []),
+      DriverApi.getSimpleDriverList().catch(() => [])
     ])
     stations.value = stationList
     vehicles.value = vehicleList
+    drivers.value = driverList
     plans.value = await Promise.all(props.planIds.map((id) => DispatchApi.getDispatchPlan(id)))
     activePlanId.value = 0
     buildRoutes()

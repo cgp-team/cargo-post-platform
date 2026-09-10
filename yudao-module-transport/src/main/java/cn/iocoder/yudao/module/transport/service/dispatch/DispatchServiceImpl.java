@@ -259,7 +259,7 @@ public class DispatchServiceImpl implements DispatchService {
             }
             // 候选车辆：优先避开"已被在途方案占用"的车（同一台车不能同时跑两套方案；
             // 多片区各出一套方案时，两套都排同一台车会让司机端任务混在一起）
-            List<VehicleDO> allVehicles = vehicleMapper.selectList();
+            List<VehicleDO> allVehicles = autoCandidateVehicles();
             Set<Long> busyVehicleIds = busyVehicleIds();
             vehicles = AutoDispatchPlanner.selectVehicles(allVehicles, MAX_ALGORITHM_VEHICLES, busyVehicleIds);
             if (vehicles.isEmpty()) {
@@ -394,6 +394,28 @@ public class DispatchServiceImpl implements DispatchService {
                 .map(DispatchPlanItemDO::getVehicleId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * 自动调度候选车辆：优先取"有在职司机绑定"的车辆。
+     *
+     * 原因：司机端按「登录会员手机号 = 司机档案手机号」认领任务（`DriverAppServiceImpl.currentDriverOrNull`），
+     * 派给没有任何司机绑定的车，任务在司机端根本看不到（只能管理员代核验）。没有可用绑定或车辆表为空时
+     * 退回全部车辆，保证仍然能出方案。
+     */
+    private List<VehicleDO> autoCandidateVehicles() {
+        List<VehicleDO> vehicles = vehicleMapper.selectList();
+        if (vehicles == null || vehicles.isEmpty() || driverVehicleMapper == null) {
+            return vehicles == null ? List.of() : vehicles;
+        }
+        List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
+        if (bindings == null || bindings.isEmpty()) {
+            return vehicles;
+        }
+        Set<Long> boundVehicleIds = bindings.stream().map(DriverVehicleDO::getVehicleId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        List<VehicleDO> bound = vehicles.stream().filter(v -> boundVehicleIds.contains(v.getId())).toList();
+        return bound.isEmpty() ? vehicles : bound;
     }
 
     @Override
@@ -577,7 +599,7 @@ public class DispatchServiceImpl implements DispatchService {
             if (depot == null) {
                 throw exception(STATION_NOT_EXISTS);
             }
-            List<VehicleDO> available = vehicleMapper.selectList();
+            List<VehicleDO> available = autoCandidateVehicles();
             availableVehicleCount = AutoDispatchPlanner.selectVehicles(available, Integer.MAX_VALUE).size();
             // 与 createSmartPlan 同口径：避开在途方案占用的车辆，全部在途时回退
             vehicles = AutoDispatchPlanner.selectVehicles(available, MAX_ALGORITHM_VEHICLES, busyVehicleIds());
