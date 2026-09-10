@@ -127,7 +127,9 @@ jobs:
       - name: Import application
         run: python -c "from app.main import app; assert app.title"
 
-  # 自研算法（HACO-CPS）：pytest 单元测试 + 契约测试 + benchmark + 消融 + 可复现性
+  # 自研算法（HACO-CPS）：快速必报检查（单元 + 契约 + 可复现性 + 消融，排除长时搜索基准）
+  # 长时用例（打乱顺序 60/80 次、100 次确定性、多场景 benchmark）见下方 algorithm-verification，
+  # 两个 job 并行执行：PR 反馈不再被 12 分钟的稳定性用例阻塞，覆盖不减少。
   algorithm:
     needs: changes
     if: needs.changes.outputs.algorithm == 'true'
@@ -144,18 +146,35 @@ jobs:
           cache-dependency-path: algorithm/requirements.txt
       - name: Install dependencies
         run: pip install --requirement requirements.txt
-      - name: Unit tests
-        run: python -m pytest tests/ -q --ignore=tests/benchmarks --tb=short
-      - name: Contract tests (TestClient)
-        run: python -m pytest tests/contract -q --tb=short
-      - name: HACO reproducibility tests
-        run: python -m pytest tests/test_haco_reproducibility.py -q --tb=short
-      - name: Ablation tests
-        run: python -m pytest tests/test_ablation.py -q --tb=short
-      - name: Benchmark tests
-        run: python -m pytest tests/benchmarks -q --tb=short -x
+      # 一次跑完单元/契约/可复现性/消融（原 4 个步骤互相重复，已合并），并跳过 slow 标记的长时用例
+      - name: Unit & contract tests (fast)
+        run: python -m pytest tests/ -q -m "not slow" --ignore=tests/benchmarks --tb=short
       - name: Import application
         run: python -c "from app.main import app; assert app.title"
+
+  # 长时验证（与 algorithm 并行）：slow 标记的稳定性/综合验证 + benchmark 套件。
+  # 说明：这些用例跑满统计口径（打乱 60/80 次、100 次确定性、多场景基准），耗时约 10~13 分钟，
+  # 因此独立成 job，避免拖住必需检查 algorithm；如需纳入合并门禁，把本 job 勾选为必需检查即可。
+  algorithm-verification:
+    needs: changes
+    if: needs.changes.outputs.algorithm == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: algorithm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: algorithm/requirements.txt
+      - name: Install dependencies
+        run: pip install --requirement requirements.txt
+      - name: Slow stability & comprehensive verification
+        run: python -m pytest tests/ -q -m "slow" --tb=short
+      - name: Benchmark suite
+        run: python -m pytest tests/benchmarks -q --tb=short -x
 
   container-validation:
     needs: changes

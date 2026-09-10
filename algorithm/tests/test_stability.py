@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from app.models import OrderType, PlanOrder, PlanRequest, Station, Vehicle
 from app.solver import solve
 
@@ -44,6 +46,7 @@ def solve_with(orders: list[PlanOrder]):
     return solve(req)
 
 
+@pytest.mark.slow
 def test_stability_across_shuffled_input_orders() -> None:
     orders = make_orders()
     random.seed(42)
@@ -79,6 +82,7 @@ def test_stability_across_shuffled_input_orders() -> None:
         assert abs(d - avg) / avg < 0.30, f"总里程波动过大: {d} vs 均值 {avg:.3f}"
 
 
+@pytest.mark.slow
 def test_feasibility_rate_consistent_across_orderings() -> None:
     """另一组更大运力的场景：打乱 80 次，可行性率恒为 100%（无输入顺序导致的误判）。"""
     orders = (
