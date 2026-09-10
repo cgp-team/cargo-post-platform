@@ -59,5 +59,66 @@ ON DUPLICATE KEY UPDATE
     status = 0,
     deleted = b'0';
 
--- 校验（预期 2 行站点）
-SELECT id, station_code, station_name, station_level, longitude, latitude FROM transport_station WHERE id IN (101, 102);
+-- ---------- 校园片区演示订单 ----------
+-- 用途：调度工作台"一键调度"时，重庆邮电大学片区不止用户刚寄的那一单 —— 还有 3 单同片区的
+--       模拟订单（全部 待入池=8，会被「一键演示」的"归集全部待入池"一起收进订单池），
+--       这样调度结果可视化里能看到"我的那一单 + 同片区其他模拟订单"的完整线路；
+--       成都片区订单（transport-demo-data.sql 的 TP2026…）仍在订单池里，第二次点「一键调度」
+--       会自动生成第二套方案（按片区分别成方案，避免跨城混批导致算法无解）。
+--
+-- 时间窗用 NOW() 相对值：算法按时间窗判可行，写死的历史日期会判不可行。
+INSERT INTO transport_station
+    (id, station_code, station_name, station_level, longitude, latitude, address, status, tenant_id, creator, updater, deleted)
+VALUES
+    (103, 'ST103', '南山站', 2, 106.5830000, 29.5230000, '南岸区南山植物园路', 0, 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    station_name = VALUES(station_name),
+    longitude = VALUES(longitude),
+    latitude = VALUES(latitude),
+    status = 0,
+    deleted = b'0';
+
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (201, 'TPCQ0001', 2, 101, 102, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 40 MINUTE), '1', NOW(), b'0'),
+    (202, 'TPCQ0002', 2, 103, 101, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 9.50, 0, '1', DATE_SUB(NOW(), INTERVAL 30 MINUTE), '1', NOW(), b'0'),
+    (203, 'TPCQ0003', 2, 101, 103, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 15.00, 0, '1', DATE_SUB(NOW(), INTERVAL 20 MINUTE), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
+    status = VALUES(status),
+    deleted = b'0';
+
+-- 货物子表（件数/重量/体积/物品信息，后台"物品信息"列与算法载荷都读这里）
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode, receiver_name, receiver_mobile,
+     receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (201, 201, '日用品', b'0', 2, 3.50, 0.0200, '宿舍日用品箱', '崇文门交接', 1, 1, 'NEAREST_STATION', 'STATION_TO_STATION',
+     '李同学', '13800000001', '黄桷垭正街 12 号', '重庆邮电大学明志苑 6 栋', 29.5302000, 106.5781000, 0, '1', DATE_SUB(NOW(), INTERVAL 40 MINUTE), '1', NOW(), b'0'),
+    (202, 202, '农产品', b'0', 1, 5.00, 0.0300, '南山土鸡蛋', '轻拿轻放', 1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION',
+     '王老师', '13800000002', '重庆邮电大学 8 教', '南山植物园', 29.5240000, 106.5825000, 0, '1', DATE_SUB(NOW(), INTERVAL 30 MINUTE), '1', NOW(), b'0'),
+    (203, 203, '文件票据', b'0', 1, 0.20, 0.0010, '录取通知书材料', '轻拿轻放', 1, 1, 'NEAREST_STATION', 'STATION_TO_STATION',
+     '赵同学', '13800000003', '南山站自取', '重庆邮电大学明志苑 3 栋', 29.5310000, 106.5772000, 0, '1', DATE_SUB(NOW(), INTERVAL 20 MINUTE), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    cargo_category = VALUES(cargo_category),
+    fresh_flag = VALUES(fresh_flag),
+    item_count = VALUES(item_count),
+    weight_kg = VALUES(weight_kg),
+    volume_m3 = VALUES(volume_m3),
+    goods_name = VALUES(goods_name),
+    audit_status = VALUES(audit_status),
+    review_status = VALUES(review_status),
+    pickup_service_mode = VALUES(pickup_service_mode),
+    original_address = VALUES(original_address),
+    deleted = b'0';
+
+-- 校验（预期：3 行站点、3 行重邮片区待入池订单）
+SELECT id, station_code, station_name, station_level, longitude, latitude FROM transport_station WHERE id IN (101, 102, 103);
+SELECT id, order_no, pickup_station_id, delivery_station_id, status FROM transport_order WHERE id IN (201, 202, 203);

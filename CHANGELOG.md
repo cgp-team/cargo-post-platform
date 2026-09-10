@@ -1,3 +1,18 @@
+# 2026-09-11 答辩主链路收口：审核不再被打回 + 一键调度分片区 + 调度结果可视化
+
+- **后台订单管理补齐"寄货全链路"字段**：`TransportOrderRespVO`/`toVO` 新增 `originalAddress/原坐标`、`pickupServiceMode/deliveryServiceMode`、`servicePointStationId/Name`、`reviewStatus/reviewReasonCodes`、`cargoCategory/freshFlag/cargoItemCount/cargoVolumeM3`，并回填 `pickupStationName/deliveryStationName`（站点名一次查表映射，无 N+1）；管理端订单列表新增「订单状态 / 用户寄货位置 / 交接服务站 / 物品信息（类别·件数·重量·体积·生鲜）」列与「详情」弹窗，审核弹窗同步显示取货方式与用户位置——"人在重庆邮电大学明志苑寄货、车去重庆邮电大学站接"在后台一眼可见。
+- **取货方式随单落库**：`AppSendOrderCreateReqVO` 新增 `pickupServiceMode`，小程序可达性评估（车辆进不去校园 → `NEAREST_STATION`）随订单写入 `transport_cargo_order.pickup_service_mode`；`applyAutoReview` 以客户端值为准，仅缺省时才用承运审核推导值，寄货成功卡按服务方式显示「车辆上门交接 / 就近站点交接」。
+- **修复「审核已自动通过的订单」报错**：村民提交后自动审核通过的订单直接是「待入池(8)」，此前管理员在订单管理点「审核通过」会抛 `CARGO_AUDIT_STATUS_ILLEGAL`（演示中断）。现改为**幂等复核确认**：只记录审核结论、不改变生命周期（绝不把订单从池里打回），复核不通过则带原因取消订单；原有"待审核/需人工审核才可审"的状态机与单测口径不变。
+- **调度工作台默认展示待入池**：订单池默认筛选由 `status=1` 改为不过滤（后端订单池口径为「待入池+已入池」），刚审核通过、还没归集的订单不再"消失"；筛选下拉同步收敛为这两个状态。
+- **一键调度按"片区"分批，避免跨城混批无解**：新增 `AutoDispatchPlanner.selectAutoBatch`（最新订单优先 → 以该单起终站为锚点，`≤50km` 视为同片区；跨片区订单留在池里，下一次调度自动成第二套方案）+ `DispatchServiceImpl.createSmartPlan/validate` 接入；单批仍受算法上限约束。管理端「一键调度 / 一键演示」改为循环出多套方案（最多 4 套）并逐套审核，完成后一次展示全部方案结果。
+- **同车不并发占用**：`AutoDispatchPlanner.selectVehicles` 新增"排除已被在途方案（待审核/已下发/执行中）占用车辆"的重载，自动模式优先避让，全部在途时回退不排除——多片区连出多套方案时不会把两个片区的经停塞给同一台车（司机端任务不再串片区）。
+- **调度结果可视化（管理端）**：新增 `DispatchVisualDialog`——一键演示/一键调度后就地展开：方案摘要（方案/订单/车辆/总里程）+ 每车**任务段时间线**（场站发车 → 揽收/派送/上下客 → 返场，带站点名、订单号、预计到达时间）+ 地图（百度 BMapGL，GCJ-02→BD-09 换算）按车分色画经停线路与站点气泡 + **▶ 播放路线**（多车同步沿线移动，可拖进度条）；地图 SDK 不可用时自动降级为"真实坐标线路示意图"，演示不会因为没配地图 key 而中断。方案列表每行新增「可视化」入口，方案详情弹窗显示订单号与站点名。
+- **经停明细回填展示字段**：`DispatchPlanItemDO` 新增 `@TableField(exist=false)` 的 `stationName/orderNo`，`getPlan` 批量补齐，方案详情/可视化无需再逐条回查。
+- **`station/simple-list` 返回坐标**：`StationSimpleRespVO` 补 `longitude/latitude`，管理端站点下拉与调度可视化可直接取坐标。
+- **校园片区演示订单**：`sql/mysql/demo-cqupt-stations.sql` 追加南山站 + 3 单重庆邮电大学片区货运订单（待入池，时间窗用 `NOW()` 相对值，避免算法按历史窗口判不可行），让"调度工作台里不止我这一单、同片区还有其他模拟订单"可演示；成都片区订单留在池里，第二次调度自动成第二套方案。
+
+---
+
 # 2026-09-10 寄货物体体积/信息 + 实时公交演示兜底 + 写链路故障自愈
 
 - **寄货新增物体体积与物体信息**：`pages/send/send` 增加货物类型（农产品/生鲜果蔬/日用品/文件票据/其他）、件数、长×宽×高（cm，前端折算 m³ 保留 4 位小数）、是否生鲜；`AppSendOrderCreateReqVO` 新增 `cargoCategory/itemCount/volumeM3/freshFlag` 并落 `transport_cargo_order`，「我的寄货」按标签回显。

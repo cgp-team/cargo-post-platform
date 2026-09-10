@@ -36,6 +36,16 @@ export interface OrderVO {
   receiverName?: string
   receiverMobile?: string
   receiverAddress?: string
+  // 寄货服务链路（用户在哪儿寄 / 车辆去哪儿接 / 怎么交接）
+  originalAddress?: string
+  originalLatitude?: number
+  originalLongitude?: number
+  pickupServiceMode?: string
+  deliveryServiceMode?: string
+  servicePointStationId?: number
+  servicePointStationName?: string
+  reviewStatus?: number
+  reviewReasonCodes?: string
   // Postal pickup
   pickupCode?: string
   pickupStatus?: number
