@@ -23,6 +23,17 @@ export interface ProductOrderVO {
   remark?: string
   vehicleId?: number
   shiftId?: number
+  // 司机执行闭环（装车 → 到站 → 妥投）
+  vehiclePlate?: string
+  shiftCode?: string
+  driverId?: number
+  driverName?: string
+  driverMobile?: string
+  deliverStationName?: string
+  loadPhotoUrl?: string
+  loadTime?: string
+  deliverPhotoUrl?: string
+  deliverTime?: string
   createTime?: string
   items?: ProductOrderItemVO[]
 }

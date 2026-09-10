@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.transport.dal.dataobject.dispatch;
 
 import cn.iocoder.yudao.framework.tenant.core.db.TenantBaseDO;
 import com.baomidou.mybatisplus.annotation.KeySequence;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.*;
@@ -52,4 +53,10 @@ public class DispatchPlanItemDO extends TenantBaseDO {
     private Integer passengerImpactSeconds;
     /** 算法解释-未接受原因码（ReviewReasonCodeEnum.code；已接受为 null） */
     private String reasonCode;
+
+    // ========== 展示用字段（不落库）：后台"方案详情 / 调度结果可视化"直接拿到站点名与订单号 ==========
+    @TableField(exist = false)
+    private String stationName;
+    @TableField(exist = false)
+    private String orderNo;
 }

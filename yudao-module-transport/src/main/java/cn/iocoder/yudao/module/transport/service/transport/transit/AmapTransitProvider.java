@@ -9,8 +9,11 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -59,6 +62,11 @@ public class AmapTransitProvider implements TransitProvider {
     @Override
     public String name() {
         return "AMAP";
+    }
+
+    @Override
+    public String dataSource() {
+        return REAL_TRANSIT;
     }
 
     @Override
@@ -152,7 +160,42 @@ public class AmapTransitProvider implements TransitProvider {
             result.add(new TransitStation(name, lng, lat, distanceKm, parseLines(address),
                     address, REAL_TRANSIT));
         }
-        return result;
+        return dedupe(result);
+    }
+
+    /**
+     * 站点去重：同名同坐标（5 位小数）合并为一条，线路取并集。
+     * 高德同一公交站常有多条 POI 记录（每条对应部分线路），不去重会出现「曾家岩(公交站)」两张卡片。
+     */
+    static List<TransitStation> dedupe(List<TransitStation> stations) {
+        Map<String, TransitStation> map = new LinkedHashMap<>();
+        for (TransitStation station : stations) {
+            String key = normalizeName(station.name()) + "|"
+                    + String.format("%.5f", station.longitude()) + "|" + String.format("%.5f", station.latitude());
+            TransitStation exist = map.get(key);
+            if (exist == null) {
+                map.put(key, station);
+                continue;
+            }
+            Set<String> lines = new LinkedHashSet<>(exist.lines() == null ? List.of() : exist.lines());
+            if (station.lines() != null) {
+                lines.addAll(station.lines());
+            }
+            Double distance = exist.distanceKm() == null ? station.distanceKm()
+                    : (station.distanceKm() == null ? exist.distanceKm()
+                    : Math.min(exist.distanceKm(), station.distanceKm()));
+            String name = exist.name() != null && station.name() != null && station.name().length() < exist.name().length()
+                    ? station.name() : exist.name();
+            map.put(key, new TransitStation(name, exist.longitude(), exist.latitude(), distance,
+                    new ArrayList<>(lines), exist.address() != null ? exist.address() : station.address(),
+                    exist.dataSource() != null ? exist.dataSource() : station.dataSource()));
+        }
+        return new ArrayList<>(map.values());
+    }
+
+    /** 名称规范化：委托 {@link TransitProvider#normalizeStationName}，保证前后端同一套键规则 */
+    static String normalizeName(String name) {
+        return TransitProvider.normalizeStationName(name);
     }
 
     /**

@@ -1,3 +1,31 @@
+# 2026-09-11 司机端 → 用户端闭环打通（返场确认 / 用户端到站提醒 / 商城订单同理）
+
+- **修掉"一键演示生成的方案装不了车"**：智能派单的经停明细不绑定固定班次（`shift_id` 为空），`pickupConfirm` 原先直接抛 `DRIVER_SHIFT_EXECUTION_NOT_EXISTS` → 司机扫码装车走不下去。现按"司机今天实际发车的那条执行记录"兜底（`ShiftExecutionMapper.selectListByDriverAndDate`），装车/妥投的执行记录口径一致；单测覆盖"明细无班次仍能装车"。
+- **班次不再串片区**：司机工作台新增 `pickShiftForNav`，选"经停站与本次任务段重合度最高"的班次（同分在途优先）；发车/表头线路名与地图任务段一致（重邮片区就显示重庆邮电大学—黄桷垭线）。
+- **发车后不再提示"下一站=出发点"**：恢复进度时跳过只有 DEPART/RETURN、没有取派/上下客作业的经停场站。
+- **返场确认补回队尾**：`buildNavPoints` 按站点去重会把"出发/返回同一场站"折叠成首站，导致司机端没有返场入口、班次执行记录永远不结束。现把计划末站补回队尾并标记 `isReturn`，前端显示「🏁 返场确认」；返场后 `shift_execution` 完成，用户端"司机已到达交付点"才有数据源（`nav.test.js` 覆盖）。
+- **用户端「司机已到达」提醒（寄货）**：`AppSendOrderRespVO` 新增 `carrierArrived/ carrierArrivedStation/ carrierTaskStatus/ carrierArrivedTime/ carrierLoaded/ carrierDelivered/ driverName/ driverMobile`，由派单经停明细状态推导（已到站/揽收中/派送中/已完成）；`fillCarrierBatch` 现在对已完成订单也填充进度（不依赖车辆位置）。小程序「我的寄货 / 查件」显示红色到达横幅（含司机姓名电话），首次触发弹一次提示，装车/妥投后分别显示"已揽收装车 / 已完成派送"。
+- **商城订单同样走司机作业闭环（同理寄货）**：新增 `transport_product_order` 的 `driver_id / deliver_station_id / load_photo_url / load_time / deliver_photo_url / deliver_time`（全量 schema + 增量迁移，部署自动执行）；发货时按人车绑定写入承运司机、交付站点=班次线路终点站；`/driver/pickups` 带上本车待执行商城订单（`bizType=PRODUCT`，orderType=4，🛒 展示），新增 `POST /driver/product-load`（装车拍照核验）与 `POST /driver/product-deliver`（妥投交付凭证，订单转已完成）。
+- **用户端商城订单可见配送全流程**：溯源 VO 补 `orderNo/status/statusName/receiver*/driverName/driverMobile/deliverStationName/driverArrived/loadTime/loadPhotoUrl/deliverTime/deliverPhotoUrl`（`driverArrived` 由班次执行记录的当前站点 vs 交付站点推导）；溯源页新增订单状态、承运司机、到达/装车/已送达提醒、装车与妥投凭证照片预览、订单二维码（司机扫码用）；商城订单列表对已发货/已完成给出"司机配送中 / 已送达"提示。
+- **后台商城订单可见司机执行**：`ProductOrderRespVO` 补承运车牌/班次/司机/交付站点/装车与妥投照片，列表新增「承运车辆/司机」「交付站点」「装车核验」「妥投凭证」列；发货弹窗要求必选车辆+班次并说明"发货即派单给司机"；`vehicle/simple-list` 补绑定司机（发货/派单选车时能看到"这车谁开"，派单页面车辆名同样带司机）。
+
+---
+
+# 2026-09-11 答辩主链路收口：审核不再被打回 + 一键调度分片区 + 调度结果可视化
+
+- **后台订单管理补齐"寄货全链路"字段**：`TransportOrderRespVO`/`toVO` 新增 `originalAddress/原坐标`、`pickupServiceMode/deliveryServiceMode`、`servicePointStationId/Name`、`reviewStatus/reviewReasonCodes`、`cargoCategory/freshFlag/cargoItemCount/cargoVolumeM3`，并回填 `pickupStationName/deliveryStationName`（站点名一次查表映射，无 N+1）；管理端订单列表新增「订单状态 / 用户寄货位置 / 交接服务站 / 物品信息（类别·件数·重量·体积·生鲜）」列与「详情」弹窗，审核弹窗同步显示取货方式与用户位置——"人在重庆邮电大学明志苑寄货、车去重庆邮电大学站接"在后台一眼可见。
+- **取货方式随单落库**：`AppSendOrderCreateReqVO` 新增 `pickupServiceMode`，小程序可达性评估（车辆进不去校园 → `NEAREST_STATION`）随订单写入 `transport_cargo_order.pickup_service_mode`；`applyAutoReview` 以客户端值为准，仅缺省时才用承运审核推导值，寄货成功卡按服务方式显示「车辆上门交接 / 就近站点交接」。
+- **修复「审核已自动通过的订单」报错**：村民提交后自动审核通过的订单直接是「待入池(8)」，此前管理员在订单管理点「审核通过」会抛 `CARGO_AUDIT_STATUS_ILLEGAL`（演示中断）。现改为**幂等复核确认**：只记录审核结论、不改变生命周期（绝不把订单从池里打回），复核不通过则带原因取消订单；原有"待审核/需人工审核才可审"的状态机与单测口径不变。
+- **调度工作台默认展示待入池**：订单池默认筛选由 `status=1` 改为不过滤（后端订单池口径为「待入池+已入池」），刚审核通过、还没归集的订单不再"消失"；筛选下拉同步收敛为这两个状态。
+- **一键调度按"片区"分批，避免跨城混批无解**：新增 `AutoDispatchPlanner.selectAutoBatch`（最新订单优先 → 以该单起终站为锚点，`≤50km` 视为同片区；跨片区订单留在池里，下一次调度自动成第二套方案）+ `DispatchServiceImpl.createSmartPlan/validate` 接入；单批仍受算法上限约束。管理端「一键调度 / 一键演示」改为循环出多套方案（最多 4 套）并逐套审核，完成后一次展示全部方案结果。
+- **同车不并发占用**：`AutoDispatchPlanner.selectVehicles` 新增"排除已被在途方案（待审核/已下发/执行中）占用车辆"的重载，自动模式优先避让，全部在途时回退不排除——多片区连出多套方案时不会把两个片区的经停塞给同一台车（司机端任务不再串片区）。
+- **调度结果可视化（管理端）**：新增 `DispatchVisualDialog`——一键演示/一键调度后就地展开：方案摘要（方案/订单/车辆/总里程）+ 每车**任务段时间线**（场站发车 → 揽收/派送/上下客 → 返场，带站点名、订单号、预计到达时间）+ 地图（百度 BMapGL，GCJ-02→BD-09 换算）按车分色画经停线路与站点气泡 + **▶ 播放路线**（多车同步沿线移动，可拖进度条）；地图 SDK 不可用时自动降级为"真实坐标线路示意图"，演示不会因为没配地图 key 而中断。方案列表每行新增「可视化」入口，方案详情弹窗显示订单号与站点名。
+- **经停明细回填展示字段**：`DispatchPlanItemDO` 新增 `@TableField(exist=false)` 的 `stationName/orderNo`，`getPlan` 批量补齐，方案详情/可视化无需再逐条回查。
+- **`station/simple-list` 返回坐标**：`StationSimpleRespVO` 补 `longitude/latitude`，管理端站点下拉与调度可视化可直接取坐标。
+- **校园片区演示订单**：`sql/mysql/demo-cqupt-stations.sql` 追加南山站 + 3 单重庆邮电大学片区货运订单（待入池，时间窗用 `NOW()` 相对值，避免算法按历史窗口判不可行），让"调度工作台里不止我这一单、同片区还有其他模拟订单"可演示；成都片区订单留在池里，第二次调度自动成第二套方案。
+
+---
+
 # 2026-09-10 寄货物体体积/信息 + 实时公交演示兜底 + 写链路故障自愈
 
 - **寄货新增物体体积与物体信息**：`pages/send/send` 增加货物类型（农产品/生鲜果蔬/日用品/文件票据/其他）、件数、长×宽×高（cm，前端折算 m³ 保留 4 位小数）、是否生鲜；`AppSendOrderCreateReqVO` 新增 `cargoCategory/itemCount/volumeM3/freshFlag` 并落 `transport_cargo_order`，「我的寄货」按标签回显。
@@ -17,6 +45,13 @@
 - **高德双 key 接入与文档**：小程序端 `AMAP_MINI_KEY`（微信小程序类型 key，`libs/amap-wx.js` + `https://restapi.amap.com` 合法域名，已配）；后端/算法侧 `AMAP_KEY`（Web 服务类型 key，`.env` 一处配置，部署流水线新增 `Sync AMAP_KEY to backend env` 幂等同步到后端 systemd env）；两种 key 类型不可互换（混用会 `USERKEY_PLAT_NOMATCH`）。真实高德公交站 POI 的 `address` 实为途经线路，已在前后端解析为线路标签。
 - **修复后台看不到寄货/司机照片**：`infra_file_config.domain` 被修成 `http://1.15.29.107`（缺 `/api`），生成的文件 URL 形如 `/admin-api/infra/file/4/get/xxx.jpg`；而 nginx 只把 `/api/` 转发后端（剥前缀），其余落到前端 SPA → 浏览器拿到 index.html（实测 `text/html`），后台订单列表/审核弹窗里的照片全是裂图。新增 V018 迁移：domain 与历史 URL 统一补齐 `/api` 前缀（含 `infra_file.url`、`transport_cargo_order.photo_url/driver_photo_url`、`system_users.avatar`），部署流水线新增"文件 URL 必须带 /api"的硬校验。
 - **就近站点匹配 + 通知客户前往**：`CargoReviewServiceImpl.selectServicePointStation` 按确定性规则匹配交接站点（取货站本身是场站级 → 本站交接；否则取距取货站最近的启用站点，同距取 ID 升序；无站点数据回退送达站点）；响应补 `servicePointStationName/坐标/距取货点公里数`，小程序寄货成功卡与「快递」页在"需客户操作"时显示"请送往就近站点 X（约 Y km）"并提供**导航前往**（`wx.openLocation`）。
+- **实时公交页重构（农村客货邮版"车来了"）**：页面改为 定位状态 → 概览 → **地图（45vh 第一视觉焦点）** → 附近线路（默认 6 条，可展开全部）→ 正在运行车辆列表，不再是几十个站点铺满首屏；地图含我的位置（`marker-me.png`）、公交站、运行车辆（真实绿色 `/images/marker-bus-real.png`、模拟橙色 `marker-bus-sim.png`）与线路 polyline，并有「回到我的位置」；拖动地图后不再被 15s 刷新抢回中心；详情页补地图+车辆实时位置+数据来源标注。
+- **统一定位层（AmapLocationProvider）**：全项目仅 `utils/location.js` 调用 `wx.getLocation({type:'gcj02'})`（首页/公交页/详情页/司机端均已改为 `location.getCurrentLocation()` / `getDeviceLocationGcj02()`）；高德链路=设备定位+`amap-wx.js` 逆地理，统一输出 `{success,latitude,longitude,accuracy,timestamp,source,level,district,city}`，`source ∈ AMAP|CACHE|DEMO|UNKNOWN`，日志 `[AMAP_LOCATION] ...`；缓存 1~5 分钟（60s 秒出、超时同步刷新），搜索半径按精度 5000/8000/15000m，定位失败显示"无法获取当前位置"而不是伪造地点。
+- **站点去重（同名同坐标合并线路）**：客户端 `transit-amap.dedupeStations`、后端 `AmapTransitProvider.dedupe`、合并层 `AppBusServiceImpl.dedupeNearbyStations` 用同一规则（规范化名称去掉 `(公交站)` + 5 位小数坐标），线路取并集，修复线上"曾家岩(公交站)"重复两条的问题。
+- **车辆平滑移动动画**：新增 `utils/bus-motion.js`（单定时器统一循环，1.2s 内插值约 12 帧，含朝向计算），15s 刷新只更新目标坐标并只重设 markers；`onHide/onUnload` 清理动画与刷新定时器，避免定时器泄漏。
+- **答辩主链路：用户位置不可达 → 就近服务站点**：新增 `POST /app-api/transport/send/reachability`（`AppSendReachabilityService`：候选站点按距离升序、同距取 id，**高德道路距离优先、失败回退 Haversine 并标注"路线估算"**，≤0.3km 可就近服务，否则 `USER_LOCATION_UNREACHABLE` + `NEAREST_STATION` 推荐送站并给步行分钟）；小程序寄货页新增「取货方式：使用当前位置 / 自选取货站点」、可达性卡片、`使用推荐站点` 确认；订单新增 `original_address/original_latitude/original_longitude`（V019 迁移 + 全量 schema），**用户原始地址与服务站分开保存、不互相覆盖**；`ReviewReasonCodeEnum` 新增 `USER_LOCATION_UNREACHABLE` 并在小程序映射文案。
+- **reasonCode 结果标准化（不删校验）**：`AlgorithmPlanRespDTO.reasonCode` 增加 `@JsonAlias("reason_code")` 兼容旧接口；`infeasible` 结果缺原因码时**兜底 `INFEASIBLE`** 而不是抛异常（此前会把"无解"升级成接口异常导致调度中断），并更新单测断言。
+- **校园演示数据**：新增 `sql/mysql/demo-cqupt-stations.sql`（重庆邮电大学站/黄桷垭站 + 线路 + 班次，幂等），让"校园内真实定位 → 不可达 → 推荐最近站点"的演示有真实可用的站点与班次数据（代码中无任何地点硬编码）。
 
 ---
 

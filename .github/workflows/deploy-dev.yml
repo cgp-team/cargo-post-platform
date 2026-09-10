@@ -544,6 +544,19 @@ jobs:
           chmod 600 "${APP_ENV}" 2>/dev/null || true
           echo "已同步 AMAP_KEY 到后端 env（下次后端重启生效；若本次有后端变更会紧随其后重启）"
 
+      # 两把高德 key 严格隔离：小程序 key（AMAP_MINI_KEY）只能在小程序端，
+      # 后端只允许 Web 服务 key（AMAP_KEY）。若误把小程序 key 写进后端 env，后端调用高德会全量失败。
+      - name: "Guard - 小程序 key 不得进入后端 env"
+        run: |
+          set -Eeuo pipefail
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+          MINI_KEY_IN_MINI="$(grep -hoE "AMAP_MINI_KEY *= *'[^']+'" /opt/cargo-post-platform/miniprogram/utils/config.js 2>/dev/null | head -1 || true)"
+          if [ -n "${MINI_KEY_IN_MINI}" ] && grep -qF "${MINI_KEY_IN_MINI}" "${APP_ENV}" 2>/dev/null; then
+            echo "FAIL: 检测到小程序 key 被写进后端 env（${APP_ENV}）——两把 key 必须严格隔离" >&2
+            exit 1
+          fi
+          echo "key 隔离校验通过：小程序 key 仅存在于 miniprogram/utils/config.js"
+
       - name: Deploy backend and restart
         if: steps.changes.outputs.backend == 'true'
         run: |

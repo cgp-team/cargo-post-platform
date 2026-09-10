@@ -6,6 +6,14 @@ import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.transport.ProductOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -28,6 +36,10 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 public class ProductOrderController {
 
     @Resource private ProductOrderService productOrderService;
+    @Resource private VehicleMapper vehicleMapper;
+    @Resource private ShiftMapper shiftMapper;
+    @Resource private DriverMapper driverMapper;
+    @Resource private StationMapper stationMapper;
 
     @GetMapping("/page")
     @Operation(summary = "获得商城订单分页")
@@ -68,6 +80,26 @@ public class ProductOrderController {
     private ProductOrderRespVO toVO(ProductOrderDO order) {
         ProductOrderRespVO vo = BeanUtils.toBean(order, ProductOrderRespVO.class);
         vo.setStatusName(ProductOrderStatusEnum.nameOf(order.getStatus()));
+        // 司机执行闭环展示：承运车牌/班次/司机/交付站点（后台一眼看到"谁在送、送到哪、有没有装车妥投凭证"）
+        if (order.getVehicleId() != null) {
+            VehicleDO vehicle = vehicleMapper.selectById(order.getVehicleId());
+            vo.setVehiclePlate(vehicle != null ? vehicle.getPlateNo() : null);
+        }
+        if (order.getShiftId() != null) {
+            ShiftDO shift = shiftMapper.selectById(order.getShiftId());
+            vo.setShiftCode(shift != null ? shift.getShiftCode() : null);
+        }
+        if (order.getDriverId() != null) {
+            DriverDO driver = driverMapper.selectById(order.getDriverId());
+            if (driver != null) {
+                vo.setDriverName(driver.getName());
+                vo.setDriverMobile(driver.getMobile());
+            }
+        }
+        if (order.getDeliverStationId() != null) {
+            StationDO station = stationMapper.selectById(order.getDeliverStationId());
+            vo.setDeliverStationName(station != null ? station.getStationName() : null);
+        }
         List<ProductOrderItemDO> items = productOrderService.getItemsByOrderId(order.getId());
         vo.setItems(BeanUtils.toBean(items, ProductOrderItemRespVO.class));
         return vo;

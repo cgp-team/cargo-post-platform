@@ -80,6 +80,20 @@ class AutoDispatchPlannerTest {
     }
 
     @Test
+    void selectVehicles_skipsVehiclesBusyWithAnotherPlan() {
+        // 同一台车不能同时跑两套方案：多片区各出一套方案时按"在途占用"避让
+        List<VehicleDO> vehicles = List.of(
+                VehicleDO.builder().id(1L).plateNo("川A1").status(0).cargoCapacity(20).passengerCapacity(19).build(),
+                VehicleDO.builder().id(2L).plateNo("川A2").status(0).cargoCapacity(50).passengerCapacity(30).build());
+
+        List<VehicleDO> free = AutoDispatchPlanner.selectVehicles(vehicles, 3, java.util.Set.of(1L));
+        assertEquals(List.of(2L), free.stream().map(VehicleDO::getId).toList());
+
+        // 全部在途：返回空 → 调用方回退"不排除"，保证一定出方案
+        assertTrue(AutoDispatchPlanner.selectVehicles(vehicles, 3, java.util.Set.of(1L, 2L)).isEmpty());
+    }
+
+    @Test
     void defaultAlgorithmConfig_hasDocumentedHacoDefaults() {
         Map<String, Object> config = AutoDispatchPlanner.defaultAlgorithmConfig();
         assertEquals(30, config.get("ant_count"));
@@ -96,5 +110,66 @@ class AutoDispatchPlannerTest {
         Map<String, Object> merged = AutoDispatchPlanner.mergeAlgorithmConfig(Map.of("max_iterations", 500));
         assertEquals(500, merged.get("max_iterations")); // 高级设置覆盖
         assertEquals(30, merged.get("ant_count"));       // 其余仍走默认
+    }
+
+    // ==================== 一键调度"订单批次选择"（片区分批） ====================
+
+    /** 成都片区（104.x/30.5x）+ 重庆邮电大学片区（106.5x/29.5x），相距 250km+ */
+    private static final Map<Long, StationDO> REGION_STATIONS = Map.of(
+            1L, station(1L, "县城客运中心", 1, 104.0657, 30.5723),
+            2L, station(2L, "红花村站", 2, 104.1234, 30.6012),
+            4L, station(4L, "青山镇站", 1, 104.2345, 30.6234),
+            101L, station(101L, "重庆邮电大学站", 2, 106.5765, 29.5325),
+            102L, station(102L, "黄桷垭站", 1, 106.5748, 29.5370));
+
+    private static TransportOrderDO timedOrder(long id, Long pickup, Long delivery, String createTime) {
+        TransportOrderDO order = TransportOrderDO.builder().id(id).orderNo("TP" + id)
+                .pickupStationId(pickup).deliveryStationId(delivery)
+                .build();
+        order.setCreateTime(java.time.LocalDateTime.parse(createTime));
+        return order;
+    }
+
+    @Test
+    void selectAutoBatch_newestOrderFirstAndSameRegionOnly() {
+        // 最新的一单在重邮片区 → 本批只含重邮片区订单；成都片区留在池里等下一套方案
+        List<TransportOrderDO> orders = List.of(
+                timedOrder(1L, 1L, 4L, "2026-07-01T08:00:00"),   // 成都，旧
+                timedOrder(2L, 2L, 1L, "2026-07-02T08:00:00"),   // 成都
+                timedOrder(3L, 101L, 102L, "2026-07-09T09:00:00")); // 重邮，最新
+
+        List<TransportOrderDO> batch = AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 25);
+
+        assertEquals(List.of(3L), batch.stream().map(TransportOrderDO::getId).toList());
+    }
+
+    @Test
+    void selectAutoBatch_keepsWholeRegionAndRespectsMax() {
+        // 最新一单在成都片区 → 成都订单成批；跨片区的重邮订单不进本批
+        List<TransportOrderDO> orders = List.of(
+                timedOrder(1L, 1L, 4L, "2026-07-08T08:00:00"),
+                timedOrder(2L, 2L, 1L, "2026-07-07T08:00:00"),
+                timedOrder(4L, 4L, 2L, "2026-07-06T08:00:00"),
+                timedOrder(3L, 101L, 102L, "2026-07-05T09:00:00"));
+
+        List<TransportOrderDO> batch = AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 25);
+        assertEquals(List.of(1L, 2L, 4L), batch.stream().map(TransportOrderDO::getId).toList());
+
+        // 单批上限：算法上限内按最新优先截断
+        List<TransportOrderDO> capped = AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 2);
+        assertEquals(List.of(1L, 2L), capped.stream().map(TransportOrderDO::getId).toList());
+    }
+
+    @Test
+    void selectAutoBatch_missingCoordinatesCannotProveOtherRegion_keepsOrder() {
+        // 站点表里没有该订单的站点 → 无法证明跨片区 → 不丢弃（避免订单永远排不进方案）
+        Map<Long, StationDO> partial = Map.of(101L, REGION_STATIONS.get(101L));
+        List<TransportOrderDO> orders = List.of(
+                timedOrder(1L, 101L, 102L, "2026-07-09T09:00:00"),
+                timedOrder(2L, 1L, 4L, "2026-07-01T08:00:00"));
+
+        List<TransportOrderDO> batch = AutoDispatchPlanner.selectAutoBatch(orders, partial, 25);
+
+        assertEquals(List.of(1L, 2L), batch.stream().map(TransportOrderDO::getId).toList());
     }
 }

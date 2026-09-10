@@ -3,6 +3,9 @@ import request from '@/config/axios'
 export interface VehicleVO {
   id?: number
   plateNo: string
+  /** 当前绑定司机（simple-list 返回）：选车就能看到"这车谁开" */
+  driverName?: string
+  driverMobile?: string
   vehicleType?: number
   passengerCapacity?: number
   cargoCapacityKg?: number
