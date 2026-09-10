@@ -1,13 +1,26 @@
 <template>
   <Dialog title="订单发货" v-model="dialogVisible" width="500px">
     <el-form ref="formRef" :model="formData" label-width="100px" v-loading="formLoading">
-      <el-form-item label="承运车辆">
-        <el-select v-model="formData.vehicleId" placeholder="请选择承运车辆（可不选）" clearable filterable style="width:100%">
-          <el-option v-for="v in vehicleOptions" :key="v.id!" :label="v.plateNo" :value="v.id!" />
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="发货即派单给司机"
+        description="选定车辆/班次后：司机端出现「待装车」任务（含商城订单），司机装车拍照 → 到站 → 妥投；交付站点=班次线路终点站。"
+        style="margin-bottom:12px"
+      />
+      <el-form-item label="承运车辆" prop="vehicleId" :rules="[{ required: true, message: '请选择承运车辆', trigger: 'change' }]">
+        <el-select v-model="formData.vehicleId" placeholder="请选择承运车辆（司机端按人车绑定归属）" filterable style="width:100%">
+          <el-option
+            v-for="v in vehicleOptions"
+            :key="v.id!"
+            :label="v.driverName ? `${v.plateNo}（司机 ${v.driverName}）` : `${v.plateNo}（未绑定司机）`"
+            :value="v.id!"
+          />
         </el-select>
       </el-form-item>
-      <el-form-item label="承运班次">
-        <el-select v-model="formData.shiftId" placeholder="请选择承运班次（可不选）" clearable filterable style="width:100%">
+      <el-form-item label="承运班次" prop="shiftId" :rules="[{ required: true, message: '请选择承运班次', trigger: 'change' }]">
+        <el-select v-model="formData.shiftId" placeholder="请选择承运班次（决定交付站点）" filterable style="width:100%">
           <el-option v-for="s in shiftOptions" :key="s.id!" :label="shiftLabel(s)" :value="s.id!" />
         </el-select>
       </el-form-item>
@@ -62,6 +75,8 @@ const open = (id: number) => {
 defineExpose({ open })
 
 const submitForm = async () => {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   formLoading.value = true
   try {
     await ProductOrderApi.shipProductOrder(formData.value)

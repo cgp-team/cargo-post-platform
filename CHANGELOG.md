@@ -1,3 +1,16 @@
+# 2026-09-11 司机端 → 用户端闭环打通（返场确认 / 用户端到站提醒 / 商城订单同理）
+
+- **修掉"一键演示生成的方案装不了车"**：智能派单的经停明细不绑定固定班次（`shift_id` 为空），`pickupConfirm` 原先直接抛 `DRIVER_SHIFT_EXECUTION_NOT_EXISTS` → 司机扫码装车走不下去。现按"司机今天实际发车的那条执行记录"兜底（`ShiftExecutionMapper.selectListByDriverAndDate`），装车/妥投的执行记录口径一致；单测覆盖"明细无班次仍能装车"。
+- **班次不再串片区**：司机工作台新增 `pickShiftForNav`，选"经停站与本次任务段重合度最高"的班次（同分在途优先）；发车/表头线路名与地图任务段一致（重邮片区就显示重庆邮电大学—黄桷垭线）。
+- **发车后不再提示"下一站=出发点"**：恢复进度时跳过只有 DEPART/RETURN、没有取派/上下客作业的经停场站。
+- **返场确认补回队尾**：`buildNavPoints` 按站点去重会把"出发/返回同一场站"折叠成首站，导致司机端没有返场入口、班次执行记录永远不结束。现把计划末站补回队尾并标记 `isReturn`，前端显示「🏁 返场确认」；返场后 `shift_execution` 完成，用户端"司机已到达交付点"才有数据源（`nav.test.js` 覆盖）。
+- **用户端「司机已到达」提醒（寄货）**：`AppSendOrderRespVO` 新增 `carrierArrived/ carrierArrivedStation/ carrierTaskStatus/ carrierArrivedTime/ carrierLoaded/ carrierDelivered/ driverName/ driverMobile`，由派单经停明细状态推导（已到站/揽收中/派送中/已完成）；`fillCarrierBatch` 现在对已完成订单也填充进度（不依赖车辆位置）。小程序「我的寄货 / 查件」显示红色到达横幅（含司机姓名电话），首次触发弹一次提示，装车/妥投后分别显示"已揽收装车 / 已完成派送"。
+- **商城订单同样走司机作业闭环（同理寄货）**：新增 `transport_product_order` 的 `driver_id / deliver_station_id / load_photo_url / load_time / deliver_photo_url / deliver_time`（全量 schema + 增量迁移，部署自动执行）；发货时按人车绑定写入承运司机、交付站点=班次线路终点站；`/driver/pickups` 带上本车待执行商城订单（`bizType=PRODUCT`，orderType=4，🛒 展示），新增 `POST /driver/product-load`（装车拍照核验）与 `POST /driver/product-deliver`（妥投交付凭证，订单转已完成）。
+- **用户端商城订单可见配送全流程**：溯源 VO 补 `orderNo/status/statusName/receiver*/driverName/driverMobile/deliverStationName/driverArrived/loadTime/loadPhotoUrl/deliverTime/deliverPhotoUrl`（`driverArrived` 由班次执行记录的当前站点 vs 交付站点推导）；溯源页新增订单状态、承运司机、到达/装车/已送达提醒、装车与妥投凭证照片预览、订单二维码（司机扫码用）；商城订单列表对已发货/已完成给出"司机配送中 / 已送达"提示。
+- **后台商城订单可见司机执行**：`ProductOrderRespVO` 补承运车牌/班次/司机/交付站点/装车与妥投照片，列表新增「承运车辆/司机」「交付站点」「装车核验」「妥投凭证」列；发货弹窗要求必选车辆+班次并说明"发货即派单给司机"；`vehicle/simple-list` 补绑定司机（发货/派单选车时能看到"这车谁开"，派单页面车辆名同样带司机）。
+
+---
+
 # 2026-09-11 答辩主链路收口：审核不再被打回 + 一键调度分片区 + 调度结果可视化
 
 - **后台订单管理补齐"寄货全链路"字段**：`TransportOrderRespVO`/`toVO` 新增 `originalAddress/原坐标`、`pickupServiceMode/deliveryServiceMode`、`servicePointStationId/Name`、`reviewStatus/reviewReasonCodes`、`cargoCategory/freshFlag/cargoItemCount/cargoVolumeM3`，并回填 `pickupStationName/deliveryStationName`（站点名一次查表映射，无 N+1）；管理端订单列表新增「订单状态 / 用户寄货位置 / 交接服务站 / 物品信息（类别·件数·重量·体积·生鲜）」列与「详情」弹窗，审核弹窗同步显示取货方式与用户位置——"人在重庆邮电大学明志苑寄货、车去重庆邮电大学站接"在后台一眼可见。

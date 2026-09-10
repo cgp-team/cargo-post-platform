@@ -484,7 +484,13 @@ const vehicleList = ref<VehicleApi.VehicleVO[]>([])
 const stationName = (id?: number) => (id === undefined ? '-' : stationList.value.find((s) => s.id === id)?.stationName ?? id)
 /** 总里程展示：后端已按经停坐标换算为公里，保留 1 位小数 */
 const totalDistanceText = (v?: number) => (v == null ? '-' : Number(v).toFixed(1))
-const vehicleName = (id?: number) => (id === undefined ? '-' : vehicleList.value.find((v) => v.id === id)?.plateNo ?? id)
+const vehicleName = (id?: number) => {
+  if (id === undefined) return '-'
+  const v = vehicleList.value.find((x) => x.id === id)
+  if (!v) return id
+  // 带上绑定司机：现场演示时一眼看到"这车谁开"，司机端就用这个账号登录
+  return v.driverName ? `${v.plateNo}（${v.driverName}）` : v.plateNo
+}
 const loadSimpleLists = async () => {
   try {
     stationList.value = await StationApi.getSimpleStationList()

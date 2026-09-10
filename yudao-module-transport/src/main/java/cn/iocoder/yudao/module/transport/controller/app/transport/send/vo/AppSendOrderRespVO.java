@@ -104,4 +104,22 @@ public class AppSendOrderRespVO {
     private String carrierLocationSource;
     @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟）：前端据此高亮并提示\"车快到了\"")
     private Boolean carrierApproaching;
+
+    // ========== 司机到站/作业进度（后端为源：派单经停明细状态；未派单时为 null） ==========
+    @Schema(description = "司机是否已到达本单交接站点（已到达/已完成作业），前端提示\"司机已到达\"")
+    private Boolean carrierArrived;
+    @Schema(description = "司机到达（或完成交接作业）的站点名")
+    private String carrierArrivedStation;
+    @Schema(description = "司机作业状态名：待执行/行驶中/已到站/揽收中/派送中/已完成")
+    private String carrierTaskStatus;
+    @Schema(description = "到达/作业状态更新时间（经停明细 update_time，近似现场时间）")
+    private LocalDateTime carrierArrivedTime;
+    @Schema(description = "司机已装车（揽收完成）")
+    private Boolean carrierLoaded;
+    @Schema(description = "司机已妥投（派送完成）")
+    private Boolean carrierDelivered;
+    @Schema(description = "承运司机姓名")
+    private String driverName;
+    @Schema(description = "承运司机电话（现场联系用）")
+    private String driverMobile;
 }

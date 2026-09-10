@@ -41,4 +41,18 @@ public interface ProductOrderService {
 
     /** 小程序：订单溯源（承运车辆/班次/线路站点/当天轨迹/最新位置）；未关联承运车辆时返回空语义 */
     AppProductOrderTraceRespVO getTrace(Long userId, Long id);
+
+    // ==================== 司机端执行（商城订单同样走"装车 → 妥投"闭环） ====================
+
+    /**
+     * 司机端：本车待执行的商城订单（已发货、未妥投、承运车辆=该司机绑定车辆）。
+     * 与货运订单同口径：司机只能看到派给自己的单。
+     */
+    List<ProductOrderDO> getDriverDeliveryTasks(Long vehicleId);
+
+    /** 司机端：装车确认（拍照核验凭证），订单仍是已发货，配送中 */
+    void driverLoad(Long driverId, Long vehicleId, Long orderId, String photoUrl);
+
+    /** 司机端：妥投完成（交付凭证），订单转已完成 */
+    void driverDeliver(Long driverId, Long vehicleId, Long orderId, String photoUrl);
 }

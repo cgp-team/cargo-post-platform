@@ -384,6 +384,45 @@ SET @ddl := IF(@col_exists = 0,
   'ALTER TABLE `transport_product_order` ADD COLUMN `shift_id` bigint DEFAULT NULL COMMENT ''承运班次编号(发货时关联,溯源用)'' AFTER `vehicle_id`', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- ---------- 商城订单司机执行闭环 ----------
+-- 司机端"待装车/妥投"需要知道归属司机与交付站点；装车/妥投照片是核验凭证（后台/用户端可见）
+-- 不加 AFTER 子句，直接追加到表末尾（幂等安全，防旧表列漂移导致 ALTER 失败）
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='driver_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `driver_id` bigint DEFAULT NULL COMMENT ''承运司机编号(发货时按车辆绑定推导)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_station_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_station_id` bigint DEFAULT NULL COMMENT ''交付/自提站点编号(发货时=班次线路终点站,司机到站提醒用)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='load_photo_url');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `load_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机装车照片URL(装车核验凭证)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='load_time');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `load_time` datetime DEFAULT NULL COMMENT ''司机装车确认时间''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_photo_url');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机妥投照片URL(交付凭证)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_time');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_time` datetime DEFAULT NULL COMMENT ''司机妥投完成时间''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ---------- 调度明细乘客影响：transport_dispatch_plan_item.passenger_impact_seconds ----------
 -- 绕行对车上乘客的额外乘车时长（passenger-level，空车绕行为 NULL）
 -- 注意：不加 AFTER 子句（依赖 detour_duration_seconds 等前置列存在，旧表列漂移时 ALTER 会失败），
