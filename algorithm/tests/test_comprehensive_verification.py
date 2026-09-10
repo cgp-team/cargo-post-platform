@@ -22,6 +22,8 @@ from __future__ import annotations
 import random
 from copy import deepcopy
 
+import pytest
+
 from app.models import (
     OrderType,
     PlanOrder,
@@ -485,6 +487,7 @@ def test_6_12_time_window_tight_infeasible():
 # ═══════════════════════════════════════════════════════════════
 
 
+@pytest.mark.slow
 def test_6_13_deterministic_100_runs():
     """同一请求运行 100 次：route、vehicle assignment、totalDistance 必须一致。"""
     orders = [
@@ -515,6 +518,7 @@ def test_6_13_deterministic_100_runs():
 # ═══════════════════════════════════════════════════════════════
 
 
+@pytest.mark.slow
 def test_6_14_input_order_stability():
     """打乱 orders 输入顺序后，输出质量（总里程、车辆数）应一致。"""
     orders = [
