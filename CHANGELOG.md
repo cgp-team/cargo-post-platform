@@ -1,3 +1,14 @@
+# 2026-09-11 定位可纠正化：粗定位告警 + 手动选点 + 近期高精度沿用
+
+- **"人在重庆邮电大学却定位到渝中区"的定性**：用同一坐标（106.5765,29.5325）实测高德 regeo 与 BigDataCloud 都返回 `南岸区`，项目内只有 `utils/location.js` 调 `wx.getLocation({type:'gcj02'})`（高德 SDK 显式传坐标不会自行定位）→ 坐标链路没问题，**区县错了是设备/系统给的粗略位置**（未开"精确位置"/室内/WiFi 定位误差可达 1~3km；开发者工具的"位置模拟"也会固定返回同一坐标）。
+- **粗定位告警**：`isCoarseAccuracy`(>500m) / `isVeryCoarseAccuracy`(>1000m) / `accuracyText`(35m / 3.2km)；首页定位条、实时公交定位条、寄货页可达性卡片在粗定位时提示"定位精度较低（约 X）· 区域名可能不准"，日志补 `[AMAP_LOCATION] 定位精度较低…` 告警。
+- **手动选点纠正（`wx.chooseLocation`）**：新增 `location.chooseLocation()`，统一返回 `{source: MANUAL, manual, name/address/district/city, level: PRECISE}`，**2 小时内优先于自动定位**（用户纠正过的位置不再被下一次粗定位覆盖），点"重新定位"即放弃；入口在首页、实时公交页、寄货页（寄货页选完自动重跑可达性评估，`originalAddress` 取用户点选的地点名）。
+- **近期高精度结果沿用**：本次误差 >1km 且 2 分钟内有 ≤100m 的高精度结果时沿用该结果并标注 `stale + note`（避免"上一分钟还准、这一分钟被粗定位覆盖"）。
+- **修高德字段空数组 bug**：高德 `addressComponent` 缺字段时返回 `[]`（JS 里 truthy），原 `comp.city || comp.province` 会把 city 写成空数组导致页面空白；新增 `pickText()` 统一归一为字符串。
+- 单测：`miniprogram/tests/location.test.js` 新增 4 组（粗定位阈值/文案、极差精度沿用高精度、手动选点优先且强制刷新回到真实定位、空数组归一）。
+
+---
+
 # 2026-09-11 司机端 → 用户端闭环打通（返场确认 / 用户端到站提醒 / 商城订单同理）
 
 - **修掉"一键演示生成的方案装不了车"**：智能派单的经停明细不绑定固定班次（`shift_id` 为空），`pickupConfirm` 原先直接抛 `DRIVER_SHIFT_EXECUTION_NOT_EXISTS` → 司机扫码装车走不下去。现按"司机今天实际发车的那条执行记录"兜底（`ShiftExecutionMapper.selectListByDriverAndDate`），装车/妥投的执行记录口径一致；单测覆盖"明细无班次仍能装车"。
