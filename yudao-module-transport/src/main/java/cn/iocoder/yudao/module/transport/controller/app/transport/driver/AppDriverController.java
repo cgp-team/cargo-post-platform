@@ -101,6 +101,20 @@ public class AppDriverController {
         return success(true);
     }
 
+    @PostMapping("/product-load")
+    @Operation(summary = "商城订单装车确认（司机拍照核验凭证，订单保持已发货/配送中）")
+    public CommonResult<Boolean> productLoad(@Valid @RequestBody AppDriverOrderActionReqVO reqVO) {
+        driverAppService.productLoad(reqVO);
+        return success(true);
+    }
+
+    @PostMapping("/product-deliver")
+    @Operation(summary = "商城订单妥投完成（司机交付凭证，订单转已完成，用户端可见）")
+    public CommonResult<Boolean> productDeliver(@Valid @RequestBody AppDriverOrderActionReqVO reqVO) {
+        driverAppService.productDeliver(reqVO);
+        return success(true);
+    }
+
     @PostMapping("/location")
     @Operation(summary = "上报车辆实时位置")
     public CommonResult<Boolean> reportLocation(@Valid @RequestBody AppDriverLocationReqVO reqVO) {

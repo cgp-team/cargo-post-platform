@@ -13,6 +13,8 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
@@ -29,6 +31,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
@@ -45,6 +48,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
+import cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -78,6 +82,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int ORDER_TYPE_CARGO = 2;
     /** 订单类型：邮快件（快递进村取件核销） */
     private static final int ORDER_TYPE_POSTAL = 3;
+    /** 商城订单在司机端的展示类型（不属于 transport_order.order_type，仅列表展示 + 分支用） */
+    private static final int ORDER_TYPE_PRODUCT = 4;
     /** 订单已取消 */
     private static final int ORDER_STATUS_CANCELLED = 5;
     /** 执行状态：在途 */
@@ -108,6 +114,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
     @Resource private PostalOrderMapper postalOrderMapper;
+    @Resource private ProductOrderItemMapper productOrderItemMapper;
+    @Resource private ProductOrderService productOrderService;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
@@ -191,22 +199,26 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (driver == null) {
             return List.of();
         }
+        // 商城订单（已发货未妥投、承运车辆=本车）同样进"待装车/待妥投"列表：
+        // 村民在小程序商城下单 → 后台发货选本车 → 司机端就能装车、妥投，走同一套司机作业闭环
+        List<AppDriverPickupRespVO> productPickups = listProductPickups(driver);
         // 仅返回当前司机已下发/执行中派单明细里可确认装车的货运+邮快件订单（与装车/妥投归属校验一致）；
         // 用 PICKUP_CONFIRM_STATUSES 而非 PENDING_STATUSES：depart 后订单已为已发车(3)，发车后仍须可见待装车任务
         Set<Long> assignedOrderIds = listAssignedOrderIds(driver.getId());
         if (assignedOrderIds.isEmpty()) {
-            return List.of();
+            return productPickups;
         }
         List<TransportOrderDO> orders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
                 .in(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO, ORDER_TYPE_POSTAL)
                 .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES)
                 .in(TransportOrderDO::getId, assignedOrderIds)
                 .orderByDesc(TransportOrderDO::getId));
-        return orders.stream().map(order -> {
+        List<AppDriverPickupRespVO> cargoPickups = orders.stream().map(order -> {
             AppDriverPickupRespVO vo = new AppDriverPickupRespVO();
             vo.setOrderId(order.getId());
             vo.setOrderNo(order.getOrderNo());
             vo.setOrderType(order.getOrderType());
+            vo.setBizType(Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL) ? "POSTAL" : "CARGO");
             if (Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL)) {
                 // 邮快件：取件码/快递单号，收件人取件核销凭证
                 PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
@@ -231,6 +243,46 @@ public class DriverAppServiceImpl implements DriverAppService {
             }
             return vo;
         }).toList();
+        List<AppDriverPickupRespVO> all = new ArrayList<>(cargoPickups);
+        all.addAll(productPickups);
+        return all;
+    }
+
+    /**
+     * 本车待执行的商城订单（司机端"待装车/待妥投"）。
+     * 未绑定车辆时直接返回空：司机只是没接商城单，不该影响寄货待办列表（不抛"未绑定车辆"）。
+     */
+    private List<AppDriverPickupRespVO> listProductPickups(DriverDO driver) {
+        Long vehicleId = driverVehicleMapper.selectActiveBindings().stream()
+                .filter(bind -> Objects.equals(bind.getDriverId(), driver.getId()))
+                .map(DriverVehicleDO::getVehicleId)
+                .findFirst()
+                .orElse(null);
+        if (vehicleId == null) {
+            return List.of();
+        }
+        return productOrderService.getDriverDeliveryTasks(vehicleId).stream()
+                .map(this::toProductPickup)
+                .collect(Collectors.toList());
+    }
+
+    /** 商城订单 → 司机端待办卡片（orderType=4 仅展示；动作走 product-load / product-deliver） */
+    private AppDriverPickupRespVO toProductPickup(ProductOrderDO order) {
+        AppDriverPickupRespVO vo = new AppDriverPickupRespVO();
+        vo.setOrderId(order.getId());
+        vo.setOrderNo(order.getOrderNo());
+        vo.setOrderType(ORDER_TYPE_PRODUCT);
+        vo.setBizType("PRODUCT");
+        List<ProductOrderItemDO> items = productOrderItemMapper.selectListByOrderId(order.getId());
+        if (!items.isEmpty()) {
+            ProductOrderItemDO first = items.get(0);
+            vo.setGoodsName(items.size() > 1
+                    ? first.getProductName() + " 等 " + items.size() + " 种" : first.getProductName());
+        }
+        vo.setReceiverName(order.getReceiverName());
+        vo.setReceiverMobile(order.getReceiverMobile());
+        vo.setReceiverAddress(order.getReceiverAddress());
+        return vo;
     }
 
     @Override
@@ -663,13 +715,9 @@ public class DriverAppServiceImpl implements DriverAppService {
                 cargoOrderMapper.updateById(upd);
             }
         }
-        Long shiftId = planItem.getShiftId();
-        if (shiftId == null) {
-            throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
-        }
-        // 运力校验：执行记录 + 车辆货仓件数上限
-        ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
-                shiftId, driver.getId(), LocalDate.now());
+        // 执行记录：智能派单的经停明细不绑定固定班次（shift_id 为空），按"司机今天实际发车的那条"兜底，
+        // 否则「一键演示生成的方案」在司机端扫码装车会直接报"班次执行记录不存在"，装车走不下去。
+        ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
         if (execution == null) {
             throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
         }
@@ -719,20 +767,34 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 -1（地板 0）
-        Long shiftId = planItem.getShiftId();
-        if (shiftId != null) {
-            ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
-                    shiftId, driver.getId(), LocalDate.now());
-            if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
-                ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
-                loadedUpdate.setId(execution.getId());
-                loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
-                shiftExecutionMapper.updateById(loadedUpdate);
-            }
+        // 已装件数 -1（地板 0）：执行记录口径同装车（明细没写班次时按司机实际发车记录兜底）
+        ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
+        if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
+            ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
+            loadedUpdate.setId(execution.getId());
+            loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
+            shiftExecutionMapper.updateById(loadedUpdate);
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
+    }
+
+    // ==================== 商城订单（同理寄货）：司机端装车 → 妥投 ====================
+
+    @Override
+    @Transactional
+    public void productLoad(AppDriverOrderActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        productOrderService.driverLoad(driver.getId(), vehicleId, reqVO.getOrderId(), reqVO.getDriverPhotoUrl());
+    }
+
+    @Override
+    @Transactional
+    public void productDeliver(AppDriverOrderActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        productOrderService.driverDeliver(driver.getId(), vehicleId, reqVO.getOrderId(), reqVO.getDriverPhotoUrl());
     }
 
     @Override
@@ -993,6 +1055,23 @@ public class DriverAppServiceImpl implements DriverAppService {
                 .map(DriverVehicleDO::getVehicleId)
                 .findFirst()
                 .orElseThrow(() -> exception(DRIVER_VEHICLE_NOT_BOUND));
+    }
+
+    /**
+     * 取司机"当前在执行的那条班次记录"：优先派单明细上绑定的班次；明细未绑定班次
+     * （智能派单一键生成的方案就是这种）时，回退到司机今天实际发车产生的执行记录（取最新一条）。
+     * 返回 null 表示司机还没发车。
+     */
+    private ShiftExecutionDO resolveActiveExecution(Long driverId, DispatchPlanItemDO planItem) {
+        LocalDate today = LocalDate.now();
+        if (planItem != null && planItem.getShiftId() != null) {
+            ShiftExecutionDO bound = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                    planItem.getShiftId(), driverId, today);
+            if (bound != null) {
+                return bound;
+            }
+        }
+        return shiftExecutionMapper.selectListByDriverAndDate(driverId, today).stream().findFirst().orElse(null);
     }
 
     private AppDriverEarningsRecordRespVO toRecord(TransportOrderDO order) {

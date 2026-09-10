@@ -26,4 +26,15 @@ public interface ShiftExecutionMapper extends BaseMapperX<ShiftExecutionDO> {
                 .inIfPresent(ShiftExecutionDO::getShiftId, shiftIds)
                 .eq(ShiftExecutionDO::getExecDate, execDate));
     }
+
+    /**
+     * 按司机 + 执行日期查询当天执行记录（可能多条：一天内跑过多个班次）。
+     * 智能派单的经停明细不绑定固定班次，装车/妥投要按"司机实际发车的那条执行记录"兜底。
+     */
+    default List<ShiftExecutionDO> selectListByDriverAndDate(Long driverId, LocalDate execDate) {
+        return selectList(new LambdaQueryWrapperX<ShiftExecutionDO>()
+                .eq(ShiftExecutionDO::getDriverId, driverId)
+                .eq(ShiftExecutionDO::getExecDate, execDate)
+                .orderByDesc(ShiftExecutionDO::getId));
+    }
 }
