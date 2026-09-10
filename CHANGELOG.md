@@ -1,3 +1,14 @@
+# 2026-09-11 修复首页 WXML 编译错误（wx:else-if 拼写）+ 新增 WXML 指令校验测试
+
+- **`pages/index/index.wxml` 编译失败根因**：定位提示条第三个分支写成了 `wx:else-if`（Vue 习惯）。WXML 只认 `wx:elif`，
+  `wx:else-if` 会被当成未知属性 → 该元素永远渲染（"定位精度较低"提示其实一直在显示），且后续新增的 `wx:elif` 失去前置条件，
+  微信工具直接报 `Bad attr 'wx:elif' … wx:if not found`。现统一改为 `wx:elif`，四个分支（权限拒绝/不可用/精度低/已手动选点）恢复成一条合法链。
+- **新增 `miniprogram/tests/wxml-directives.test.js`**：用真实标签 tokenizer（跳过注释、处理属性内引号与 `>`、支持自闭合标签）
+  扫全仓 WXML，检查 ①`wx:else-if`/`wx:elseif` 拼写 ②`wx:elif`/`wx:else` 是否紧跟同层级 `wx:if`/`wx:elif`；
+  测试内含反向自检用例（故意构造拼写与悬挂 `wx:elif`，断言检查器能发现），避免这类"整页编译失败"再次溜进提交。
+
+---
+
 # 2026-09-11 定位可纠正化：粗定位告警 + 手动选点 + 近期高精度沿用
 
 - **"人在重庆邮电大学却定位到渝中区"的定性**：用同一坐标（106.5765,29.5325）实测高德 regeo 与 BigDataCloud 都返回 `南岸区`，项目内只有 `utils/location.js` 调 `wx.getLocation({type:'gcj02'})`（高德 SDK 显式传坐标不会自行定位）→ 坐标链路没问题，**区县错了是设备/系统给的粗略位置**（未开"精确位置"/室内/WiFi 定位误差可达 1~3km；开发者工具的"位置模拟"也会固定返回同一坐标）。
