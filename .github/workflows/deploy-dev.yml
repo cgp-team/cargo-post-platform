@@ -310,12 +310,20 @@ jobs:
             FAIL=1
           fi
 
-          # 3. 文件 URL 必须带 /api 前缀：nginx 只把 /api/ 转发到后端（转发时剥前缀），
-          #    缺前缀的 URL 会落到前端 SPA，浏览器拿到 index.html → 后台照片显示裂图
+          # 3. 本机部署使用的文件配置必须带 /api 前缀：nginx 只把 /api/ 转发到后端（转发时剥前缀），
+          #    缺前缀的 URL 会落到前端 SPA，浏览器拿到 index.html → 后台照片显示裂图。
+          #    注意：只校验"指向本机服务器"的配置行；infra_file_config 里还有 5 条上游示例配置
+          #    （七牛/腾讯/阿里/火山/华为，domain 为 test.yudao.iocoder.cn / null / 空），与本部署无关，不能一并判失败。
           CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
-            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') NOT LIKE '%/api'")
+            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') LIKE 'http://1.15.29.107%' AND JSON_EXTRACT(config,'\$.domain') NOT LIKE '%/api'")
           if [ "${CNT}" != "0" ]; then
-            echo "FAIL: infra_file_config.domain 未带 /api 前缀（${CNT} 条）——图片 URL 会被 nginx 转发到前端"
+            echo "FAIL: 本机文件配置 domain 未带 /api 前缀（${CNT} 条）——图片 URL 会被 nginx 转发到前端"
+            FAIL=1
+          fi
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') LIKE 'http://127.0.0.1%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: 仍有 ${CNT} 条文件配置指向 127.0.0.1，浏览器不可达"
             FAIL=1
           fi
           CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
