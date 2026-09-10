@@ -441,6 +441,47 @@ WHERE driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 --   WHERE photo_url LIKE 'http://127.0.0.1:48080/%' OR driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 -- 预期结果：两个查询均返回 0
 
+-- ---------- V018：文件 URL 必须带 /api 前缀（否则 nginx 不转发，图片打不开） ----------
+-- 问题：V007 把 domain 修成 http://1.15.29.107（缺 /api），生成的文件 URL 形如
+--       http://1.15.29.107/admin-api/infra/file/4/get/xxx.jpg；
+--       而 nginx 只把 /api/ 转发到后端（见 deploy/nginx/nginx.conf：location /api/ → business_backend，
+--       转发时剥掉 /api 前缀），其余路径落到前端 SPA，浏览器拿到的是 index.html
+--       → 后台订单列表/审核弹窗里的寄货照片显示为裂图（实测返回 text/html）。
+-- 修复：domain 与历史 URL 统一改成带前缀的 http://1.15.29.107/api。
+-- 幂等：WHERE 只匹配缺前缀的旧值。
+
+UPDATE infra_file_config
+SET
+    config = JSON_SET(config, '$.domain', 'http://1.15.29.107/api'),
+    updater = 'admin',
+    update_time = NOW()
+WHERE id = 4
+  AND JSON_EXTRACT(config, '$.domain') IN ('http://1.15.29.107', 'http://127.0.0.1:48080');
+
+-- 历史 URL 补齐 /api 前缀（仅改缺前缀的，已带 /api 的保持不变）
+UPDATE infra_file
+SET url = REPLACE(url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE url LIKE 'http://1.15.29.107/%' AND url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE transport_cargo_order
+SET photo_url = REPLACE(photo_url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE transport_cargo_order
+SET driver_photo_url = REPLACE(driver_photo_url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE system_users
+SET avatar = REPLACE(avatar, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE avatar LIKE 'http://1.15.29.107/%' AND avatar NOT LIKE 'http://1.15.29.107/api/%';
+
+-- 验证（预期均为 0）：
+--   SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'$.domain') NOT LIKE '%/api';
+--   SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NOT LIKE 'http://1.15.29.107/api/%';
+--   SELECT COUNT(*) FROM transport_cargo_order
+--     WHERE (photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%')
+--        OR (driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%');
+
 -- ---------- V009：开发者模式 + 模拟运营权限体系 ----------
 -- 新增开发者中心菜单与独立模拟权限，解除对 transport:dispatch:smart-plan 的复用。
 -- 幂等：INSERT ... SELECT ... WHERE NOT EXISTS。
