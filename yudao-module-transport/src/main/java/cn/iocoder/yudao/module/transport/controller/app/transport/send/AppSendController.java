@@ -9,6 +9,8 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.S
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendArrangementRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendRoutePreviewReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.RoutePreviewRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
@@ -31,6 +33,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.send.AppSendRouteInfoService;
+import cn.iocoder.yudao.module.transport.service.transport.send.AppSendReachabilityService;
 import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider;
 import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
@@ -68,6 +71,7 @@ public class AppSendController {
     @Resource private TransportOrderService transportOrderService;
     @Resource private StationService stationService;
     @Resource private AppSendRouteInfoService sendRouteInfoService;
+    @Resource private AppSendReachabilityService sendReachabilityService;
     @Resource private PostalOrderMapper postalOrderMapper;
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
@@ -312,6 +316,13 @@ public class AppSendController {
         return success(sendRouteInfoService.routePreview(reqVO.getPickupStationId(), reqVO.getDeliveryStationId()));
     }
 
+    @PostMapping("/reachability")
+    @Operation(summary = "当前位置可达性评估（车辆能否直接到达 → 不可达时推荐最近可服务站点与步行时间）")
+    @PermitAll
+    public CommonResult<AppSendReachabilityRespVO> reachability(@Valid @RequestBody AppSendReachabilityReqVO reqVO) {
+        return success(sendReachabilityService.evaluate(reqVO.getLatitude(), reqVO.getLongitude()));
+    }
+
     @GetMapping("/arrangements")
     @Operation(summary = "我的乘车安排（客运订单已分配/已发车/已完成，含承运车辆与方案，供村民到站通知）")
     public CommonResult<List<AppSendArrangementRespVO>> arrangements() {
@@ -409,6 +420,9 @@ public class AppSendController {
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());
+                vo.setOriginalAddress(cargo.getOriginalAddress());
+                vo.setOriginalLatitude(cargo.getOriginalLatitude());
+                vo.setOriginalLongitude(cargo.getOriginalLongitude());
             }
         }
         return vo;

@@ -483,6 +483,33 @@ WHERE avatar LIKE 'http://1.15.29.107/%' AND avatar NOT LIKE 'http://1.15.29.107
 --     WHERE (photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%')
 --        OR (driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%');
 
+-- ---------- V019：寄货订单保存"用户原始地址/坐标"（位置 ≠ 车辆能到的地方） ----------
+-- 背景：用户在小程序用「当前位置」寄货时，后端先做可达性评估；不可达则推荐最近可服务站点，
+--       订单同时保存 用户原始地址/坐标 与 实际服务站（transport_order.pickup_station_id），二者不互相覆盖。
+-- 幂等：仅当列不存在时才 ALTER。
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_address') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_address` varchar(255) NOT NULL DEFAULT '''' COMMENT ''用户原始寄货地址'' AFTER `receiver_address`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_latitude') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_latitude` decimal(12,7) DEFAULT NULL COMMENT ''用户原始纬度(GCJ-02)'' AFTER `original_address`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_longitude') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_longitude` decimal(12,7) DEFAULT NULL COMMENT ''用户原始经度(GCJ-02)'' AFTER `original_latitude`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 校验（预期 3 行）
+-- SELECT COLUMN_NAME FROM information_schema.COLUMNS
+--   WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order'
+--     AND COLUMN_NAME IN ('original_address','original_latitude','original_longitude');
+
 -- ---------- V009：开发者模式 + 模拟运营权限体系 ----------
 -- 新增开发者中心菜单与独立模拟权限，解除对 transport:dispatch:smart-plan 的复用。
 -- 幂等：INSERT ... SELECT ... WHERE NOT EXISTS。

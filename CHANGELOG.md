@@ -21,6 +21,9 @@
 - **统一定位层（AmapLocationProvider）**：全项目仅 `utils/location.js` 调用 `wx.getLocation({type:'gcj02'})`（首页/公交页/详情页/司机端均已改为 `location.getCurrentLocation()` / `getDeviceLocationGcj02()`）；高德链路=设备定位+`amap-wx.js` 逆地理，统一输出 `{success,latitude,longitude,accuracy,timestamp,source,level,district,city}`，`source ∈ AMAP|CACHE|DEMO|UNKNOWN`，日志 `[AMAP_LOCATION] ...`；缓存 1~5 分钟（60s 秒出、超时同步刷新），搜索半径按精度 5000/8000/15000m，定位失败显示"无法获取当前位置"而不是伪造地点。
 - **站点去重（同名同坐标合并线路）**：客户端 `transit-amap.dedupeStations`、后端 `AmapTransitProvider.dedupe`、合并层 `AppBusServiceImpl.dedupeNearbyStations` 用同一规则（规范化名称去掉 `(公交站)` + 5 位小数坐标），线路取并集，修复线上"曾家岩(公交站)"重复两条的问题。
 - **车辆平滑移动动画**：新增 `utils/bus-motion.js`（单定时器统一循环，1.2s 内插值约 12 帧，含朝向计算），15s 刷新只更新目标坐标并只重设 markers；`onHide/onUnload` 清理动画与刷新定时器，避免定时器泄漏。
+- **答辩主链路：用户位置不可达 → 就近服务站点**：新增 `POST /app-api/transport/send/reachability`（`AppSendReachabilityService`：候选站点按距离升序、同距取 id，**高德道路距离优先、失败回退 Haversine 并标注"路线估算"**，≤0.3km 可就近服务，否则 `USER_LOCATION_UNREACHABLE` + `NEAREST_STATION` 推荐送站并给步行分钟）；小程序寄货页新增「取货方式：使用当前位置 / 自选取货站点」、可达性卡片、`使用推荐站点` 确认；订单新增 `original_address/original_latitude/original_longitude`（V019 迁移 + 全量 schema），**用户原始地址与服务站分开保存、不互相覆盖**；`ReviewReasonCodeEnum` 新增 `USER_LOCATION_UNREACHABLE` 并在小程序映射文案。
+- **reasonCode 结果标准化（不删校验）**：`AlgorithmPlanRespDTO.reasonCode` 增加 `@JsonAlias("reason_code")` 兼容旧接口；`infeasible` 结果缺原因码时**兜底 `INFEASIBLE`** 而不是抛异常（此前会把"无解"升级成接口异常导致调度中断），并更新单测断言。
+- **校园演示数据**：新增 `sql/mysql/demo-cqupt-stations.sql`（重庆邮电大学站/黄桷垭站 + 线路 + 班次，幂等），让"校园内真实定位 → 不可达 → 推荐最近站点"的演示有真实可用的站点与班次数据（代码中无任何地点硬编码）。
 
 ---
 

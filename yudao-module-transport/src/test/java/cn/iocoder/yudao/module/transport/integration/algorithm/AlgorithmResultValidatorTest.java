@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -121,10 +122,14 @@ class AlgorithmResultValidatorTest {
     }
 
     @Test
-    void infeasible_without_reason_rejected() {
+    void infeasible_without_reason_is_normalized_to_fallback_instead_of_throwing() {
+        // 结果标准化：确实没给原因码 → 兜底 INFEASIBLE，保证业务侧始终有原因码可展示，
+        // 不把"无解"升级成接口异常（此前会导致调度直接失败、答辩演示中断）
         AlgorithmPlanRespDTO result = AlgorithmPlanRespDTO.builder()
                 .requestId("req-test-1").status(AlgorithmPlanRespDTO.STATUS_INFEASIBLE).build();
-        assertThrows(ServiceException.class, () -> AlgorithmResultValidator.validate(baseRequest(), result));
+
+        assertDoesNotThrow(() -> AlgorithmResultValidator.validate(baseRequest(), result));
+        assertEquals(AlgorithmResultValidator.REASON_INFEASIBLE_FALLBACK, result.getReasonCode());
     }
 
     @Test

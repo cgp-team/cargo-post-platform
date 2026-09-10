@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.integration.algorithm.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -34,6 +35,8 @@ public class AlgorithmPlanRespDTO {
     private String status;
 
     /** 无解原因码：OVER_CAPACITY / TIMING_CONFLICT / PARTIAL_ONLY */
+    /** 兼容旧接口的 snake_case 字段（reason_code），避免历史结果被当成"缺少 reasonCode" */
+    @JsonAlias({"reason_code"})
     private String reasonCode;
 
     /** 是否为幂等缓存命中 */

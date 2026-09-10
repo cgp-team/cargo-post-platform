@@ -70,6 +70,12 @@ public class AppSendOrderRespVO {
     private String receiverMobile;
     @Schema(description = "收货地址")
     private String receiverAddress;
+    @Schema(description = "用户原始寄货地址（如 重庆邮电大学）")
+    private String originalAddress;
+    @Schema(description = "用户原始纬度(GCJ-02)")
+    private BigDecimal originalLatitude;
+    @Schema(description = "用户原始经度(GCJ-02)")
+    private BigDecimal originalLongitude;
     @Schema(description = "下单时间")
     private LocalDateTime createTime;
 
