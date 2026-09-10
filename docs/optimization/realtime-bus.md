@@ -13,5 +13,10 @@
 - `MonitoringServiceImpl`：REAL 窗口 15min；模拟位置沿站点直线插值（Phase 7 前过渡态，标注 SIMULATED 不冒充真实）。
 - 模拟引擎启用时 SIMULATED 用引擎沿真实 polyline 推进。
 
+## 演示兜底（2026-09）
+无司机上报、未启动模拟引擎时，`MonitoringServiceImpl.fillTimetableSimulation` 按当前时间所在班次窗口（`transport_shift` 计划发车时间 + 计划时长）
+在经停站 `planned_minutes` 上线性插值给出车辆位置，`dataSource=SIMULATED`，班次/线路照常回填，实时公交按线路聚合后展示 3 辆车；
+小程序对这类车辆标注「模拟演示」，`REAL_FRESH` 才显示「实时」。真实上报车辆优先，且只有能回填班次/线路（派单明细或当天班次执行）时才进公交列表。
+
 ## 纪律
 - SIMULATED 永不冒充 REAL（dataSource 强制标注）；高德公交数据不冒充自己车辆。

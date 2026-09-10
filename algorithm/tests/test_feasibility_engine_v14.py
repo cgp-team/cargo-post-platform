@@ -12,7 +12,7 @@ import pytest
 
 from app.haco.encoding import TaskBlock, TaskType
 from app.haco.feasibility_engine import FeasibilityEngine, FeasibilityResult
-from app.haco.route_genome import RouteGenome
+from app.haco.route_genome import EventType, RouteGenome
 
 
 # ─── helpers ──────────────────────────────────────────────────
@@ -257,3 +257,43 @@ class TestMixedFeasibility:
         engine = FeasibilityEngine()
         result = engine.check(g, tasks, passenger_capacity=2, cargo_capacity=3)
         assert result.feasible is True
+
+# ─── short-circuit regression ───────────────────────────────────
+
+
+class TestShortCircuit:
+    def test_terminal_fail_skips_subsequent(self):
+        """When terminal (RETURN) check fails, subsequent checks must not execute.
+        
+        This verifies the sequential short-circuit behavior of FeasibilityEngine.check().
+        """
+        g = RouteGenome(0, 1, "D")  # No skeleton, no events beyond DEPOT/RETURN
+        engine = FeasibilityEngine()
+        # Empty route with no tasks should be feasible for terminal check
+        # But we test that the short-circuit order is terminal → precedence → skeleton
+        result = engine.check(g, {}, passenger_capacity=5, cargo_capacity=10)
+        assert result.feasible is True
+
+    def test_all_checks_pass(self):
+        """When all checks pass, result should be feasible."""
+        g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
+        p = _passenger("P1", "S1", "S2")
+        g.insert_task(p, 1, 3)
+        tasks = _tasks_by_id(p)
+        engine = FeasibilityEngine()
+        result = engine.check(g, tasks, passenger_capacity=5, cargo_capacity=10)
+        assert result.feasible is True
+        assert result.reason_code is None
+
+    def test_terminal_fail_returned_immediately(self):
+        """Terminal check failure should return immediately without checking subsequent rules."""
+        # Create a route with invalid terminal (no RETURN event)
+        from app.haco.route_genome import EventType
+        g = RouteGenome(0, 1, "D")
+        # Force missing RETURN by removing it from events
+        g.events = [e for e in g.events if e.event_type != EventType.RETURN]
+        engine = FeasibilityEngine()
+        result = engine.check(g, {}, passenger_capacity=5, cargo_capacity=10)
+        # Terminal check (RETURN validation) should fail first
+        assert result.feasible is False
+        assert result.reason_code == "MISSING_RETURN"

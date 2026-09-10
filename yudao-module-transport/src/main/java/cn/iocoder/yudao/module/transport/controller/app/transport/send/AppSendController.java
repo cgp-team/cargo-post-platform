@@ -31,6 +31,8 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
 import cn.iocoder.yudao.module.transport.service.transport.send.AppSendRouteInfoService;
+import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider;
+import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -73,12 +75,18 @@ public class AppSendController {
     @Resource private VehicleMapper vehicleMapper;
     @Resource private ShiftMapper shiftMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
+    /** 统一车辆位置（REAL > 模拟引擎 > 确定性班次模拟）：演示无司机上报时也能出"车快到了" */
+    @Resource private VehicleLocationProvider vehicleLocationProvider;
 
     /** "车来取货/送货"提醒的订单状态范围：仅在途（已分配/已发车）；已完成/已取消不提醒 */
     private static final Set<Integer> CARRIER_REMINDER_STATUSES = Set.of(
             TransportOrderStatusEnum.ASSIGNED.getStatus(), TransportOrderStatusEnum.DEPARTED.getStatus());
     /** 车辆位置新鲜度阈值（分钟）：超过视为班次已结束的残留上报，不参与提醒 */
     private static final int CARRIER_LOCATION_FRESH_MINUTES = 30;
+    /** 真实位置"新鲜"阈值（分钟）：用于 REAL_FRESH / REAL_STALE 分级展示 */
+    private static final int CARRIER_FRESH_MINUTES = 5;
+    /** "即将到站"阈值（分钟）：距目标站点 <= 该值 → carrierApproaching=true，前端高亮并提示 */
+    private static final int CARRIER_APPROACH_MINUTES = 10;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -161,10 +169,11 @@ public class AppSendController {
         }
         // 车来取货/送货提醒：仅在途订单填充（完成/取消的经停明细仍在，不提醒，防误导）
         if (carrierReminderEligible(order.getStatus())) {
-            Map<Long, VehicleLocationDO> carrierLocMap = new HashMap<>();
+            Map<Long, VehicleLocationSnapshot> carrierLocMap = new HashMap<>();
             Map<Long, VehicleDO> carrierVehicleMap = new HashMap<>();
             if (item.getVehicleId() != null) {
-                carrierLocMap.put(item.getVehicleId(), vehicleLocationMapper.selectByVehicleId(item.getVehicleId()));
+                // 统一位置模型（REAL > 模拟引擎 > 确定性班次模拟）：演示时无需司机开 GPS 也能看到"车快到了"
+                carrierLocMap.putAll(vehicleLocationProvider.getLocations(Set.of(item.getVehicleId()), true));
                 carrierVehicleMap.put(item.getVehicleId(), vehicleMapper.selectById(item.getVehicleId()));
             }
             fillCarrierLiveInfo(vo, item, carrierLocMap, carrierVehicleMap,
@@ -182,6 +191,16 @@ public class AppSendController {
     static boolean isCarrierLocationFresh(LocalDateTime reportTime, LocalDateTime now) {
         return reportTime != null
                 && reportTime.isAfter(now.minusMinutes(CARRIER_LOCATION_FRESH_MINUTES));
+    }
+
+    /** 是否真实上报来源（SIMULATED 由班次插值/模拟引擎当场生成，本身即新鲜，不走过期判定） */
+    static boolean isRealLocationSource(String source) {
+        return "REAL".equals(source) || "REAL_STALE".equals(source);
+    }
+
+    /** 是否"即将到站"：距目标站点 <= {@value #CARRIER_APPROACH_MINUTES} 分钟（前端据此高亮/弹提醒） */
+    static boolean carrierApproaching(Integer etaMinutes) {
+        return etaMinutes != null && etaMinutes > 0 && etaMinutes <= CARRIER_APPROACH_MINUTES;
     }
 
     /** 我的寄货列表批量填充承运车辆实时位置（在途订单"车来取货/送货"提醒），一次加载避免逐单 N+1 */
@@ -212,11 +231,8 @@ public class AppSendController {
         if (vehicleIds.isEmpty()) {
             return;
         }
-        // 一次批量加载：车辆最新位置 + 车辆档案 + 站点
-        Map<Long, VehicleLocationDO> locMap = vehicleLocationMapper
-                .selectList(new LambdaQueryWrapperX<VehicleLocationDO>()
-                        .in(VehicleLocationDO::getVehicleId, vehicleIds))
-                .stream().collect(Collectors.toMap(VehicleLocationDO::getVehicleId, Function.identity(), (a, b) -> a));
+        // 一次批量加载：车辆位置（统一位置模型：真实上报优先，否则确定性班次模拟）+ 车辆档案 + 站点
+        Map<Long, VehicleLocationSnapshot> locMap = vehicleLocationProvider.getLocations(vehicleIds, true);
         Map<Long, VehicleDO> vehicleMap = vehicleMapper.selectBatchIds(vehicleIds).stream()
                 .collect(Collectors.toMap(VehicleDO::getId, Function.identity(), (a, b) -> a));
         Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
@@ -235,20 +251,23 @@ public class AppSendController {
 
     /** 填充承运车辆实时位置 + 距目标站点距离/分钟（车来取货/送货提醒）。
      *  目标站点 = 该订单方向经停站（揽收→上车站，派送/客运送客→下车站）。
-     *  车辆未发车/未上报位置，或上报已过期（班次结束残留）时字段保持 null，不影响原流程。 */
+     *  车辆无位置，或真实上报已过期（班次结束残留）时字段保持 null，不影响原流程。
+     *  位置来源写入 carrierLocationSource（REAL_FRESH / REAL_STALE / SIMULATED），模拟位置前端会标注"模拟演示"。 */
     private void fillCarrierLiveInfo(AppSendOrderRespVO vo, DispatchPlanItemDO item,
-                                     Map<Long, VehicleLocationDO> locMap,
+                                     Map<Long, VehicleLocationSnapshot> locMap,
                                      Map<Long, VehicleDO> vehicleMap,
                                      Map<Long, StationDO> stationMap) {
         if (item.getVehicleId() == null || item.getStationId() == null) {
             return;
         }
-        VehicleLocationDO loc = locMap.get(item.getVehicleId());
+        VehicleLocationSnapshot loc = locMap.get(item.getVehicleId());
         if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null) {
             return;
         }
-        // 位置新鲜度：班次结束后的残留上报不参与提醒（vehicle_location 每车一行，收车后不清理）
-        if (!isCarrierLocationFresh(loc.getReportTime(), LocalDateTime.now())) {
+        // 真实位置新鲜度：班次结束后的残留上报不参与提醒（vehicle_location 每车一行，收车后不清理）；
+        // SIMULATED（模拟引擎/班次插值）是当次生成的，直接用
+        String source = loc.getSource() == null ? "REAL" : loc.getSource();
+        if (isRealLocationSource(source) && !isCarrierLocationFresh(loc.getUpdatedAt(), LocalDateTime.now())) {
             return;
         }
         StationDO station = stationMap.get(item.getStationId());
@@ -267,10 +286,16 @@ public class AppSendController {
                 loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(),
                 station.getLongitude().doubleValue(), station.getLatitude().doubleValue(),
                 GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH);
+        // 位置新鲜度分级：真实 5 分钟内 = REAL_FRESH；其余真实 = REAL_STALE；模拟 = SIMULATED
+        boolean fresh = loc.getUpdatedAt() != null
+                && loc.getUpdatedAt().isAfter(LocalDateTime.now().minusMinutes(CARRIER_FRESH_MINUTES));
+        vo.setCarrierLocationSource("SIMULATED".equals(source) ? "SIMULATED"
+                : (fresh ? "REAL_FRESH" : "REAL_STALE"));
         vo.setCarrierLongitude(loc.getLongitude().doubleValue());
         vo.setCarrierLatitude(loc.getLatitude().doubleValue());
         vo.setCarrierDistanceKm(BigDecimal.valueOf(Math.round(distanceEta.distKm() * 100) / 100.0));
         vo.setCarrierEtaMinutes(distanceEta.etaMinutes());
+        vo.setCarrierApproaching(carrierApproaching(distanceEta.etaMinutes()));
     }
 
     @GetMapping("/stations")
@@ -364,6 +389,10 @@ public class AppSendController {
             if (cargo != null) {
                 vo.setGoodsName(cargo.getGoodsName());
                 vo.setGoodsWeight(cargo.getWeightKg());
+                vo.setCargoCategory(cargo.getCargoCategory());
+                vo.setItemCount(cargo.getItemCount());
+                vo.setVolumeM3(cargo.getVolumeM3());
+                vo.setFreshFlag(cargo.getFreshFlag());
                 vo.setGoodsNote(cargo.getGoodsNote());
                 vo.setPhotoUrl(cargo.getPhotoUrl());
                 vo.setAuditStatus(cargo.getAuditStatus());
@@ -375,11 +404,38 @@ public class AppSendController {
                 vo.setPickupServiceMode(cargo.getPickupServiceMode());
                 vo.setDeliveryServiceMode(cargo.getDeliveryServiceMode());
                 vo.setServicePointStationId(cargo.getServicePointStationId());
+                // 就近交接站点（客户送站导航用）：站点名 + 坐标 + 与取货站点的直线距离
+                fillServicePoint(vo, cargo.getServicePointStationId(), order.getPickupStationId());
                 vo.setReceiverName(cargo.getReceiverName());
                 vo.setReceiverMobile(cargo.getReceiverMobile());
                 vo.setReceiverAddress(cargo.getReceiverAddress());
             }
         }
         return vo;
+    }
+
+    /** 填充"建议服务站点"展示信息（站点名/坐标/距取货站点公里数），供小程序提示"请送往就近站点"+导航 */
+    private void fillServicePoint(AppSendOrderRespVO vo, Long servicePointStationId, Long pickupStationId) {
+        if (servicePointStationId == null) {
+            return;
+        }
+        Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+        StationDO point = stationMap.get(servicePointStationId);
+        if (point == null) {
+            return;
+        }
+        vo.setServicePointStationName(point.getStationName());
+        if (point.getLongitude() != null && point.getLatitude() != null) {
+            vo.setServicePointLongitude(point.getLongitude().doubleValue());
+            vo.setServicePointLatitude(point.getLatitude().doubleValue());
+            StationDO pickup = pickupStationId == null ? null : stationMap.get(pickupStationId);
+            if (pickup != null && pickup.getLongitude() != null && pickup.getLatitude() != null) {
+                double km = GeoDistanceUtil.haversineKm(
+                        pickup.getLongitude().doubleValue(), pickup.getLatitude().doubleValue(),
+                        point.getLongitude().doubleValue(), point.getLatitude().doubleValue());
+                vo.setServicePointDistanceKm(Math.round(km * 100) / 100.0);
+            }
+        }
     }
 }

@@ -48,6 +48,8 @@ class AppBusServiceImplTest {
         ReflectionTestUtils.setField(appBusService, "shiftMapper", shiftMapper);
         ReflectionTestUtils.setField(appBusService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(appBusService, "algorithmClient", algorithmClient);
+        // 分层数据源：默认无现实公交数据源（未配置高德 key），项目线路层由本测试的站点/线路桩数据提供
+        ReflectionTestUtils.setField(appBusService, "transitProviders", List.of());
     }
 
     @Test

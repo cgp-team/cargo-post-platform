@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.controller.app.transport.send.vo;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -27,6 +28,19 @@ public class AppSendOrderCreateReqVO {
     @Schema(description = "货物重量(kg)", requiredMode = Schema.RequiredMode.REQUIRED)
     @NotNull(message = "货物重量不能为空")
     private BigDecimal goodsWeight;
+
+    @Schema(description = "货物类型（如：农产品/生鲜果蔬/日用品/文件票据/其他），缺省按农产品")
+    private String cargoCategory;
+
+    @Schema(description = "货物件数，缺省 1")
+    @Min(value = 1, message = "货物件数不能小于 1")
+    private Integer itemCount;
+
+    @Schema(description = "货物体积(m³)，缺省 0")
+    private BigDecimal volumeM3;
+
+    @Schema(description = "是否生鲜/需冷链（true 时承运审核转人工确认），缺省 false")
+    private Boolean freshFlag;
 
     @Schema(description = "货物备注")
     private String goodsNote;

@@ -50,6 +50,10 @@ export interface DispatchPlanItemVO {
 /** 调度方案详情(对应 DispatchPlanRespVO) */
 export interface DispatchPlanRespVO extends DispatchPlanVO {
   items?: DispatchPlanItemVO[]
+  /** 摘要（后端 getPlan 计算）：一键智能调度结果卡用 */
+  depotStationName?: string
+  orderCount?: number
+  vehicleCount?: number
 }
 
 /** 订单归集请求（orderIds 优先；batchStart/batchEnd 兼容按时间范围，毫秒时间戳） */
@@ -57,6 +61,8 @@ export interface DispatchCollectReqVO {
   orderIds?: number[]
   batchStart?: number
   batchEnd?: number
+  /** 一键归集：true=把当前所有「待入池」订单全部入池（演示/批量场景，免勾选） */
+  all?: boolean
 }
 
 /** 手工派单请求 */
@@ -68,15 +74,19 @@ export interface DispatchManualPlanReqVO {
 
 /** 智能派单请求(scenario 仅供 Mock 联调,界面不暴露) */
 export interface DispatchSmartPlanReqVO {
-  depotStationId: number
-  vehicleIds: number[]
+  /** 一键智能调度：后端自动选场站/车辆，忽略 depotStationId/vehicleIds */
+  auto?: boolean
+  depotStationId?: number
+  vehicleIds?: number[]
   algorithmConfig?: Record<string, any>
 }
 
 /** 智能派单前约束校验请求 */
 export interface DispatchValidateReqVO {
-  depotStationId: number
-  vehicleIds: number[]
+  /** 一键智能调度：后端自动推导场站与候选车辆 */
+  auto?: boolean
+  depotStationId?: number
+  vehicleIds?: number[]
 }
 
 /** 智能派单前约束校验响应 */
@@ -113,6 +123,11 @@ export interface DispatchValidateRespVO {
     orderNo?: string
     issue?: string
   }[]
+  /** 自动模式回显：是否自动、本次场站、可用车辆总数 */
+  auto?: boolean
+  depotStationId?: number
+  depotStationName?: string
+  availableVehicleCount?: number
 }
 
 /** 方案审核请求 */
