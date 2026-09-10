@@ -182,6 +182,48 @@ class TransportOrderServiceImplTest {
     }
 
     @Test
+    void audit_autoPassed_order_isIdempotentConfirm() {
+        // 村民提交后自动审核通过 → 订单直接是「待入池(8)」；管理员在订单管理里点「审核通过」
+        // 属于复核确认：只记录审核结论，必须成功且**不改变生命周期**（不能把订单打回/报错中断演示）
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build());
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(0)
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
+
+        OrderAuditReqVO reqVO = new OrderAuditReqVO();
+        reqVO.setOrderId(1L);
+        reqVO.setPass(true);
+        orderService.audit(reqVO);
+
+        ArgumentCaptor<CargoOrderDO> captor = ArgumentCaptor.forClass(CargoOrderDO.class);
+        verify(cargoOrderMapper).updateById(captor.capture());
+        assertEquals(1, captor.getValue().getAuditStatus());
+        assertNull(captor.getValue().getReviewStatus()); // 只写审核结论，不动审核结果
+        verify(orderMapper, never()).updateById(any(TransportOrderDO.class)); // 生命周期不变
+    }
+
+    @Test
+    void audit_autoPassed_order_rejectCancelsOrder() {
+        // 复核不通过（如现场发现违禁品）：必须能把订单取消，不能因为"自动审核已通过"就锁死
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build());
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(0)
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
+
+        OrderAuditReqVO reqVO = new OrderAuditReqVO();
+        reqVO.setOrderId(1L);
+        reqVO.setPass(false);
+        reqVO.setRejectReason("现场复核发现违禁品");
+        orderService.audit(reqVO);
+
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).updateById(orderCaptor.capture());
+        assertEquals(TransportOrderStatusEnum.CANCELLED.getStatus(), orderCaptor.getValue().getStatus());
+    }
+
+    @Test
     void confirmStationAction_waiting_action_to_ready_for_pool() {
         // 待客户操作(status=7) → 确认送站 → 待入池(status=8)
         when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()

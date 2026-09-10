@@ -153,6 +153,8 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .originalAddress(reqVO.getOriginalAddress())
                 .originalLatitude(reqVO.getOriginalLatitude())
                 .originalLongitude(reqVO.getOriginalLongitude())
+                // 取货方式由小程序可达性评估给出（车辆不能直接进入 → 最近站点交接）
+                .pickupServiceMode(reqVO.getPickupServiceMode())
                 .build();
         cargoOrderMapper.insert(sub);
 
@@ -171,7 +173,10 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         upd.setId(sub.getId());
         upd.setReviewStatus(result.getReviewStatus());
         upd.setReviewReasonCodes(CargoReviewServiceImpl.joinReasonCodes(result.getReasonCodes()));
-        upd.setPickupServiceMode(result.getPickupServiceMode());
+        // 取货方式：小程序可达性评估已给出（如 NEAREST_STATION 车辆进不去校园）时以客户端为准，
+        // 否则用承运审核推导值（默认站到站）
+        upd.setPickupServiceMode(StrUtil.isNotBlank(sub.getPickupServiceMode())
+                ? sub.getPickupServiceMode() : result.getPickupServiceMode());
         upd.setDeliveryServiceMode(result.getDeliveryServiceMode());
         upd.setServicePointStationId(result.getServicePointStationId());
         // 拒运：兼容旧 auditStatus 字段 + 原因文案（村民查件页可见"审核不通过+原因"）
@@ -280,13 +285,39 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         }
         // 状态机：仅 已创建(0)/已入池(1)/待审核(6，自动审核转人工) 且 审核未决（PENDING/MANUAL_REVIEW）可审
         Integer status = order.getStatus();
+        Integer reviewStatus = cargo.getReviewStatus();
+        // 管理员复核「自动审核已通过」的订单（正常货物提交后即自动通过 → 待入池/已入池）：
+        // 通过 = 幂等确认（只记录审核结论，不改变生命周期，绝不把订单从池里打回）；
+        // 拒绝 = 复核不通过 → 取消该单，避免已经把货备好的订单被静默运走。
+        if (ReviewStatusEnum.PASSED.getStatus().equals(reviewStatus)
+                && (Objects.equals(status, TransportOrderStatusEnum.READY_FOR_POOL.getStatus())
+                    || Objects.equals(status, TransportOrderStatusEnum.POOLED.getStatus()))) {
+            CargoOrderDO upd = new CargoOrderDO();
+            upd.setId(cargo.getId());
+            if (Boolean.TRUE.equals(reqVO.getPass())) {
+                upd.setAuditStatus(1);
+                cargoOrderMapper.updateById(upd);
+                return;
+            }
+            if (StrUtil.isBlank(reqVO.getRejectReason())) {
+                throw exception(BAD_REQUEST);
+            }
+            upd.setAuditStatus(2);
+            upd.setRejectReason(reqVO.getRejectReason());
+            upd.setReviewStatus(ReviewStatusEnum.REJECTED.getStatus());
+            TransportOrderDO orderUpd = new TransportOrderDO();
+            orderUpd.setId(order.getId());
+            orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
+            orderMapper.updateById(orderUpd);
+            cargoOrderMapper.updateById(upd);
+            return;
+        }
         boolean reviewGate = Objects.equals(status, TransportOrderStatusEnum.CREATED.getStatus())
                 || Objects.equals(status, TransportOrderStatusEnum.POOLED.getStatus())
                 || Objects.equals(status, TransportOrderStatusEnum.PENDING_REVIEW.getStatus());
         if (!reviewGate) {
             throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
         }
-        Integer reviewStatus = cargo.getReviewStatus();
         boolean undecided = reviewStatus == null
                 || ReviewStatusEnum.PENDING.getStatus().equals(reviewStatus)
                 || ReviewStatusEnum.MANUAL_REVIEW.getStatus().equals(reviewStatus);

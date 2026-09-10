@@ -6,7 +6,9 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,12 +88,24 @@ public class AutoDispatchPlanner {
      * 实际投入几辆由算法决定（算法可只用其中 1 台）。
      */
     public static List<VehicleDO> selectVehicles(List<VehicleDO> vehicles, int max) {
+        return selectVehicles(vehicles, max, java.util.Set.of());
+    }
+
+    /**
+     * 自动选择候选车辆（可选排除"已被在途方案占用"的车辆）。
+     *
+     * 排除原因：同一台车不能同时跑两套方案（多片区各出一套方案时，若两套都排同一台车，
+     * 司机端任务会把两个片区的经停混在一起）。调用方在"全部车辆都忙"时应自行回退到不排除。
+     */
+    public static List<VehicleDO> selectVehicles(List<VehicleDO> vehicles, int max, java.util.Set<Long> excludedVehicleIds) {
         if (vehicles == null || vehicles.isEmpty() || max <= 0) {
             return List.of();
         }
+        java.util.Set<Long> excluded = excludedVehicleIds == null ? java.util.Set.of() : excludedVehicleIds;
         return vehicles.stream()
                 .filter(v -> v.getId() != null)
                 .filter(v -> v.getStatus() == null || v.getStatus() == STATUS_ENABLED)
+                .filter(v -> !excluded.contains(v.getId()))
                 .sorted(Comparator
                         .comparingInt((VehicleDO v) -> v.getCargoCapacity() == null ? 0 : v.getCargoCapacity())
                         .reversed()
@@ -126,5 +140,116 @@ public class AutoDispatchPlanner {
             });
         }
         return merged;
+    }
+
+    /** 同一批次的地理聚合半径(km)：超过该距离视为"另一个片区"，不混进同一次派单 */
+    public static final double REGION_RADIUS_KM = 50.0;
+
+    /**
+     * 一键调度的「订单批次选择」策略（确定性，可单测）。为什么需要：订单池里可能同时存在
+     * 不同片区的订单（例：重庆邮电大学片区 + 成都片区，相距 250km+）。若全部塞进同一次派单，
+     * 车辆要跨城跑几百公里，算法只会判 infeasible，管理员点一次就失败。
+     *
+     * 策略（按优先级）：
+     * 1) 订单按「创建时间倒序 → ID 倒序」，**最新那单一定优先**（演示时刚在后台审核通过的那单必进）；
+     * 2) 以该单的取货/送达站为锚点，其余订单只要与锚点任一站点距离 ≤ {@link #REGION_RADIUS_KM}，
+     *    视为同一片区一起纳入；跨片区的留在池里，下一次调度自动成批（形成第二套方案）；
+     * 3) 单批不超过 max（算法上限之内）；订单/站点缺坐标时无法证明跨片区 → 纳入（受 max 限制）。
+     *
+     * @param orders     订单池订单（非空）
+     * @param stationMap 站点编号 → 站点（含坐标）
+     * @param max        单批最大订单数，≤0 时不限制
+     * @return 本次派单使用的订单批次（非空，元素顺序＝创建时间倒序）
+     */
+    public static List<TransportOrderDO> selectAutoBatch(List<TransportOrderDO> orders,
+                                                        Map<Long, StationDO> stationMap, int max) {
+        if (orders == null || orders.isEmpty()) {
+            return List.of();
+        }
+        List<TransportOrderDO> sorted = new ArrayList<>(orders);
+        sorted.sort(AutoDispatchPlanner::compareNewestFirst);
+        TransportOrderDO anchor = sorted.get(0);
+        int limit = max > 0 ? max : sorted.size();
+        List<TransportOrderDO> batch = new ArrayList<>();
+        for (TransportOrderDO order : sorted) {
+            if (batch.size() >= limit) {
+                break;
+            }
+            if (order == anchor || sameRegion(anchor, order, stationMap)) {
+                batch.add(order);
+            }
+        }
+        return batch;
+    }
+
+    /** 最新优先：创建时间倒序（空值排最后）→ ID 倒序（空值排最后）。 */
+    private static int compareNewestFirst(TransportOrderDO left, TransportOrderDO right) {
+        LocalDateTime leftTime = left.getCreateTime();
+        LocalDateTime rightTime = right.getCreateTime();
+        if (leftTime != null && rightTime != null) {
+            int byTime = rightTime.compareTo(leftTime);
+            if (byTime != 0) {
+                return byTime;
+            }
+        } else if (leftTime != null) {
+            return -1;
+        } else if (rightTime != null) {
+            return 1;
+        }
+        Long leftId = left.getId();
+        Long rightId = right.getId();
+        if (leftId == null && rightId == null) {
+            return 0;
+        }
+        if (leftId == null) {
+            return 1;
+        }
+        if (rightId == null) {
+            return -1;
+        }
+        return rightId.compareTo(leftId);
+    }
+
+    /** 两单是否同片区：任一取货/送达站对的距离 ≤ REGION_RADIUS_KM；缺坐标时视为同片区（无法证伪） */
+    static boolean sameRegion(TransportOrderDO anchor, TransportOrderDO order, Map<Long, StationDO> stationMap) {
+        Double distance = minStationDistance(anchor, order, stationMap);
+        return distance == null || distance <= REGION_RADIUS_KM;
+    }
+
+    /** 两单起终站的最小两两距离(km)；任一侧缺少可用坐标时返回 null */
+    static Double minStationDistance(TransportOrderDO a, TransportOrderDO b, Map<Long, StationDO> stationMap) {
+        List<StationDO> left = orderStations(a, stationMap);
+        List<StationDO> right = orderStations(b, stationMap);
+        if (left.isEmpty() || right.isEmpty()) {
+            return null;
+        }
+        Double min = null;
+        for (StationDO x : left) {
+            for (StationDO y : right) {
+                double km = GeoDistanceUtil.haversineKm(x.getLongitude().doubleValue(), x.getLatitude().doubleValue(),
+                        y.getLongitude().doubleValue(), y.getLatitude().doubleValue());
+                if (min == null || km < min) {
+                    min = km;
+                }
+            }
+        }
+        return min;
+    }
+
+    private static List<StationDO> orderStations(TransportOrderDO order, Map<Long, StationDO> stationMap) {
+        List<StationDO> stations = new ArrayList<>(2);
+        if (stationMap == null || order == null) {
+            return stations;
+        }
+        for (Long id : new Long[]{order.getPickupStationId(), order.getDeliveryStationId()}) {
+            if (id == null) {
+                continue;
+            }
+            StationDO station = stationMap.get(id);
+            if (station != null && station.getLongitude() != null && station.getLatitude() != null) {
+                stations.add(station);
+            }
+        }
+        return stations;
     }
 }
