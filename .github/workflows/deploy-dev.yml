@@ -3,8 +3,8 @@ name: Deploy to dev server
 on:
   workflow_dispatch:
   push:
-    # 目前仓库只有 master；启用 develop 分支后在此追加
-    branches: [master]
+    # master 为正式部署分支；多段联运/真实公交线网开发分支也允许触发（便于演示前自动部署）
+    branches: [master, fix/haco-deadline-greedy-seed]
     # 纯文档/小程序/CI/mock 算法的改动不部署任何内容，直接跳过整条流水线
     paths-ignore:
       - 'docs/**'
@@ -208,6 +208,27 @@ jobs:
               echo "${f}.sql done."
             fi
           done
+
+          # 多段联运框架（V018）+ 站点可达性/方案/段/交接/通知扩展列（V019）
+          # 注意顺序：必须在 transport-schema 之后（新表、补列），在演示数据之前
+          for f in sql/incremental/V018__multi_leg_framework.sql sql/incremental/V019__station_access_and_plan_leg.sql; do
+            if [ -f "${f}" ]; then
+              echo "Applying ${f}..."
+              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+              echo "${f} done."
+            fi
+          done
+
+          # 重庆片区真实演示数据：重邮站点/车辆/司机 → 多段联运场景 → 真实公交线网 → 真实可行订单；
+          # 顺序不可调换（后面的脚本按站名解析站点 id）
+          for f in demo-cqupt-stations demo-cqupt-vehicles demo-multi-leg \
+                   demo-real-bus-network demo-real-orders transport-multi-leg-menu; do
+            if [ -f "sql/mysql/${f}.sql" ]; then
+              echo "Applying ${f}.sql..."
+              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+              echo "${f}.sql done."
+            fi
+          done
           echo "All migrations applied."
 
       - name: Validate schema drift columns
@@ -261,13 +282,40 @@ jobs:
           # transport_vehicle (1)
           CHECK_COL transport_vehicle insurance_expire_date
 
+          # ===== 多段联运 / 站点可达性 / 通知（V018 + V019）=====
+          # transport_station (3)：用户可达 / 车辆可达 / 可调度
+          CHECK_COL transport_station user_access
+          CHECK_COL transport_station vehicle_access
+          CHECK_COL transport_station dispatch_enabled
+          # transport_vehicle (1)：实时运营状态
+          CHECK_COL transport_vehicle realtime_status
+          # transport_dispatch_plan (4)：方案组织方式/段数/换乘数/方案解释
+          CHECK_COL transport_dispatch_plan planning_mode
+          CHECK_COL transport_dispatch_plan total_leg_count
+          CHECK_COL transport_dispatch_plan transfer_count
+          CHECK_COL transport_dispatch_plan plan_reason
+          # transport_leg (5)：方案归属 / 线路 / 里程时长 / 导航来源与轨迹 / 换乘标记
+          CHECK_COL transport_leg plan_id
+          CHECK_COL transport_leg navigation_source
+          CHECK_COL transport_leg navigation_polyline
+          CHECK_COL transport_leg handover_required
+          CHECK_COL transport_leg distance_km
+          # transport_handover (3)：双方车辆 / 状态机时间点
+          CHECK_COL transport_handover plan_id
+          CHECK_COL transport_handover from_vehicle_id
+          CHECK_COL transport_handover handover_completed_at
+          # transport_user_notification (3)：幂等 eventId / 接收方类型 / 级别
+          CHECK_COL transport_user_notification event_id
+          CHECK_COL transport_user_notification recipient_type
+          CHECK_COL transport_user_notification level
+
           if [ -n "${MISSING}" ]; then
             echo "===== SCHEMA DRIFT DETECTED — missing columns ====="
             echo -e "${MISSING}"
             echo "Fix: ensure transport-schema-incremental.sql has ADD COLUMN for these."
             exit 1
           fi
-          echo "Schema drift validation PASS: all22 columns present."
+          echo "Schema drift validation PASS: 上游 22 列 + 多段联运/可达性/通知 18 列 全部存在。"
 
       - name: Validate historical URL repair
         run: |
