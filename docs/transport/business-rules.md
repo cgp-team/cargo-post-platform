@@ -65,3 +65,22 @@
   位置由班次计划推算（无真实 GPS 时明确标注"位置推算"），不伪造真实上报；
 - 调度可视化应能一眼看出**哪条线是哪台车**（每车一色 + 车辆配色图例 + 行驶方向箭头 + 经停序号）；
 - 多段联运要在可视化里写清：**哪个订单、在哪一站、交给哪位司机/转运站点工作人员**。
+
+## 7. 没有站点的地址（路口 / 路边 / 地图选点）
+
+用户不一定在站点寄取件：可能是自己填的地址，也可能是在地图上点的一个位置（路口、小区门口、路边）。
+这类订单按"离最近可服务站点的距离"分三档处理（`ServiceModeEnum` + `AppSendReachabilityService`）：
+
+| 距最近可服务站点 | 服务方式 | 司机怎么做 |
+|---|---|---|
+| ≤ 300m | `DOOR_PICKUP` 上门交接 | 就近**小范围绕行**到用户点取/送 |
+| 300m ~ 1km | `SAFE_ROADSIDE` 安全点交接 | 在安全路边点交接（不停车占道） |
+| > 1km 或车辆无法进入 | `NEAREST_STATION` 最近站点交接 | 客户把货送到该站点 |
+
+实现要点：
+
+- 用户原始地址与坐标单独留痕（`transport_cargo_order.original_address / original_latitude / original_longitude`），
+  不因为"选不到站点"就丢掉用户真实位置；
+- 实际服务点仍落到站点（`service_point_station_id`），调度与可视化都以站点为骨架，
+  绕行代价记在方案明细的 `detour_distance_km / detour_duration_seconds` 上；
+- 演示订单：`TPDEMO7`（明志苑门口路边取货 → DOOR_PICKUP）、`TPDEMO8`（送到学生公寓路口 → SAFE_ROADSIDE）。
