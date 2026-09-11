@@ -20,6 +20,14 @@ public interface AppBusService {
     List<AppBusLineRespVO> getLines();
 
     /**
+     * 单条线路的真实道路轨迹（点开线路时按需查询，带 5 分钟缓存）。
+     *
+     * <p>不放进 {@link #getLines()}：真实公交换乘线网有几十条线、每条 20~40 站，
+     * 逐段调用高德路网会瞬时打出几百次上游请求，导致小程序 10s 超时。</p>
+     */
+    List<AppBusLineRespVO.RoadPoint> getLinePolyline(Long routeId);
+
+    /**
      * 附近实时公交：按用户坐标 Haversine 直线过滤 radius 内车辆与站点（第一版不调高德路网）。
      *
      * @param latitude  用户纬度（GCJ-02；无精确位置可传 null）

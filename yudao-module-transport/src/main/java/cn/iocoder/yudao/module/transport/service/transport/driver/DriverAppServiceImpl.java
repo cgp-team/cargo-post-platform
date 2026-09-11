@@ -136,6 +136,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
     @Resource private AlgorithmClient algorithmClient;
+    /** 真实道路几何（高德 Web key 直连，带缓存）：司机导航轨迹的首选来源 */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     @Resource private SimulationEngine simulationEngine;
     @Resource private HandoverService handoverService;
     @Resource private MultiLegService multiLegService;
@@ -480,6 +482,14 @@ public class DriverAppServiceImpl implements DriverAppService {
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
         }
+        // 1) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
+        List<double[]> direct = roadPolylineService == null ? null : roadPolylineService.route(
+                from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+        if (direct != null && direct.size() >= 2) {
+            return new RouteFetch(direct, "amap");
+        }
+        // 2) 高德不可用：退回算法服务 /route
         try {
             AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                     .origin(AlgorithmRouteReqDTO.RoutePoint.builder()

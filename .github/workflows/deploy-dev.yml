@@ -222,7 +222,7 @@ jobs:
           # 重庆片区真实演示数据：重邮站点/车辆/司机 → 多段联运场景 → 真实公交线网 → 真实可行订单；
           # 顺序不可调换（后面的脚本按站名解析站点 id）
           for f in demo-cqupt-stations demo-cqupt-vehicles demo-multi-leg \
-                   demo-real-bus-network demo-real-orders transport-multi-leg-menu; do
+                   demo-real-bus-network demo-real-bus-shifts demo-real-orders transport-multi-leg-menu; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
               "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
