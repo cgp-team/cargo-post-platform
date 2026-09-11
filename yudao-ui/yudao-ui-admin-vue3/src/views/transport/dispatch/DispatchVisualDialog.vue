@@ -307,13 +307,17 @@ const actionClass = (action?: number) =>
           : 'act-seat'
 const timeText = (t?: string) => (t ? t.replace('T', ' ').slice(11, 16) : '')
 
-/** 本站操作数量文案：上车/下车=人数，揽收/派送=件数（没有数量时返回空串） */
+/**
+ * 本站操作数量文案：**只标货运件数**（揽收/派送 = 件）。
+ * 上下车人数由乘客随机到站决定，不是我们能控制的，可视化里不标注，避免误导。
+ */
 const quantityText = (stop: DispatchApi.DispatchPlanItemVO) => {
   const q = stop.quantity
   if (q == null || q <= 0) return ''
   const action = stop.actionType
-  const unit = action === 0 || action === 1 || action === 2 ? '人' : '件'
-  return ` ${q}${unit}`
+  // 上车(1)/下车(2)/发车(0)/返场(5)：不标注人数
+  if (action !== 3 && action !== 4) return ''
+  return ` ${q}件`
 }
 
 const summary = computed(() => {
@@ -676,7 +680,7 @@ const drawMap = () => {
       map.addOverlay(marker)
       overlays.value.push(marker)
       const label = new BMapGL.Label(
-        // 地图上把"在哪儿做什么、做多少"标清楚：序号 · 操作(数量) · 站名
+        // 地图上把"在哪儿做什么"标清楚：序号 · 操作（货运标件数，客运不标人数）· 站名
         `${index + 1}. ${actionLabel(stop.actionType)}${quantityText(stop)} · ${stop.stationName || stationName(stop.stationId)}`,
         { position: point, offset: new BMapGL.Size(12, -24) }
       )
