@@ -445,6 +445,25 @@ const clearOverlays = () => {
   moverMarkers.value = {}
 }
 
+/**
+ * 彻底释放地图实例。
+ * Dialog 关闭后容器 DOM 会被销毁重建，而 BMapGL 实例仍指向旧节点 → 再次打开就是空白地图
+ * （"越优化越看不见"就是这个原因）。所以每次关闭都要销毁实例，下次打开重新初始化。
+ */
+const resetMap = () => {
+  try {
+    if (map && typeof map.clearOverlays === 'function') map.clearOverlays()
+  } catch (e) { /* ignore */ }
+  try {
+    if (map && typeof map.destroy === 'function') map.destroy()
+  } catch (e) { /* ignore */ }
+  map = null
+  mapReady.value = false
+  mapError.value = ''
+  overlays.value = []
+  moverMarkers.value = {}
+}
+
 /** 地图上画线路 + 站点标记 + 播放用车辆 marker */
 const drawMap = () => {
   if (!mapReady.value || !map) return
@@ -692,6 +711,8 @@ const load = async () => {
   if (!props.planIds.length) return
   loading.value = true
   stopPlay()
+  // 每次打开都重建地图实例（上一个实例绑定的 DOM 已被 Dialog 销毁）
+  resetMap()
   try {
     const [stationList, vehicleList, driverList] = await Promise.all([
       StationApi.getSimpleStationList().catch(() => []),
@@ -741,7 +762,10 @@ watch(
   () => props.modelValue,
   (v) => {
     if (v) load()
-    else stopPlay()
+    else {
+      stopPlay()
+      resetMap()
+    }
   }
 )
 // 已在打开状态下切换到另一套方案（如列表里再点一次「可视化」）也要重新加载
