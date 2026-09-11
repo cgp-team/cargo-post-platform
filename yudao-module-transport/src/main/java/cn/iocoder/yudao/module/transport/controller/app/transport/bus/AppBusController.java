@@ -37,9 +37,12 @@ public class AppBusController {
 
     @GetMapping("/lines")
     @PermitAll
-    @Operation(summary = "实时公交线路（含经停点与该线在线车辆，供车来了式地图+列表）")
-    public CommonResult<List<AppBusLineRespVO>> lines() {
-        return success(appBusService.getLines());
+    @Operation(summary = "实时公交线路（含经停点与该线在线车辆；传 latitude/longitude 时只返回附近线路，避免主城全量线网超时）")
+    public CommonResult<List<AppBusLineRespVO>> lines(
+            @RequestParam(value = "latitude", required = false) Double latitude,
+            @RequestParam(value = "longitude", required = false) Double longitude,
+            @RequestParam(value = "radius", required = false) Double radius) {
+        return success(appBusService.getLines(latitude, longitude, radius));
     }
 
     @GetMapping("/line-polyline")

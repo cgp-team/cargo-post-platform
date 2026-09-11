@@ -122,7 +122,16 @@ public class AppBusServiceImpl implements AppBusService {
                     int duration = v.getShiftCode() == null ? 60
                             : durationByShiftCode.getOrDefault(v.getShiftCode(), 60);
                     int progress = v.getProgress() != null ? v.getProgress() : 0;
-                    vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
+                    // 到站分钟只在"在途"时给出；待发/收车时是"还有多久发车"，两者语义不同，
+                    // 不能混用（否则凌晨会出现"预计 450 分钟到站"这种误导数字）
+                    boolean running = v.getStatus() != null && v.getStatus() == 1;
+                    if (running) {
+                        vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
+                    } else {
+                        vo.setEtaMinutes(null);
+                        Double wait = v.getEtaToNextStationMinutes();
+                        vo.setWaitDepartureMinutes(wait == null ? null : (int) Math.max(0, Math.ceil(wait)));
+                    }
                     // 到下一站的剩余距离/分钟：班次插值直接给出（不依赖算法服务）；
                     // 无下一站（待发/收车）时保持 null，前端据此显示"待发车/已到终点"
                     vo.setEtaToNextStationMinutes(v.getEtaToNextStationMinutes());
@@ -131,8 +140,15 @@ public class AppBusServiceImpl implements AppBusService {
                 }).toList();
     }
 
+    /** 无坐标时最多下发的线路条数（主城全量线网有几百条，全量下发会让小程序超时） */
+    private static final int MAX_LINES_WITHOUT_LOCATION = 150;
+    /** 附近线路默认半径（米） */
+    private static final double DEFAULT_LINE_RADIUS_M = 15_000;
+    /** 下发线路条数上限（含定位场景）：主城线网 200+ 条，一次全发小程序必然超时 */
+    private static final int MAX_LINES = 80;
+
     @Override
-    public List<AppBusLineRespVO> getLines() {
+    public List<AppBusLineRespVO> getLines(Double latitude, Double longitude, Double radius) {
         MonitoringMapDataRespVO mapData = monitoringService.getMapData();
         List<AppBusRespVO> buses = getRealtimeBuses(mapData); // 复用同一份地图数据，不重复加载
         // 线路名称 → 在线车辆（无线路的车辆不计入）
@@ -142,7 +158,17 @@ public class AppBusServiceImpl implements AppBusService {
         if (mapData.getRoutes() == null) {
             return List.of();
         }
-        return mapData.getRoutes().stream().map(route -> {
+        boolean located = latitude != null && longitude != null
+                && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+        double radKm = (radius != null && radius > 0 ? radius : DEFAULT_LINE_RADIUS_M) / 1000.0;
+        return mapData.getRoutes().stream()
+                // 定位可用：只下发"经过用户附近"的线路（主城线网全量有几百条，全量下发必然会超时）
+                .filter(route -> !located || routeNear(route, latitude, longitude, radKm))
+                // 按"线路离用户最近站点距离"升序，最多下发 MAX_LINES 条（越近的越有用）
+                .sorted(Comparator.comparingDouble(route -> located
+                        ? routeNearestKm(route, latitude, longitude) : 0d))
+                .limit(located ? MAX_LINES : MAX_LINES_WITHOUT_LOCATION)
+                .map(route -> {
             AppBusLineRespVO vo = new AppBusLineRespVO();
             vo.setRouteId(route.getId());
             vo.setRouteCode(route.getRouteCode());
@@ -168,6 +194,30 @@ public class AppBusServiceImpl implements AppBusService {
             // 这里不再逐条线路打高德（真实线网几十条 × 20~40 站会让小程序超时）。
             return vo;
         }).toList();
+    }
+
+    /** 线路是否经过用户附近（任一经停点落在半径内即算） */
+    private static boolean routeNear(MonitoringMapDataRespVO.Route route, double latitude, double longitude,
+                                     double radiusKm) {
+        if (route.getPoints() == null) {
+            return false;
+        }
+        return route.getPoints().stream()
+                .filter(p -> p.getLongitude() != null && p.getLatitude() != null)
+                .anyMatch(p -> GeoDistanceUtil.haversineKm(longitude, latitude,
+                        p.getLongitude(), p.getLatitude()) <= radiusKm);
+    }
+
+    /** 线路离用户最近站点的距离（km）；无有效坐标返回一个大数（排到最后） */
+    private static double routeNearestKm(MonitoringMapDataRespVO.Route route, double latitude, double longitude) {
+        if (route.getPoints() == null) {
+            return Double.MAX_VALUE;
+        }
+        return route.getPoints().stream()
+                .filter(p -> p.getLongitude() != null && p.getLatitude() != null)
+                .mapToDouble(p -> GeoDistanceUtil.haversineKm(longitude, latitude,
+                        p.getLongitude(), p.getLatitude()))
+                .min().orElse(Double.MAX_VALUE);
     }
 
     @Override
@@ -590,6 +640,15 @@ public class AppBusServiceImpl implements AppBusService {
      */
     private void fillEta(AppBusNearbyRespVO.NearbyBus bus, MonitoringVehicleRespVO v,
                          Map<String, StationDO> stationByName) {
+        // 未在途（待发/收车）：不给出"到下一站分钟"，只给"距发车分钟"，避免误导
+        boolean running = v.getStatus() != null && v.getStatus() == 1;
+        if (!running) {
+            bus.setEtaMinutes(null);
+            bus.setWaitDepartureMinutes(v.getEtaToNextStationMinutes() == null ? null
+                    : (int) Math.max(0, Math.ceil(v.getEtaToNextStationMinutes())));
+            bus.setRouteProvider("SCHEDULE");
+            return;
+        }
         // 班次插值/模拟引擎已给出"到下一站剩余公里 + 分钟"：优先使用（稳定、不依赖算法服务）
         if (v.getEtaToNextStationMinutes() != null || v.getDistanceToNextStationKm() != null) {
             bus.setDistanceToNextStationKm(v.getDistanceToNextStationKm());

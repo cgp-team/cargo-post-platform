@@ -118,3 +118,43 @@ JOIN transport_station ps ON ps.id = o.pickup_station_id
 JOIN transport_station ds ON ds.id = o.delivery_station_id
 WHERE o.id BETWEEN 201 AND 210
 ORDER BY o.id;
+
+-- ============================================
+-- 回程揽收/派送示例：巴南龙洲湾 → 重庆邮电大学（与 TPDEMO4/5 方向相反）
+--
+-- 用途：验证"线路返场时也收货派货" —— 车从南岸跑到巴南，回来（返场）途中把巴南的货捎回重邮；
+-- 同时验证跨片区订单由**不同车辆在换乘站接驳**（不再一台车跨城往返）。
+-- 幂等：按站名解析站点 id。
+-- ============================================
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (211, 'TPDEMO6', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '龙洲湾枢纽站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 22.00, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    order_no = VALUES(order_no),
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    status = 8, deleted = b'0';
+
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode, receiver_name, receiver_mobile,
+     receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (211, 211, '日用品', b'0', 2, 4.00, 0.0200, '巴南土特产（回程捎带）', '返场途中揽收，带回重邮驿站',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '重邮收件人', '13900000011', '重庆邮电大学明志苑2舍',
+     '重庆市巴南区龙洲湾', 29.3767650, 106.5420550, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), goods_name = VALUES(goods_name),
+    goods_note = VALUES(goods_note), deleted = b'0';
+
+SELECT o.id, o.order_no, ps.station_name AS pickup, ds.station_name AS delivery
+FROM transport_order o
+JOIN transport_station ps ON ps.id = o.pickup_station_id
+JOIN transport_station ds ON ds.id = o.delivery_station_id
+WHERE o.id = 211;
