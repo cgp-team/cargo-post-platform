@@ -54,10 +54,37 @@ UPDATE transport_order SET
 WHERE id = 208;
 
 -- 校验：订单起终点必须都是真实线网里的站点，且落在高德线路上
+-- 跨区订单（南岸→沙坪坝）：高德"不乘地铁"给出 2 段（346+181，小什字换乘）
+-- 或 3 段（347区间+318+220区间，福利社、小龙坎换乘）；用于验证本地线网+算法能否复现
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (209, 'TPDEMO4', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重大A区' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    status = 8, deleted = b'0';
+
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode, receiver_name, receiver_mobile,
+     receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (209, 209, '日用品', b'0', 1, 3.00, 0.0150, '跨区联运演示货物', '南岸→沙坪坝', 1, 1,
+     'STATION_TO_STATION', 'STATION_TO_STATION', '重大收件人', '13900000009', '重庆大学A区',
+     '重庆邮电大学', 29.5326000, 106.6038000, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), goods_name = VALUES(goods_name), deleted = b'0';
+
 SELECT o.id, o.order_no, ps.station_name AS pickup, ps.source_type AS pickup_src,
        ds.station_name AS delivery, ds.source_type AS delivery_src
 FROM transport_order o
 JOIN transport_station ps ON ps.id = o.pickup_station_id
 JOIN transport_station ds ON ds.id = o.delivery_station_id
-WHERE o.id BETWEEN 201 AND 208
+WHERE o.id BETWEEN 201 AND 209
 ORDER BY o.id;
