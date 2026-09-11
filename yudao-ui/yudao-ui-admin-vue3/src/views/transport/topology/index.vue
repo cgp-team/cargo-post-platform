@@ -186,32 +186,38 @@ onMounted(() => {
   font-weight: 600;
   font-size: 13px;
   margin-bottom: 4px;
+  /* 长站点名不越界：单行省略 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .node .n-sub {
   font-size: 12px;
   color: #606266;
   line-height: 1.5;
+  word-break: break-all;
 }
 
-.node.origin { border-color: #2e7d32; background: #f1f8f2; }
-.node.dest { border-color: #1565c0; background: #f0f6fc; }
-.node.done { border-color: #67c23a; background: #f0f9eb; }
-.node.doing { border-color: #e6a23c; background: #fdf6ec; }
-.node.todo { border-color: #c0c4cc; background: #fafafa; }
+/* 白色 + 蓝色主题：正常流转全部用蓝色系，仅异常保留红色 */
+.node.origin { border-color: #123f6e; background: #f5f8fc; }
+.node.dest { border-color: #123f6e; background: #f5f8fc; }
+.node.done { border-color: #1f5e9e; background: #e6eff5; }
+.node.doing { border-color: #2e7bbf; background: #f0f6fc; }
+.node.todo { border-color: #c8d0da; background: #fafbfc; }
 .node.exception { border-color: #f56c6c; background: #fef0f0; }
-.node.hub { border-style: dashed; border-color: #c75b2a; background: #fff7f0; }
-.node.hub.done { border-style: solid; border-color: #67c23a; background: #f0f9eb; }
+.node.hub { border-style: dashed; border-color: #1f5e9e; background: #f0f6fc; }
+.node.hub.done { border-style: solid; border-color: #1f5e9e; background: #e6eff5; }
 
 .arrow {
   display: flex;
   align-items: center;
-  color: #c0c4cc;
+  color: #c8d0da;
   font-size: 14px;
 }
 
-.arrow.done { color: #67c23a; }
-.arrow.doing { color: #e6a23c; }
+.arrow.done { color: #1f5e9e; }
+.arrow.doing { color: #2e7bbf; }
 .arrow.exception { color: #f56c6c; }
-.arrow.hub { color: #c75b2a; }
+.arrow.hub { color: #123f6e; }
 </style>

@@ -105,6 +105,18 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
             vo.setPlanReason(plan.getPlanReason());
         }
         vo.setLegs(legs.stream().map(l -> toLeg(l, stationNames, stations)).toList());
+        // 总里程统一口径：有运输段时按"各段真实路网里程之和"展示（与 Leg/地图一致），无段时回退方案侧口径
+        java.math.BigDecimal legDistanceSum = legs.stream().map(TransportLegDO::getDistanceKm)
+                .filter(Objects::nonNull).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        if (legDistanceSum.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            vo.setTotalDistanceKm(legDistanceSum);
+        }
+        // 总时长同理：各段时长 + 换乘停留，避免"方案侧估算时长"与分段时长不一致
+        int legDurationSum = legs.stream().map(TransportLegDO::getDurationMinutes)
+                .filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
+        if (legDurationSum > 0) {
+            vo.setTotalDurationMinutes(legDurationSum + Math.max(0, legs.size() - 1) * 20);
+        }
         vo.setHandovers(handovers.stream().map(h -> toHandover(h, stationNames)).toList());
         // 候选方案解释（直达/两段/三段 + 为什么选它）
         if (order != null) {

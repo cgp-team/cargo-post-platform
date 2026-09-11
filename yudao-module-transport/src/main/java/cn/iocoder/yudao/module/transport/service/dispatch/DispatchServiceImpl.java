@@ -380,7 +380,6 @@ public class DispatchServiceImpl implements DispatchService {
         // 段规划失败不影响已生成的直达方案（多段是增强能力），逐单兜底记录日志。
         List<TransportLegDO> allLegs = new ArrayList<>();
         List<String> reasons = new ArrayList<>();
-        List<BigDecimal> orderDistances = new ArrayList<>();
         for (Long orderId : pooledIds) {
             try {
                 allLegs.addAll(multiLegService.planLegs(orderId, plan.getId()));
@@ -388,7 +387,6 @@ public class DispatchServiceImpl implements DispatchService {
                 if (!reasons.contains(preview.reason())) {
                     reasons.add(preview.reason());
                 }
-                orderDistances.add(BigDecimal.valueOf(preview.distanceKm()));
             } catch (Exception ex) {
                 log.warn("[createSmartPlan] 订单 {} 运输段规划失败：{}", orderId, ex.getMessage());
             }
@@ -396,7 +394,9 @@ public class DispatchServiceImpl implements DispatchService {
         if (!allLegs.isEmpty()) {
             int transferCount = pooledIds.size() == 0 ? 0 : allLegs.size() - (int) allLegs.stream()
                     .map(TransportLegDO::getOrderId).distinct().count();
-            BigDecimal totalLegDistance = orderDistances.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            // 方案总里程口径统一：各运输段**真实路网里程**之和（Leg 已由高德路网回写；无路网时为估算值）
+            BigDecimal totalLegDistance = allLegs.stream().map(TransportLegDO::getDistanceKm)
+                    .filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
             DispatchPlanDO planUpdate = new DispatchPlanDO();
             planUpdate.setId(plan.getId());
             planUpdate.setPlanNo(taskNo + "-P" + plan.getId());
