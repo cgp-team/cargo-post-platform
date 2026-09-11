@@ -19,10 +19,10 @@ INSERT INTO transport_station
 VALUES
     -- 校园内取货点（村级站点，用户步行可达）
     -- 校内站：用户能到，但运输车辆进不去（vehicle_access=0），也不作调度场站（dispatch_enabled=0）
-    (101, 'ST101', '重庆邮电大学站', 2, 106.5765000, 29.5325000, '重庆邮电大学崇文门', 0,
+    (101, 'ST101', '重庆邮电大学站', 2, 106.6041000, 29.5327000, '重庆邮电大学崇文门', 0,
      'PROJECT', 'CARGO_STATION', b'1', b'0', b'0', 0, '1', '1', b'0'),
     -- 附近场站（可作调度场站/接驳点）
-    (102, 'ST102', '黄桷垭站', 1, 106.5748000, 29.5370000, '南岸区黄桷垭正街', 0,
+    (102, 'ST102', '黄桷垭站', 1, 106.6056000, 29.5382000, '南岸区黄桷垭正街', 0,
      'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name),
@@ -40,7 +40,7 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO transport_route
     (id, route_code, route_name, start_station_id, end_station_id, distance_km, status, tenant_id, creator, updater, deleted)
 VALUES
-    (101, 'R101', '重庆邮电大学—黄桷垭线', 101, 102, 0.60, 0, 0, '1', '1', b'0')
+    (101, 'R101', '重庆邮电大学—黄桷垭线', 101, 102, 1.20, 0, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     route_name = VALUES(route_name),
     start_station_id = VALUES(start_station_id),
@@ -82,7 +82,7 @@ INSERT INTO transport_station
      source_type, station_type, user_access, vehicle_access, dispatch_enabled,
      tenant_id, creator, updater, deleted)
 VALUES
-    (103, 'ST103', '南山站', 2, 106.5830000, 29.5230000, '南岸区南山植物园路', 0,
+    (103, 'ST103', '南山站', 2, 106.6280000, 29.5554000, '南岸区南山植物园路', 0,
      'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name),
