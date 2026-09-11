@@ -142,7 +142,8 @@ const renderTopology = () => {
     const path = road.length >= 2 ? road : [p1, p2]
     points.push(...path)
     map.addOverlay(new BMapGL.Polyline(path, {
-      strokeColor: l.navigationSource === 'AMAP' ? '#2E7D32' : '#E6A23C',
+      // 白色 + 蓝色主题：真实道路实线深蓝，估算段虚线亮蓝
+      strokeColor: l.navigationSource === 'AMAP' ? '#1F5E9E' : '#2E7BBF',
       strokeWeight: 5,
       strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
     }))
@@ -193,7 +194,7 @@ const initMap = async () => {
     ;(data?.stations || []).forEach((s: any) => {
       if (s.longitude == null) return
       const p = new BMapGL.Point(s.longitude, s.latitude)
-      map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1565C0', fillColor: '#1565C0', fillOpacity: 0.3 }))
+      map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1F5E9E', fillColor: '#1F5E9E', fillOpacity: 0.3 }))
       map.addOverlay(new BMapGL.Label(s.stationName, { position: p, offset: new BMapGL.Size(6, -28) }))
     })
     ;(vehicles || []).forEach((v: any) => {
@@ -241,20 +242,20 @@ onMounted(async () => {
   vertical-align: middle;
 }
 
-.map-legend .dot.station { background: #1565c0; }
-.map-legend .dot.vehicle { background: #2e7d32; }
-.map-legend .dot.hub { background: #c75b2a; }
+.map-legend .dot.station { background: #1f5e9e; }
+.map-legend .dot.vehicle { background: #2e7bbf; }
+.map-legend .dot.hub { background: #123f6e; }
 
 .map-legend .line {
   display: inline-block;
   width: 14px;
   height: 3px;
-  background: #2e7d32;
+  background: #1f5e9e;
   margin-right: 4px;
   vertical-align: middle;
 }
 
 .map-legend .line.dashed {
-  background: repeating-linear-gradient(90deg, #e6a23c 0 4px, transparent 4px 7px);
+  background: repeating-linear-gradient(90deg, #2e7bbf 0 4px, transparent 4px 7px);
 }
 </style>
