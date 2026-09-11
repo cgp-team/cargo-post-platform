@@ -14,7 +14,7 @@
 INSERT INTO transport_station
     (id, station_code, station_name, station_level, longitude, latitude, address, status, tenant_id, creator, updater, deleted)
 VALUES
-    (104, 'ST104', '南岸客运站', 1, 106.5706000, 29.5292000, '南岸区南坪南路', 0, 0, '1', '1', b'0')
+    (104, 'ST104', '四公里交通换乘枢纽站', 1, 106.5778000, 29.5194000, '南岸区四公里（320路/轨道3号线换乘）', 0, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name),
     longitude = VALUES(longitude),
@@ -24,6 +24,9 @@ ON DUPLICATE KEY UPDATE
     deleted = b'0';
 
 -- 把换乘站接入重邮线路（route 101），成为该线路上的换乘枢纽节点
+-- 清理本演示走廊的旧节点（复用 id 会与旧行唯一键冲突，先删再插）
+DELETE FROM transport_route_station WHERE id BETWEEN 301 AND 320;
+
 INSERT INTO transport_route_station
     (id, route_id, station_id, sequence_no, planned_minutes, tenant_id, creator, updater, deleted)
 VALUES
@@ -56,9 +59,9 @@ INSERT INTO transport_cargo_order
      tenant_id, creator, create_time, updater, update_time, deleted)
 VALUES
     (204, 204, '日用品', b'0', 3, 4.20, 0.0300, '南山商铺补货', '轻拿轻放', 1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION',
-     '南山便利店', '13800000004', '南山植物园路 8 号', '黄桷垭正街', 29.5370000, 106.5748000, 0, '1', DATE_SUB(NOW(), INTERVAL 15 MINUTE), '1', NOW(), b'0'),
+     '南山便利店', '13800000004', '南山植物园路 8 号', '黄桷垭正街', 29.5382000, 106.6056000, 0, '1', DATE_SUB(NOW(), INTERVAL 15 MINUTE), '1', NOW(), b'0'),
     (205, 205, '农产品', b'0', 2, 6.00, 0.0400, '南山枇杷', '需换乘接力配送', 1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION',
-     '陈同学', '13800000005', '重庆邮电大学 5 教', '南山植物园', 29.5230000, 106.5830000, 0, '1', DATE_SUB(NOW(), INTERVAL 10 MINUTE), '1', NOW(), b'0')
+     '陈同学', '13800000005', '重庆邮电大学 5 教', '南山植物园', 29.5554000, 106.6280000, 0, '1', DATE_SUB(NOW(), INTERVAL 10 MINUTE), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     item_count = VALUES(item_count),
     weight_kg = VALUES(weight_kg),
@@ -124,7 +127,7 @@ INSERT INTO transport_station
      source_type, station_type, user_access, vehicle_access, dispatch_enabled,
      tenant_id, creator, updater, deleted)
 VALUES
-    (107, 'ST107', '重邮南门货运站', 1, 106.5790000, 29.5290000, '重庆邮电大学南门（崇文路）', 0,
+    (107, 'ST107', '重邮南门货运站', 1, 106.6020000, 29.5290000, '重庆邮电大学南门（崇文路）', 0,
      'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name), longitude = VALUES(longitude), latitude = VALUES(latitude),
@@ -148,6 +151,7 @@ VALUES
     (204, 102, 103, 1, 0, 0, '1', '1', b'0'),
     (205, 102, 102, 2, 8, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
+    route_id = VALUES(route_id), station_id = VALUES(station_id),
     sequence_no = VALUES(sequence_no), planned_minutes = VALUES(planned_minutes), deleted = b'0';
 
 -- ========== Demo 场景站点/线路（需求 §104~§107：直达 / 两段 / 三段）==========
@@ -157,11 +161,12 @@ INSERT INTO transport_station
      source_type, station_type, user_access, vehicle_access, dispatch_enabled,
      tenant_id, creator, updater, deleted)
 VALUES
-    (201, 'ST201', '重邮南门货运站(联运)', 1, 106.5765000, 29.5325000, '重邮南门', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
-    (202, 'ST202', '上新街货运站', 1, 106.5900000, 29.5250000, '南岸区上新街', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
-    (203, 'ST203', '学堂湾货运站', 1, 106.6050000, 29.5150000, '南岸区学堂湾', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
-    (204, 'ST204', '重庆工商大学站', 1, 106.6200000, 29.5050000, '重庆工商大学', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
-    (205, 'ST205', '南坪货运站', 1, 106.5750000, 29.5200000, '南岸区南坪', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
+    -- 以下坐标全部取自高德 POI/公交站点（347路、320路、轨道3号线真实站名）
+    (201, 'ST201', '邮电大学站（347路）', 1, 106.6038000, 29.5326000, '南岸区邮电大学公交站', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
+    (202, 'ST202', '海棠溪站（347×320换乘）', 1, 106.5885000, 29.5425000, '南岸区海棠溪', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
+    (203, 'ST203', '五公里站（320路）', 1, 106.5740000, 29.5050000, '南岸区五公里', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
+    (204, 'ST204', '重庆工商大学站（轨道3号线）', 1, 106.5739000, 29.5073000, '重庆工商大学（南岸校区）', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0'),
+    (205, 'ST205', '南坪站（347路）', 1, 106.5711000, 29.5292000, '南岸区南坪', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name), longitude = VALUES(longitude), latitude = VALUES(latitude),
     address = VALUES(address), status = 0, user_access = VALUES(user_access),
@@ -170,10 +175,11 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO transport_route
     (id, route_code, route_name, start_station_id, end_station_id, distance_km, status, tenant_id, creator, updater, deleted)
 VALUES
-    (301, 'R301', '校园货运01（南门—上新街）', 201, 202, 1.50, 0, 0, '1', '1', b'0'),
-    (302, 'R302', '校园货运02（上新街—学堂湾）', 202, 203, 1.80, 0, 0, '1', '1', b'0'),
-    (303, 'R303', '校园货运03（学堂湾—工商大学）', 203, 204, 1.80, 0, 0, '1', '1', b'0'),
-    (304, 'R304', '校园货运04（南门—南坪）', 201, 205, 1.40, 0, 0, '1', '1', b'0')
+    -- 真实公交线路区段（高德鉴别：347路区间 → 320路 → 轨道3号线）
+    -- 里程按高德路网实测回填（347 段 5.58km / 320 段 5.14km / 3号线段 2.49km）
+    (301, 'R301', '347路区间（邮电大学—海棠溪）', 201, 202, 5.58, 0, 0, '1', '1', b'0'),
+    (302, 'R302', '320路（海棠溪—四公里—五公里）', 202, 203, 5.14, 0, 0, '1', '1', b'0'),
+    (303, 'R303', '轨道3号线（四公里—重庆工商大学）', 104, 204, 2.49, 0, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     route_name = VALUES(route_name), start_station_id = VALUES(start_station_id),
     end_station_id = VALUES(end_station_id), distance_km = VALUES(distance_km), deleted = b'0';
@@ -181,14 +187,16 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO transport_route_station
     (id, route_id, station_id, sequence_no, planned_minutes, tenant_id, creator, updater, deleted)
 VALUES
+    -- 347路区间：邮电大学 → 海棠溪
     (301, 301, 201, 1, 0, 0, '1', '1', b'0'),
-    (302, 301, 202, 2, 6, 0, '1', '1', b'0'),
+    (302, 301, 202, 2, 12, 0, '1', '1', b'0'),
+    -- 320路：海棠溪 → 四公里 → 五公里
     (303, 302, 202, 1, 0, 0, '1', '1', b'0'),
-    (304, 302, 203, 2, 7, 0, '1', '1', b'0'),
-    (305, 303, 203, 1, 0, 0, '1', '1', b'0'),
-    (306, 303, 204, 2, 7, 0, '1', '1', b'0'),
-    (307, 304, 201, 1, 0, 0, '1', '1', b'0'),
-    (308, 304, 205, 2, 6, 0, '1', '1', b'0')
+    (304, 302, 104, 2, 22, 0, '1', '1', b'0'),
+    (305, 302, 203, 3, 30, 0, '1', '1', b'0'),
+    -- 轨道3号线：四公里 → 重庆工商大学
+    (306, 303, 104, 1, 0, 0, '1', '1', b'0'),
+    (307, 303, 204, 2, 6, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     sequence_no = VALUES(sequence_no), planned_minutes = VALUES(planned_minutes), deleted = b'0';
 
@@ -197,7 +205,8 @@ INSERT INTO transport_order
     (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
      status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
 VALUES
-    (206, 'TPDEMO1', 2, 201, 205, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 9 MINUTE), '1', NOW(), b'0'),
+    -- 206 直达（347路同线）/ 207 两段（347→320，海棠溪换乘）/ 208 三段（347→320→轨道3号线）
+    (206, 'TPDEMO1', 2, 201, 202, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 9 MINUTE), '1', NOW(), b'0'),
     (207, 'TPDEMO2', 2, 201, 203, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 16.00, 0, '1', DATE_SUB(NOW(), INTERVAL 8 MINUTE), '1', NOW(), b'0'),
     (208, 'TPDEMO3', 2, 201, 204, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 21.00, 0, '1', DATE_SUB(NOW(), INTERVAL 7 MINUTE), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
@@ -225,6 +234,10 @@ ON DUPLICATE KEY UPDATE
 -- 校验：Demo 站点/线路/订单
 SELECT id, station_name, user_access, vehicle_access, dispatch_enabled FROM transport_station WHERE id IN (101, 107);
 SELECT id, order_no, pickup_station_id, delivery_station_id FROM transport_order WHERE id IN (206, 207, 208);
+
+-- 清理旧演示走廊残留（第一版自造坐标的 304 线路与其站点引用）
+DELETE FROM transport_route_station WHERE route_id = 304;
+DELETE FROM transport_route WHERE id = 304;
 
 -- ========== 演示订单归属演示会员（小程序端才能查看运输拓扑并收到通知）==========
 -- demo-member.sql 预置演示会员 13800000000（member_user.id 通常为 3，这里按手机号动态取）
