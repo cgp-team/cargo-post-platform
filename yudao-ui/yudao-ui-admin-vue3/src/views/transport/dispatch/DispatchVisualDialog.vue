@@ -121,18 +121,32 @@
         <div class="viz-timeline">
           <!-- 两个视角，避免信息堆在一起：按车辆看"怎么走、在哪做什么"；按订单看"整条链路与换乘交接" -->
           <div class="panel-tabs">
-            <div class="panel-tab" :class="{ active: panelTab === 'vehicle' }" @click="panelTab = 'vehicle'">
+            <div class="panel-tab" :class="{ active: panelTab === 'all' }" @click="switchTab('all')">
+              总体
+            </div>
+            <div class="panel-tab" :class="{ active: panelTab === 'vehicle' }" @click="switchTab('vehicle')">
               按车辆（路线 + 操作）
             </div>
-            <div class="panel-tab" :class="{ active: panelTab === 'order' }" @click="panelTab = 'order'">
+            <div class="panel-tab" :class="{ active: panelTab === 'order' }" @click="switchTab('order')">
               按订单（含联运交接）
             </div>
           </div>
+          <div class="panel-tip">
+            {{ panelTab === 'all' ? '地图显示全部车辆线路'
+              : panelTab === 'vehicle' ? '点选下方某台车，地图只显示它的线路'
+              : '点选某张订单，地图只显示这单的分段路线' }}
+          </div>
 
-          <!-- 视角一：每台车一条线，按行驶顺序列出经停与本站操作 -->
-          <template v-if="panelTab === 'vehicle'">
+          <!-- 视角一/二：每台车一条线，按行驶顺序列出经停与本站操作 -->
+          <template v-if="panelTab !== 'order'">
             <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
-            <div v-for="route in visibleRoutes" :key="route.key" class="route-card">
+            <div
+              v-for="route in visibleRoutes"
+              :key="route.key"
+              class="route-card"
+              :class="{ selectable: panelTab === 'vehicle', dimmed: panelTab === 'vehicle' && selectedVehicleKey && selectedVehicleKey !== route.key, picked: selectedVehicleKey === route.key }"
+              @click="panelTab === 'vehicle' && selectVehicle(route.key)"
+            >
               <div class="route-title">
                 <span class="route-color" :style="{ background: route.color }"></span>
                 <span class="route-name">{{ route.title }}</span>
@@ -157,7 +171,13 @@
             <div v-if="!linkOrders.length" class="text-gray-400 text-sm">
               本方案暂无订单运输链（或该订单还未生成运输段）
             </div>
-            <div v-for="o in linkOrders" :key="o.key" class="order-card">
+            <div
+              v-for="o in linkOrders"
+              :key="o.key"
+              class="order-card selectable"
+              :class="{ dimmed: selectedOrderKey && selectedOrderKey !== o.key, picked: selectedOrderKey === o.key }"
+              @click="selectOrder(o.key)"
+            >
               <div class="order-head">
                 <span class="order-no">订单 {{ o.orderNo }}</span>
                 <span class="order-meta">
@@ -305,8 +325,72 @@ const visibleRoutes = computed(() =>
   activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
 )
 
-/** 右栏视角：按车辆 / 按订单（信息分两块展示，避免堆在一起） */
-const panelTab = ref<'vehicle' | 'order'>('vehicle')
+/**
+ * 视角：总体 / 按车辆 / 按订单。
+ * 切换视角或点选具体车辆/订单时，**右侧列表与地图同步变化**（地图只画当前关注的对象）。
+ */
+const panelTab = ref<'all' | 'vehicle' | 'order'>('all')
+/** 按车辆视角下选中的车辆（route.key）；为空=显示全部 */
+const selectedVehicleKey = ref('')
+/** 按订单视角下选中的订单（linkOrders.key）；为空=默认显示第一单 */
+const selectedOrderKey = ref('')
+
+const switchTab = (tab: 'all' | 'vehicle' | 'order') => {
+  panelTab.value = tab
+  selectedVehicleKey.value = ''
+  selectedOrderKey.value = ''
+  redraw()
+}
+
+const selectVehicle = (key: string) => {
+  selectedVehicleKey.value = selectedVehicleKey.value === key ? '' : key
+  redraw()
+}
+
+const selectOrder = (key: string) => {
+  selectedOrderKey.value = key
+  redraw()
+}
+
+/** 当前选中订单的分段路线（用运输段的真实道路轨迹画线；不同车辆不同颜色） */
+const orderLegRoutes = computed<RouteView[]>(() => {
+  const order = linkOrders.value.find((o) => o.key === selectedOrderKey.value) ?? linkOrders.value[0]
+  if (!order) return []
+  const plan = plans.value.find((p) => (p.items ?? []).some((i) => i.orderId === order.orderId))
+  return order.legs.map((leg, index) => {
+    const pts = (leg.navigationPolyline ?? [])
+      .filter((p) => p.longitude != null && p.latitude != null)
+      .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
+    const fallback = leg.fromLongitude != null && leg.toLongitude != null
+      ? [{ lng: leg.fromLongitude, lat: leg.fromLatitude! }, { lng: leg.toLongitude, lat: leg.toLatitude! }]
+      : []
+    return {
+      key: `order-${order.orderId}-leg-${index}`,
+      planId: plan?.id,
+      color: leg.color || '#909399',
+      title: `${leg.plateNo || '车辆'} 第 ${index + 1} 段`,
+      orderNos: [order.orderNo],
+      orderCount: 1,
+      stops: [],
+      locatedStops: [],
+      driverText: leg.driverName || '',
+      distanceKm: Number(leg.distanceKm || 0),
+      distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-',
+      points: pts.length >= 2 ? pts : fallback,
+      realSegments: leg.navigationSource === 'AMAP' ? 1 : 0,
+      totalSegments: 1
+    } as RouteView
+  }).filter((r) => r.points.length >= 2)
+})
+
+/** 地图实际绘制的线路（随视角变化）：总体=全部；按车辆=选中车；按订单=选中单的分段 */
+const mapRoutes = computed<RouteView[]>(() => {
+  if (panelTab.value === 'order') return orderLegRoutes.value
+  if (panelTab.value === 'vehicle' && selectedVehicleKey.value) {
+    return visibleRoutes.value.filter((r) => r.key === selectedVehicleKey.value)
+  }
+  return visibleRoutes.value
+})
 
 /** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
 const plateColorMap = computed(() => {
@@ -319,7 +403,7 @@ const plateColorMap = computed(() => {
 })
 
 /** 可绘制（至少 2 个带坐标的经停点）的线路：为空时页面给出明确提示而不是空白地图 */
-const drawableRoutes = computed(() => visibleRoutes.value.filter((r) => r.points.length >= 2))
+const drawableRoutes = computed(() => mapRoutes.value.filter((r) => r.points.length >= 2))
 
 /** 多段联运交接（按订单）：哪个订单在哪一站交给谁（转运站点工作人员 / 其他司机） */
 const linkOrders = computed(() => {
@@ -519,7 +603,7 @@ const drawMap = () => {
   const BMapGL = window.BMapGL
   clearOverlays()
   const allPoints: any[] = []
-  visibleRoutes.value.forEach((route) => {
+  mapRoutes.value.forEach((route) => {
     const path = route.points.map((p) => {
       const bd = gcj02ToBd09(p.lng, p.lat)
       return new BMapGL.Point(bd.lng, bd.lat)
@@ -649,7 +733,7 @@ let playTimer: number | undefined
 /** 进度 p(0~100) → 各线路上的当前位置（按分段长度线性插值） */
 const positionsAt = (p: number) => {
   const ratio = Math.max(0, Math.min(100, p)) / 100
-  return visibleRoutes.value.map((route) => {
+  return mapRoutes.value.map((route) => {
     const pts = route.points
     if (pts.length === 0) return { key: route.key, index: 0, point: null }
     if (pts.length === 1) return { key: route.key, index: 0, point: pts[0] }
@@ -681,7 +765,7 @@ const positionsAt = (p: number) => {
 
 /** SVG 示意图：真实经纬度 → 归一化到 1000×620 画布 */
 const svgProjection = computed(() => {
-  const pts = visibleRoutes.value.flatMap((r) => r.points)
+  const pts = mapRoutes.value.flatMap((r) => r.points)
   if (!pts.length) return null
   const lngs = pts.map((p) => p.lng)
   const lats = pts.map((p) => p.lat)
@@ -703,7 +787,7 @@ const svgProjection = computed(() => {
 const svgLines = computed(() => {
   const proj = svgProjection.value
   if (!proj) return []
-  return visibleRoutes.value.map((route) => {
+  return mapRoutes.value.map((route) => {
     const dots = route.points.map((p) => proj.project(p))
     return { key: route.key, color: route.color, dots, points: dots.map((d) => `${d.x},${d.y}`).join(' ') }
   })
@@ -716,7 +800,7 @@ const svgMovers = computed(() => {
     .filter((p) => p.point)
     .map((p) => {
       const pos = proj.project(p.point!)
-      const route = visibleRoutes.value.find((r) => r.key === p.key)
+      const route = mapRoutes.value.find((r) => r.key === p.key)
       return { key: p.key, x: pos.x, y: pos.y, color: route?.color || '#409eff' }
     })
 })
@@ -1040,6 +1124,24 @@ onBeforeUnmount(stopPlay)
   background: #1f5e9e;
   border-color: #1f5e9e;
   color: #fff;
+}
+.panel-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+.route-card.selectable,
+.order-card.selectable {
+  cursor: pointer;
+}
+.route-card.picked,
+.order-card.picked {
+  border-color: #1f5e9e;
+  box-shadow: 0 0 0 1px #1f5e9e inset;
+}
+.route-card.dimmed,
+.order-card.dimmed {
+  opacity: 0.45;
 }
 .route-sub {
   font-size: 12px;
