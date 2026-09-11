@@ -34,4 +34,6 @@ public class VehicleDO extends TenantBaseDO {
 
     /** 车辆状态：0 空闲可用，1 停用维修 */
     private Integer status;
+    /** 实时运营状态：0 空闲(AVAILABLE) 1 在途(IN_SERVICE) 2 故障 3 离线（随运输段开始/完成同步，见需求 §123） */
+    private Integer realtimeStatus;
 }

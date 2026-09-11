@@ -13,6 +13,10 @@ public interface StationMapper extends BaseMapperX<StationDO> {
         return selectPage(reqVO, new LambdaQueryWrapperX<StationDO>()
                 .likeIfPresent(StationDO::getStationCode, reqVO.getStationCode())
                 .likeIfPresent(StationDO::getStationName, reqVO.getStationName())
+                .eqIfPresent(StationDO::getStationType, reqVO.getStationType())
+                .eqIfPresent(StationDO::getSourceType, reqVO.getSourceType())
+                .eqIfPresent(StationDO::getDispatchEnabled, reqVO.getDispatchEnabled())
+                .eqIfPresent(StationDO::getStatus, reqVO.getStatus())
                 .betweenIfPresent(StationDO::getCreateTime, reqVO.getCreateTime())
                 .orderByDesc(StationDO::getId));
     }

@@ -44,6 +44,8 @@ class AppSendControllerTest {
     @Mock private VehicleMapper vehicleMapper;
     @Mock private StationService stationService;
     @Mock private cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider vehicleLocationProvider;
+    @Mock private cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper stationMapper;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService multiLegService;
 
     private AppSendController controller;
 

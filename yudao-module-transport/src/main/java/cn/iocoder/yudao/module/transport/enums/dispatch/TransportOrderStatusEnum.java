@@ -32,7 +32,17 @@ public enum TransportOrderStatusEnum {
     /** 待客户操作（CONDITIONAL 结果，客户完成替代交接后 → READY_FOR_POOL） */
     WAITING_CUSTOMER_ACTION(7, "待客户操作"),
     /** 待入池（审核通过，唯一可归集入池的状态） */
-    READY_FOR_POOL(8, "待入池");
+    READY_FOR_POOL(8, "待入池"),
+    /** 部分完成（多段联运：首段已交付换乘站，剩余段仍在途） */
+    PARTIALLY_COMPLETED(9, "部分完成"),
+    /** 运输中（已有段在途） */
+    IN_TRANSIT(10, "运输中"),
+    /** 换乘中（多段联运正在换乘站交接） */
+    TRANSFERRING(11, "换乘中"),
+    /** 派送中（最后一段已到达目的站，等待用户取货/派送） */
+    DELIVERING(12, "派送中"),
+    /** 异常（超时/故障/交接争议，需人工介入） */
+    EXCEPTION(13, "异常");
 
     private final Integer status;
     private final String name;

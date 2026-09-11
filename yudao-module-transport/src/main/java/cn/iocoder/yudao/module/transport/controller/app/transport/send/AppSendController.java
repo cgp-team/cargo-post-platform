@@ -12,9 +12,11 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSen
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendRoutePreviewReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendLegRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.RoutePreviewRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
@@ -28,10 +30,15 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
+import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
+import cn.iocoder.yudao.module.transport.service.dispatch.TransportTopologyService;
+import cn.iocoder.yudao.module.transport.controller.admin.transport.topology.vo.OrderTopologyRespVO;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
@@ -83,6 +90,9 @@ public class AppSendController {
     @Resource private ShiftMapper shiftMapper;
     @Resource private DriverMapper driverMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
+    @Resource private StationMapper stationMapper;
+    @Resource private MultiLegService multiLegService;
+    @Resource private TransportTopologyService transportTopologyService;
     /** 统一车辆位置（REAL > 模拟引擎 > 确定性班次模拟）：演示无司机上报时也能出"车快到了" */
     @Resource private VehicleLocationProvider vehicleLocationProvider;
 
@@ -134,6 +144,58 @@ public class AppSendController {
         AppSendOrderRespVO vo = toRespVO(order);
         fillEta(vo, order);
         return success(vo);
+    }
+
+    @GetMapping("/legs")
+    @Operation(summary = "按业务订单号查询多段运输进度（多段联运）")
+    @Parameter(name = "no", description = "业务订单号", required = true)
+    public CommonResult<List<AppSendLegRespVO>> legs(@RequestParam("no") String no) {
+        TransportOrderDO order = transportOrderService.getByOrderNo(no);
+        // 归属校验：非下单人/非收件人不返回分段进度（防遍历单号窥探）
+        if (!transportOrderService.canViewOrderDetail(order, getLoginUserId())) {
+            return success(List.of());
+        }
+        List<TransportLegDO> legs = multiLegService.getLegsByOrderId(order.getId());
+        return success(legs.stream().map(leg -> {
+            AppSendLegRespVO vo = new AppSendLegRespVO();
+            vo.setLegSequence(leg.getLegSequence());
+            vo.setFromStationName(stationName(leg.getFromStationId()));
+            vo.setToStationName(stationName(leg.getToStationId()));
+            vo.setStatus(leg.getStatus());
+            vo.setStatusName(TransportLegStatusEnum.nameOf(leg.getStatus()));
+            vo.setEstimatedArrival(leg.getEstimatedArrival());
+            vo.setActualArrival(leg.getActualArrival());
+            if (leg.getDriverId() != null) {
+                DriverDO driver = driverMapper.selectById(leg.getDriverId());
+                vo.setDriverName(driver != null ? driver.getName() : null);
+            }
+            if (leg.getVehicleId() != null) {
+                VehicleDO vehicle = vehicleMapper.selectById(leg.getVehicleId());
+                vo.setPlateNo(vehicle != null ? vehicle.getPlateNo() : null);
+            }
+            return vo;
+        }).toList());
+    }
+
+    @GetMapping("/topology")
+    @Operation(summary = "按业务订单号查询运输拓扑（订单+多段进度+换乘交接+时间线，一次返回）")
+    @Parameter(name = "no", description = "业务订单号", required = true)
+    public CommonResult<OrderTopologyRespVO> topology(@RequestParam("no") String no) {
+        TransportOrderDO order = transportOrderService.getByOrderNo(no);
+        // 归属校验：非下单人/非收件人不返回内部拓扑（司机/车辆等），返回空结构
+        if (!transportOrderService.canViewOrderDetail(order, getLoginUserId())) {
+            return success(new OrderTopologyRespVO());
+        }
+        return success(transportTopologyService.getByOrderId(order.getId()));
+    }
+
+    /** 站点名（不存在/无编号返回 null） */
+    private String stationName(Long stationId) {
+        if (stationId == null) {
+            return null;
+        }
+        StationDO station = stationMapper.selectById(stationId);
+        return station != null ? station.getStationName() : null;
     }
 
     /** 填充到达预估（仅 track 详情调用；未分配车辆/班次时字段全 null，不影响原流程） */

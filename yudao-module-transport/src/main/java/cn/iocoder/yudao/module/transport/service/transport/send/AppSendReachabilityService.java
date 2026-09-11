@@ -11,6 +11,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmStat
 import cn.iocoder.yudao.module.transport.enums.order.ReviewReasonCodeEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ServiceModeEnum;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
+import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -54,9 +55,10 @@ public class AppSendReachabilityService {
             resp.setMessage("未提供当前位置，无法判断可达性");
             return resp;
         }
+        // 候选站点：启用 + 用户可达（用户能把货送到/取到的地方）
         List<StationDO> candidates = stationMapper.selectList().stream()
                 .filter(s -> s.getId() != null && s.getLongitude() != null && s.getLatitude() != null)
-                .filter(s -> s.getStatus() == null || s.getStatus() == STATUS_ENABLED)
+                .filter(StationAccessUtil::userAccessible)
                 .sorted(Comparator.comparingDouble((StationDO s) -> GeoDistanceUtil.haversineKm(
                                 longitude, latitude,
                                 s.getLongitude().doubleValue(), s.getLatitude().doubleValue()))
@@ -68,11 +70,39 @@ public class AppSendReachabilityService {
             resp.setMessage("附近暂无可用服务站点，请联系平台");
             return resp;
         }
-        StationDO nearest = candidates.get(0);
+        StationDO nearestUserStation = candidates.get(0);
         double straightKm = GeoDistanceUtil.haversineKm(longitude, latitude,
+                nearestUserStation.getLongitude().doubleValue(), nearestUserStation.getLatitude().doubleValue());
+        // 车辆可达性判定（核心原则：站点启用 ≠ 车辆能进；校园禁行区站点 vehicleAccess=false）：
+        // 若最近站点就在身边且车辆可进 → 可就近服务；否则推荐"最近的可服务（车辆可达）站点"让用户送站。
+        boolean doorService = straightKm <= REACHABLE_RADIUS_KM
+                && StationAccessUtil.vehicleAccessible(nearestUserStation);
+        StationDO nearest;
+        if (doorService) {
+            nearest = nearestUserStation;
+        } else {
+            nearest = stationMapper.selectList().stream()
+                    .filter(s -> s.getId() != null && s.getLongitude() != null && s.getLatitude() != null)
+                    .filter(StationAccessUtil::vehicleAccessible)
+                    .min(Comparator.comparingDouble((StationDO s) -> GeoDistanceUtil.haversineKm(
+                                    longitude, latitude,
+                                    s.getLongitude().doubleValue(), s.getLatitude().doubleValue()))
+                            .thenComparing(StationDO::getId))
+                    .orElse(null);
+            if (nearest == null) {
+                resp.setReachable(false);
+                resp.setReasonCode(ReviewReasonCodeEnum.NO_SAFE_HANDOFF_POINT.getCode());
+                resp.setMessage("附近暂无可供车辆停靠的服务站点，请联系平台");
+                return resp;
+            }
+        }
+        double recommendStraightKm = GeoDistanceUtil.haversineKm(longitude, latitude,
                 nearest.getLongitude().doubleValue(), nearest.getLatitude().doubleValue());
         double km = straightKm;
         String provider = "HAVERSINE";
+        if (!doorService) {
+            km = recommendStraightKm; // 推荐站点距离决定步行时间
+        }
         // 道路距离优先（高德）：失败/不可用不影响主流程，退回直线并如实标注
         try {
             AlgorithmDistanceRespDTO dto = algorithmClient.distance(AlgorithmDistanceReqDTO.builder()
