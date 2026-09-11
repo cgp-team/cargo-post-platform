@@ -105,7 +105,7 @@
 import * as DispatchApi from '@/api/transport/dispatch'
 import * as TopologyApi from '@/api/transport/topology'
 import * as MonitoringApi from '@/api/transport/monitoring'
-import { loadBaiduMapSdk } from '@/components/Map/src/utils'
+import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
 
 defineOptions({ name: 'TransportDispatchCenter' })
 
@@ -131,14 +131,19 @@ const loadPool = async () => {
 const renderTopology = () => {
   if (!map || !topology.value) return
   const BMapGL = (window as any).BMapGL
+  // 站点/轨迹是 GCJ-02，百度底图是 BD-09：不转换会整体偏移数百米（"站点标不准"就是这个原因）
+  const pt = (lng: number, lat: number) => {
+    const bd = gcj02ToBd09(lng, lat)
+    return new BMapGL.Point(bd.lng, bd.lat)
+  }
   const legs = topology.value.legs || []
   const points: any[] = []
   legs.forEach((l) => {
     if (l.fromLongitude == null || l.toLongitude == null) return
     // 真实道路轨迹优先（navigationSource=AMAP）；无则回退站点直连（虚线＝估算，不伪装真实道路）
-    const road = (l.navigationPolyline || []).map((p) => new BMapGL.Point(p.longitude, p.latitude))
-    const p1 = new BMapGL.Point(l.fromLongitude, l.fromLatitude)
-    const p2 = new BMapGL.Point(l.toLongitude, l.toLatitude)
+    const road = (l.navigationPolyline || []).map((p) => pt(p.longitude, p.latitude))
+    const p1 = pt(l.fromLongitude, l.fromLatitude!)
+    const p2 = pt(l.toLongitude, l.toLatitude!)
     const path = road.length >= 2 ? road : [p1, p2]
     points.push(...path)
     map.addOverlay(new BMapGL.Polyline(path, {
@@ -191,15 +196,19 @@ const initMap = async () => {
     const data = await MonitoringApi.getMonitoringMapData()
     // 站点/线路来自地图数据；车辆走独立接口（MonitoringMapDataVO 不含 vehicles）
     const vehicles = await MonitoringApi.getMonitoringVehicles().catch(() => [])
+    const toPoint = (lng: number, lat: number) => {
+      const bd = gcj02ToBd09(lng, lat)
+      return new BMapGL.Point(bd.lng, bd.lat)
+    }
     ;(data?.stations || []).forEach((s: any) => {
       if (s.longitude == null) return
-      const p = new BMapGL.Point(s.longitude, s.latitude)
+      const p = toPoint(s.longitude, s.latitude)
       map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1F5E9E', fillColor: '#1F5E9E', fillOpacity: 0.3 }))
       map.addOverlay(new BMapGL.Label(s.stationName, { position: p, offset: new BMapGL.Size(6, -28) }))
     })
     ;(vehicles || []).forEach((v: any) => {
       if (v.longitude == null) return
-      const p = new BMapGL.Point(v.longitude, v.latitude)
+      const p = toPoint(v.longitude, v.latitude)
       map.addOverlay(new BMapGL.Marker(p))
       map.addOverlay(new BMapGL.Label(v.plateNo || '运输车辆', { position: p, offset: new BMapGL.Size(-20, -30) }))
     })

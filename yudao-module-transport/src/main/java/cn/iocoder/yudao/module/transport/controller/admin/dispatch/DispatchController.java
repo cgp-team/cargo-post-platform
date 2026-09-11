@@ -75,6 +75,14 @@ public class DispatchController {
         return success(dispatchService.getPlan(id));
     }
 
+    @GetMapping("/plan/roadmap")
+    @Operation(summary = "获得调度方案的真实道路地图数据（按车辆+经停序号的每段轨迹；高德不可用时标注直线兜底）")
+    @Parameter(name = "id", description = "方案编号", required = true)
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<DispatchRoadmapRespVO> getPlanRoadmap(@RequestParam("id") Long id) {
+        return success(dispatchService.getPlanRoadmap(id));
+    }
+
     @PutMapping("/plan/review")
     @Operation(summary = "调度方案审核")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")

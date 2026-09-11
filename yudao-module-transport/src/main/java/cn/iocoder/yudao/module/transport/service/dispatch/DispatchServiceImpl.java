@@ -96,6 +96,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private AlgorithmAdapter algorithmAdapter;
     @Resource private DispatchEstimationService dispatchEstimationService;
     @Resource private MultiLegService multiLegService;
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     @Resource private SocialClientApi socialClientApi;
     @Resource private MemberUserApi memberUserApi;
     @Resource private DriverMapper driverMapper;
@@ -618,6 +619,87 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     public PageResult<DispatchPlanDO> getPlanPage(DispatchPlanPageReqVO reqVO) {
         return dispatchPlanMapper.selectPage(reqVO);
+    }
+
+    /**
+     * 方案真实道路地图数据（调度可视化用）：
+     * 按「车辆 + 经停序号」给出每段（上一站→本站）的真实道路轨迹，
+     * 高德不可用/失败时该段退化成两点直线并标注 {@code EUCLIDEAN}（不伪装真实道路）。
+     */
+    @Override
+    public DispatchRoadmapRespVO getPlanRoadmap(Long id) {
+        validatePlanExists(id);
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getPlanId, id)
+                .orderByAsc(DispatchPlanItemDO::getVehicleId)
+                .orderByAsc(DispatchPlanItemDO::getVisitSequence));
+        DispatchRoadmapRespVO respVO = new DispatchRoadmapRespVO();
+        respVO.setPlanId(id);
+        if (items.isEmpty()) {
+            respVO.setProvider("EUCLIDEAN");
+            respVO.setSegments(List.of());
+            return respVO;
+        }
+        Set<Long> stationIds = items.stream().map(DispatchPlanItemDO::getStationId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, StationDO> stationMap = stationIds.isEmpty() ? Map.of()
+                : stationMapper.selectBatchIds(stationIds).stream()
+                        .collect(Collectors.toMap(StationDO::getId, s -> s, (a, b) -> a));
+
+        List<DispatchRoadmapRespVO.Segment> segments = new ArrayList<>();
+        boolean anyReal = false;
+        boolean anyFallback = false;
+        // 按车辆分组：组内 visitSequence 升序，相邻两站构成一段
+        Map<Long, List<DispatchPlanItemDO>> byVehicle = new LinkedHashMap<>();
+        for (DispatchPlanItemDO item : items) {
+            byVehicle.computeIfAbsent(item.getVehicleId() == null ? 0L : item.getVehicleId(),
+                    k -> new ArrayList<>()).add(item);
+        }
+        for (Map.Entry<Long, List<DispatchPlanItemDO>> entry : byVehicle.entrySet()) {
+            List<DispatchPlanItemDO> stops = entry.getValue();
+            stops.sort(Comparator.comparing(DispatchPlanItemDO::getVisitSequence,
+                    Comparator.nullsLast(Comparator.naturalOrder())));
+            for (int i = 1; i < stops.size(); i++) {
+                StationDO from = stops.get(i - 1).getStationId() == null ? null
+                        : stationMap.get(stops.get(i - 1).getStationId());
+                StationDO to = stops.get(i).getStationId() == null ? null
+                        : stationMap.get(stops.get(i).getStationId());
+                if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+                        || to.getLongitude() == null || to.getLatitude() == null) {
+                    continue;
+                }
+                List<double[]> road = roadPolylineService.route(
+                        from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                        to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+                boolean real = road != null && road.size() >= 2;
+                if (real) {
+                    anyReal = true;
+                } else {
+                    anyFallback = true;
+                }
+                List<double[]> points = real ? road : List.of(
+                        new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
+                        new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
+                DispatchRoadmapRespVO.Segment segment = new DispatchRoadmapRespVO.Segment();
+                segment.setVehicleId(stops.get(i).getVehicleId());
+                segment.setVisitSequence(stops.get(i).getVisitSequence());
+                segment.setFromStationId(from.getId());
+                segment.setToStationId(to.getId());
+                segment.setFromStationName(from.getStationName());
+                segment.setToStationName(to.getStationName());
+                segment.setProvider(real ? "AMAP" : "EUCLIDEAN");
+                segment.setPoints(points.stream().map(p -> {
+                    DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
+                    point.setLongitude(p[0]);
+                    point.setLatitude(p[1]);
+                    return point;
+                }).toList());
+                segments.add(segment);
+            }
+        }
+        respVO.setSegments(segments);
+        respVO.setProvider(anyReal && anyFallback ? "MIXED" : (anyReal ? "AMAP" : "EUCLIDEAN"));
+        return respVO;
     }
 
     /**
