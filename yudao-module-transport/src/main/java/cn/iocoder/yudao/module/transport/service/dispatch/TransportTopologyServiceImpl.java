@@ -184,11 +184,35 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
         vo.setDistanceKm(leg.getDistanceKm());
         vo.setDurationMinutes(leg.getDurationMinutes());
         vo.setNavigationSource(leg.getNavigationSource());
+        vo.setNavigationPolyline(parsePolyline(leg.getNavigationPolyline()));
         vo.setEstimatedDeparture(leg.getEstimatedDeparture());
         vo.setEstimatedArrival(leg.getEstimatedArrival());
         vo.setActualArrival(leg.getActualArrival());
         vo.setHandoverRequired(leg.getHandoverRequired());
         return vo;
+    }
+
+    /** 解析 Leg 上存储的紧凑 polyline（"lon,lat;lon,lat;..."）→ 道路点列表（空串/非法返回 null） */
+    private static List<OrderTopologyRespVO.RoadPoint> parsePolyline(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        List<OrderTopologyRespVO.RoadPoint> points = new java.util.ArrayList<>();
+        for (String segment : raw.split(";")) {
+            int comma = segment.indexOf(',');
+            if (comma <= 0) {
+                continue;
+            }
+            try {
+                OrderTopologyRespVO.RoadPoint p = new OrderTopologyRespVO.RoadPoint();
+                p.setLongitude(Double.valueOf(segment.substring(0, comma).trim()));
+                p.setLatitude(Double.valueOf(segment.substring(comma + 1).trim()));
+                points.add(p);
+            } catch (NumberFormatException ignored) {
+                // 单点解析失败不影响整条轨迹
+            }
+        }
+        return points.isEmpty() ? null : points;
     }
 
     private OrderTopologyRespVO.Handover toHandover(TransportHandoverDO h, Map<Long, String> stationNames) {

@@ -32,6 +32,7 @@
             <span><i class="dot station"></i>站点</span>
             <span><i class="dot vehicle"></i>车辆</span>
             <span><i class="line"></i>运输段</span>
+            <span><i class="line dashed"></i>估算段</span>
             <span><i class="dot hub"></i>换乘站</span>
           </div>
         </ContentWrap>
@@ -134,10 +135,17 @@ const renderTopology = () => {
   const points: any[] = []
   legs.forEach((l) => {
     if (l.fromLongitude == null || l.toLongitude == null) return
+    // 真实道路轨迹优先（navigationSource=AMAP）；无则回退站点直连（虚线＝估算，不伪装真实道路）
+    const road = (l.navigationPolyline || []).map((p) => new BMapGL.Point(p.longitude, p.latitude))
     const p1 = new BMapGL.Point(l.fromLongitude, l.fromLatitude)
     const p2 = new BMapGL.Point(l.toLongitude, l.toLatitude)
-    points.push(p1, p2)
-    map.addOverlay(new BMapGL.Polyline([p1, p2], { strokeColor: '#2E7D32', strokeWeight: 5 }))
+    const path = road.length >= 2 ? road : [p1, p2]
+    points.push(...path)
+    map.addOverlay(new BMapGL.Polyline(path, {
+      strokeColor: l.navigationSource === 'AMAP' ? '#2E7D32' : '#E6A23C',
+      strokeWeight: 5,
+      strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
+    }))
     if (l.handoverRequired) {
       map.addOverlay(new BMapGL.Marker(p2))
       map.addOverlay(new BMapGL.Label('换乘站 ' + (l.toStationName || ''), {
@@ -244,5 +252,9 @@ onMounted(async () => {
   background: #2e7d32;
   margin-right: 4px;
   vertical-align: middle;
+}
+
+.map-legend .line.dashed {
+  background: repeating-linear-gradient(90deg, #e6a23c 0 4px, transparent 4px 7px);
 }
 </style>

@@ -21,6 +21,9 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
+import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
 import jakarta.annotation.Resource;
@@ -59,6 +62,7 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private LegConflictService legConflictService;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private AlgorithmClient algorithmClient;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
 
@@ -90,7 +94,6 @@ public class MultiLegServiceImpl implements MultiLegService {
                 stationMapper.selectList(), routeStationsForPlanning());
 
         List<TransportLegDO> legs = new ArrayList<>();
-        LocalDateTime cursor = LocalDateTime.now().plusMinutes(MultiLegPlanner.PREPARE_MINUTES);
         for (MultiLegPlanner.LegDraft draft : result.legs()) {
             TransportLegDO leg = TransportLegDO.builder()
                     .orderId(order.getId())
@@ -103,10 +106,18 @@ public class MultiLegServiceImpl implements MultiLegService {
                     .navigationSource("ESTIMATED")
                     .status(TransportLegStatusEnum.PLANNED.getStatus())
                     .handoverRequired(draft.handoverRequired())
-                    .estimatedDeparture(cursor)
-                    .estimatedArrival(cursor.plusMinutes(draft.durationMinutes()))
                     .build();
             legs.add(leg);
+        }
+        // 真实道路：逐段取高德路网（距离/时长/polyline），失败保持 ESTIMATED（不伪装真实道路，需求 §73/§141）
+        enrichWithRoadRoute(legs);
+        // 预计时间基于最终时长（可能是路网时长）顺序推进
+        LocalDateTime cursor = LocalDateTime.now().plusMinutes(MultiLegPlanner.PREPARE_MINUTES);
+        for (TransportLegDO leg : legs) {
+            int minutes = leg.getDurationMinutes() != null ? leg.getDurationMinutes()
+                    : MultiLegPlanner.travelMinutes(leg.getDistanceKm() == null ? 0 : leg.getDistanceKm().doubleValue());
+            leg.setEstimatedDeparture(cursor);
+            leg.setEstimatedArrival(cursor.plusMinutes(minutes));
             cursor = leg.getEstimatedArrival().plusMinutes(MultiLegPlanner.HANDOVER_DWELL_MINUTES);
         }
         assignVehicles(legs);
@@ -119,6 +130,57 @@ public class MultiLegServiceImpl implements MultiLegService {
         userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_CREATED,
                 "已生成运输方案", result.reason());
         return legs;
+    }
+
+    /**
+     * 逐段补真实道路轨迹（需求 §73/§74/§141）：
+     * 高德路网可用 → navigationSource=AMAP + 存储 polyline（"lon,lat;..." 紧凑串）+ 用真实距离/时长覆盖估算；
+     * 失败/不可用 → 保持 ESTIMATED，界面按"估算值"展示，绝不伪装成实时道路导航。
+     * 段数 ≤3，且算法侧有 24h 路网缓存，成本可控。
+     */
+    private void enrichWithRoadRoute(List<TransportLegDO> legs) {
+        if (algorithmClient == null || legs.isEmpty()) {
+            return;
+        }
+        java.util.Map<Long, StationDO> stationMap = legs.stream()
+                .flatMap(l -> java.util.stream.Stream.of(l.getFromStationId(), l.getToStationId()))
+                .filter(Objects::nonNull).distinct()
+                .map(stationMapper::selectById).filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toMap(StationDO::getId, s -> s, (a, b) -> a));
+        for (TransportLegDO leg : legs) {
+            StationDO from = stationMap.get(leg.getFromStationId());
+            StationDO to = stationMap.get(leg.getToStationId());
+            if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+                    || to.getLongitude() == null || to.getLatitude() == null) {
+                continue;
+            }
+            try {
+                AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
+                        .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
+                                .latitude(from.getLatitude().doubleValue())
+                                .longitude(from.getLongitude().doubleValue()).build())
+                        .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
+                                .latitude(to.getLatitude().doubleValue())
+                                .longitude(to.getLongitude().doubleValue()).build())
+                        .build());
+                if (route == null || route.getPolyline() == null || route.getPolyline().isEmpty()) {
+                    continue;
+                }
+                leg.setNavigationPolyline(route.getPolyline().stream()
+                        .map(p -> p.getLongitude() + "," + p.getLatitude())
+                        .collect(java.util.stream.Collectors.joining(";")));
+                leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
+                if (route.getDistanceKm() != null) {
+                    leg.setDistanceKm(BigDecimal.valueOf(Math.round(route.getDistanceKm() * 100) / 100.0));
+                }
+                if (route.getDurationSeconds() != null) {
+                    leg.setDurationMinutes(Math.max(1, (int) Math.round(route.getDurationSeconds() / 60)));
+                }
+            } catch (Exception ex) {
+                log.debug("[multi-leg] 订单 {} 第 {} 段真实道路不可用，保留估算：{}",
+                        leg.getOrderId(), leg.getLegSequence(), ex.getMessage());
+            }
+        }
     }
 
     @Override

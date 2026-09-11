@@ -91,10 +91,21 @@ public class OrderTopologyRespVO {
         private BigDecimal distanceKm;
         private Integer durationMinutes;
         private String navigationSource;
+        @Schema(description = "真实道路轨迹点（AMAP 时非空；前端优先用它画线，为空则回退站点直连）")
+        private List<RoadPoint> navigationPolyline;
         private LocalDateTime estimatedDeparture;
         private LocalDateTime estimatedArrival;
         private LocalDateTime actualArrival;
         private Boolean handoverRequired;
+    }
+
+    @Schema(description = "道路轨迹点")
+    @Data
+    public static class RoadPoint {
+        @Schema(description = "经度")
+        private Double longitude;
+        @Schema(description = "纬度")
+        private Double latitude;
     }
 
     @Schema(description = "换乘交接详情")
