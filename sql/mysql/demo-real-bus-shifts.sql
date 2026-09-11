@@ -71,15 +71,15 @@ ON DUPLICATE KEY UPDATE
     planned_duration_minutes = VALUES(planned_duration_minutes),
     status = VALUES(status);
 
--- 2.1) 班次时长对齐线路总计划分钟：班次窗口 ≡ 一趟全程。
---      窗口比线路长会让模拟车辆提前到终点站"趴窝"（看起来像没在跑）；
+-- 2.1) 班次时长 = 线路总计划分钟的 2 倍：班次窗口按**一个往返**计
+--      （司机本职是按线路跑，去程到终点后返程逆向再跑一遍，途中同样取派货）。
 --      放在 INSERT 之后，保证每次执行都以线路真实总分钟为准。
 UPDATE transport_shift sh
     JOIN (SELECT route_id, MAX(planned_minutes) AS total_minutes
           FROM transport_route_station
           WHERE route_id BETWEEN 401 AND 415
           GROUP BY route_id) t ON t.route_id = sh.route_id
-SET sh.planned_duration_minutes = GREATEST(25, t.total_minutes)
+SET sh.planned_duration_minutes = GREATEST(30, t.total_minutes * 2)
 WHERE sh.route_id BETWEEN 401 AND 415;
 
 -- 3) 校验输出：真实线路班次数量 + 站序计划分钟是否已填充

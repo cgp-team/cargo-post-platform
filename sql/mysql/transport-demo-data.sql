@@ -211,8 +211,9 @@ INSERT INTO transport_shift
     (id, shift_code, route_id, planned_departure_time, planned_duration_minutes, status,
      tenant_id, creator, updater, deleted)
 VALUES
-    (461, 'SH-MZY-01', 545, '08:20:00', 25, 0, 0, '1', '1', b'0'),
-    (462, 'SH-MZY-02', 545, '16:40:00', 25, 0, 0, '1', '1', b'0')
+    -- 时长按一个往返（去程 9 分钟 + 返程 9 分钟，留出停站作业时间）
+    (461, 'SH-MZY-01', 545, '08:20:00', 30, 0, 0, '1', '1', b'0'),
+    (462, 'SH-MZY-02', 545, '16:40:00', 30, 0, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     route_id = VALUES(route_id),
     planned_departure_time = VALUES(planned_departure_time),

@@ -608,6 +608,8 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
         java.util.Set<Long> used = legs.stream().map(TransportLegDO::getVehicleId)
                 .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        // 改派后需要给新车留"从当前位置开到交接站"的时间：记下每段的调动分钟，最后统一重排时间
+        java.util.Map<Integer, Integer> repositionMinutes = new java.util.HashMap<>();
         for (int i = 1; i < legs.size(); i++) {
             TransportLegDO leg = legs.get(i);
             StationDO from = leg.getFromStationId() == null ? null : stationMapper.selectById(leg.getFromStationId());
@@ -644,6 +646,47 @@ public class MultiLegServiceImpl implements MultiLegService {
             leg.setHandoverRequired(true);
             leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
             used.add(best.getVehicleId());
+            // 新车从当前位置开到本段起点需要的分钟（按 20km/h 城区均速估算，向上取整）
+            repositionMinutes.put(i, (int) Math.ceil(bestKm / 20.0 * 60));
+        }
+        retimeWithReposition(legs, repositionMinutes);
+    }
+
+    /**
+     * 改派后重排各段时间：把"新车开到交接站"的调动时间算进去，交接站越远留的时间越足。
+     *
+     * <p>规则来自业务约束：联运一定要统筹好几个司机车辆的时间，换乘站点过远要留足交接时间。</p>
+     */
+    private void retimeWithReposition(List<TransportLegDO> legs, java.util.Map<Integer, Integer> repositionMinutes) {
+        if (legs == null || legs.isEmpty()) {
+            return;
+        }
+        LocalDateTime cursor = legs.get(0).getEstimatedDeparture();
+        if (cursor == null) {
+            return;
+        }
+        for (int i = 0; i < legs.size(); i++) {
+            TransportLegDO leg = legs.get(i);
+            int travel = leg.getDurationMinutes() != null ? leg.getDurationMinutes()
+                    : MultiLegPlanner.travelMinutes(leg.getDistanceKm() == null ? 0 : leg.getDistanceKm().doubleValue());
+            if (i > 0) {
+                // 上一段到达 + 交接停留（换乘段才需要）+ 新车调动到交接站的行驶时间
+                cursor = legs.get(i - 1).getEstimatedArrival();
+                if (cursor == null) {
+                    return;
+                }
+                if (Boolean.TRUE.equals(leg.getHandoverRequired())
+                        || Boolean.TRUE.equals(legs.get(i - 1).getHandoverRequired())) {
+                    cursor = cursor.plusMinutes(MultiLegPlanner.HANDOVER_DWELL_MINUTES);
+                }
+                Integer reposition = repositionMinutes.get(i);
+                if (reposition != null && reposition > 0) {
+                    cursor = cursor.plusMinutes(reposition);
+                }
+            }
+            leg.setEstimatedDeparture(cursor);
+            leg.setEstimatedArrival(cursor.plusMinutes(travel));
+            cursor = leg.getEstimatedArrival();
         }
     }
 
