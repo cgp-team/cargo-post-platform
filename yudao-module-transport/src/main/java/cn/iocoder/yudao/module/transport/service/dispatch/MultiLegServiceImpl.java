@@ -67,6 +67,8 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private AlgorithmClient algorithmClient;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
+    /** 车辆当前位置（REAL > 模拟引擎 > 班次插值）：多段联运按"谁离本段起点近"改派，避免一台车跨城往返 */
+    @Resource private cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider vehicleLocationProvider;
 
     @Override
     public List<TransportLegDO> planLegs(Long orderId) {
@@ -128,6 +130,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             cursor = leg.getEstimatedArrival().plusMinutes(MultiLegPlanner.HANDOVER_DWELL_MINUTES);
         }
         assignVehicles(legs, orderId, planId, planVehicleId, planDriverId);
+        relayFarLegsToNearbyVehicles(legs);
         for (TransportLegDO leg : legs) {
             legMapper.insert(leg);
         }
@@ -565,6 +568,99 @@ public class MultiLegServiceImpl implements MultiLegService {
             }
         }
         return null;
+    }
+
+    /** 触发改派的最小"当前车离本段起点"距离（km）：低于它说明车就在附近，没必要换车 */
+    private static final double RELAY_MIN_CURRENT_KM = 6.0;
+    /** 改派收益下限（km）：换车后至少近这么多才值得多一次交接 */
+    private static final double RELAY_MIN_GAIN_KM = 3.0;
+
+    /**
+     * 多段联运 · 按"谁离本段起点近"改派后续段。
+     *
+     * <p>背景：调度算法可能把一张跨片区订单（如"重邮 → 巴南龙洲湾"）整段交给同一台车，
+     * 于是出现"一台公交车跑到巴南再空车绕回来"的不合理调度。真实运营里每台车有自己的作业片区，
+     * 跨片区应由**另一台车/另一位司机在换乘站接驳**。</p>
+     *
+     * <p>做法：对第 2 段起的每一段，比较"当前派车"与"本单还没用过、且当前就在本段起点附近"的车，
+     * 若当前车离本段起点较远（>{@value #RELAY_MIN_CURRENT_KM}km）且换车后能明显更近
+     * （>{@value #RELAY_MIN_GAIN_KM}km），就改派该车/司机，并把前一段标记为需要换乘交接。</p>
+     */
+    private void relayFarLegsToNearbyVehicles(List<TransportLegDO> legs) {
+        if (vehicleLocationProvider == null || driverVehicleMapper == null || legs == null || legs.size() < 2) {
+            return;
+        }
+        List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
+        if (bindings == null || bindings.isEmpty()) {
+            return;
+        }
+        java.util.Set<Long> vehicleIds = bindings.stream().map(DriverVehicleDO::getVehicleId)
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        if (vehicleIds.isEmpty()) {
+            return;
+        }
+        java.util.Map<Long, cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot> locs;
+        try {
+            locs = vehicleLocationProvider.getLocations(vehicleIds, true);
+        } catch (Exception ex) {
+            log.debug("[multi-leg] 车辆位置不可用，跳过按片区改派：{}", ex.getMessage());
+            return;
+        }
+        java.util.Set<Long> used = legs.stream().map(TransportLegDO::getVehicleId)
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        for (int i = 1; i < legs.size(); i++) {
+            TransportLegDO leg = legs.get(i);
+            StationDO from = leg.getFromStationId() == null ? null : stationMapper.selectById(leg.getFromStationId());
+            if (from == null || from.getLongitude() == null || from.getLatitude() == null) {
+                continue;
+            }
+            double currentKm = distanceToStation(locs.get(leg.getVehicleId()), from);
+            if (currentKm < RELAY_MIN_CURRENT_KM) {
+                continue; // 当前车本来就在本段起点附近，不需要换车
+            }
+            DriverVehicleDO best = null;
+            double bestKm = Double.MAX_VALUE;
+            for (DriverVehicleDO binding : bindings) {
+                if (binding.getVehicleId() == null || used.contains(binding.getVehicleId())) {
+                    continue; // 跳过本单已用车辆：换乘的意义就是"换一台车"
+                }
+                double km = distanceToStation(locs.get(binding.getVehicleId()), from);
+                if (km < bestKm) {
+                    bestKm = km;
+                    best = binding;
+                }
+            }
+            if (best == null || currentKm - bestKm < RELAY_MIN_GAIN_KM) {
+                continue;
+            }
+            log.info("[multi-leg] 订单 {} 第 {} 段按片区改派：车辆 {}（距起点 {}km）→ 车辆 {}（{}km）",
+                    leg.getOrderId(), leg.getLegSequence(), leg.getVehicleId(), round1(currentKm),
+                    best.getVehicleId(), round1(bestKm));
+            legs.get(i - 1).setHandoverRequired(true); // 上一段结束需要交接给新司机
+            leg.setVehicleId(best.getVehicleId());
+            leg.setDriverId(best.getDriverId());
+            leg.setShiftId(null);
+            leg.setPlanItemId(null);
+            leg.setHandoverRequired(true);
+            leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
+            used.add(best.getVehicleId());
+        }
+    }
+
+    /** 车辆当前位置到目标站点的直线距离（km）；无位置返回一个大数 */
+    private static double distanceToStation(cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot loc,
+                                            StationDO station) {
+        if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null
+                || station.getLongitude() == null || station.getLatitude() == null) {
+            return Double.MAX_VALUE;
+        }
+        return cn.iocoder.yudao.module.transport.util.GeoDistanceUtil.haversineKm(
+                loc.getLongitude(), loc.getLatitude(),
+                station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+    }
+
+    private static double round1(double value) {
+        return Math.round(value * 10) / 10.0;
     }
 
 }
