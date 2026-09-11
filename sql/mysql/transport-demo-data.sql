@@ -28,6 +28,10 @@ UPDATE transport_vehicle SET plate_no = REPLACE(plate_no, '川A', '渝A')
 WHERE id BETWEEN 1 AND 5 AND plate_no LIKE '川A%';
 UPDATE transport_driver SET license_no = CONCAT('5001', SUBSTRING(license_no, 5))
 WHERE id BETWEEN 1 AND 5 AND license_no LIKE '5101%';
+-- 货仓件数上限：演示批次多单共载，件数容易顶到旧值（6~8）导致"容量越界"直接卡住一键调度；
+-- 公交/大巴行李舱能放的包裹件数远不止这些，统一给到 24 件（重量上限仍按 cargo_capacity_kg 约束）。
+UPDATE transport_vehicle SET cargo_capacity = 24
+WHERE id BETWEEN 1 AND 5 AND (cargo_capacity IS NULL OR cargo_capacity < 24);
 
 -- ---------- 司机车辆绑定 ----------
 INSERT IGNORE INTO transport_driver_vehicle (id, driver_id, vehicle_id, bind_time, unbind_time, status, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
