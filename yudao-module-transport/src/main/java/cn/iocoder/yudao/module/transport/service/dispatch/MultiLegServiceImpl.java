@@ -14,6 +14,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
@@ -62,13 +63,19 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private LegConflictService legConflictService;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
+    @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private AlgorithmClient algorithmClient;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
 
     @Override
     public List<TransportLegDO> planLegs(Long orderId) {
-        return planLegs(orderId, null);
+        return planLegs(orderId, null, null, null);
+    }
+
+    @Override
+    public List<TransportLegDO> planLegs(Long orderId, Long planId) {
+        return planLegs(orderId, planId, null, null);
     }
 
     @Override
@@ -76,7 +83,7 @@ public class MultiLegServiceImpl implements MultiLegService {
     // 不该让整单调度失败）。若参与外层事务，异常会把共享事务标记 rollback-only，导致外层提交时
     // 抛 UnexpectedRollbackException；独立事务可保证"段规划失败只回滚自己，不影响已生成的直达方案"。
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public List<TransportLegDO> planLegs(Long orderId, Long planId) {
+    public List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId) {
         TransportOrderDO order = orderMapper.selectById(orderId);
         if (order == null) {
             throw exception(ORDER_NOT_EXISTS);
@@ -120,7 +127,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             leg.setEstimatedArrival(cursor.plusMinutes(minutes));
             cursor = leg.getEstimatedArrival().plusMinutes(MultiLegPlanner.HANDOVER_DWELL_MINUTES);
         }
-        assignVehicles(legs);
+        assignVehicles(legs, orderId, planId, planVehicleId, planDriverId);
         for (TransportLegDO leg : legs) {
             legMapper.insert(leg);
         }
@@ -459,7 +466,35 @@ public class MultiLegServiceImpl implements MultiLegService {
      * 2. **必须无时间冲突**：车辆/司机在该时段已被其他段占用则跳过该绑定；
      * 3. 全部绑定都冲突 → 保持"已规划/未分配"，由人工改派（并在日志中明确提示，绝不硬塞冲突车辆）。
      */
-    private void assignVehicles(List<TransportLegDO> legs) {
+    private void assignVehicles(List<TransportLegDO> legs, Long orderId, Long planId,
+                                Long planVehicleId, Long planDriverId) {
+        // 优先采用**调度算法给出的车辆/司机分配**（transport_dispatch_plan_item）：
+        // 算法会把同一片区的多张订单拼到同一辆车上（拼单/共载），这里必须沿用它的分配，
+        // 否则会出现"为某一单单独派一辆车"的假象，与真实运营（一车多单）不符。
+        java.util.Map<Long, cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO> byStation =
+                new java.util.HashMap<>();
+        // 该订单在算法方案里所属的车辆（取派送明细中最靠前的一条）：拼单共载时用它给取货段派车
+        cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO orderVehicleItem = null;
+        if (dispatchPlanItemMapper != null && orderId != null) {
+            List<cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO> items =
+                    dispatchPlanItemMapper.selectList(
+                            new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX
+                                    <cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO>()
+                                    .eq(cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getOrderId, orderId)
+                                    .eqIfPresent(cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getPlanId, planId));
+            items.stream().filter(i -> i.getStationId() != null).forEach(i -> byStation.putIfAbsent(i.getStationId(), i));
+            orderVehicleItem = items.stream()
+                    .filter(i -> i.getVehicleId() != null)
+                    .min(java.util.Comparator.comparing(
+                            cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getVisitSequence,
+                            java.util.Comparator.nullsLast(Integer::compareTo)))
+                    .orElse(null);
+        }
+        // 调用方（调度）直接传入的算法分配：优先于库内查询（独立事务里查不到未提交的明细）
+        if (orderVehicleItem == null && planVehicleId != null) {
+            orderVehicleItem = cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO.builder()
+                    .orderId(orderId).planId(planId).vehicleId(planVehicleId).driverId(planDriverId).build();
+        }
         if (driverVehicleMapper == null) {
             return;
         }
@@ -470,6 +505,29 @@ public class MultiLegServiceImpl implements MultiLegService {
         List<TransportLegDO> assigned = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
             TransportLegDO leg = legs.get(i);
+            // 1) 算法已分配（该订单在该经停上的车辆/司机）→ 直接沿用（实现"一车多单"）
+            var planned = byStation.get(leg.getFromStationId());
+            if (planned == null && !Boolean.TRUE.equals(leg.getHandoverRequired())) {
+                // 最后一段：取"算法分配给该订单送达站"的车辆（一车多单继续沿用同一辆车）
+                planned = byStation.get(leg.getToStationId());
+            }
+            if (planned == null && i == 0) {
+                // 取货段：算法把取货视作"场站预装"（明细里只有派送站）→ 用该订单所属车辆，
+                // 这样同一辆车上的多张订单在取货段就落在同一辆车上（真实拼单，不是专车）
+                planned = orderVehicleItem;
+            }
+            // 注意：这里**不做时段冲突判断**——算法在派单时已按容量/时间窗校验过，
+            // 而"同一辆车在同一时段承运多张订单"正是拼单/共载的正常形态，再判冲突会把共载挡掉。
+            if (planned != null && planned.getVehicleId() != null) {
+                leg.setVehicleId(planned.getVehicleId());
+                leg.setDriverId(planned.getDriverId());
+                leg.setShiftId(planned.getShiftId());
+                leg.setPlanItemId(planned.getId());
+                leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
+                assigned.add(leg);
+                continue;
+            }
+            // 2) 算法未覆盖（多段中转站没有明细）→ 按人车绑定兜底，并避让时段冲突
             // 相邻段优先用**不同**车辆（换乘的意义，需求 §111：Leg1.vehicle != Leg2.vehicle）：
             // 第一轮只挑"本方案还没用过且无时段冲突"的绑定；没有才退而求其次允许复用。
             java.util.Set<Long> usedVehicles = assigned.stream().map(TransportLegDO::getVehicleId)

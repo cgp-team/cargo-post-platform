@@ -380,9 +380,24 @@ public class DispatchServiceImpl implements DispatchService {
         // 段规划失败不影响已生成的直达方案（多段是增强能力），逐单兜底记录日志。
         List<TransportLegDO> allLegs = new ArrayList<>();
         List<String> reasons = new ArrayList<>();
+        // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
+        Map<Long, Long[]> orderVehicleMap = new HashMap<>();
+        for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+            Long plannedVehicleId = vehiclePlan.getVehicleId();
+            Long plannedDriverId = resolveDriverId(plannedVehicleId);
+            for (AlgorithmRouteStopDTO stop : vehiclePlan.getStops()) {
+                Long businessOrderId = stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null;
+                if (businessOrderId != null) {
+                    orderVehicleMap.putIfAbsent(businessOrderId, new Long[]{plannedVehicleId, plannedDriverId});
+                }
+            }
+        }
         for (Long orderId : pooledIds) {
             try {
-                allLegs.addAll(multiLegService.planLegs(orderId, plan.getId()));
+                Long[] plannedVehicle = orderVehicleMap.get(orderId);
+                allLegs.addAll(multiLegService.planLegs(orderId, plan.getId(),
+                        plannedVehicle != null ? plannedVehicle[0] : null,
+                        plannedVehicle != null ? plannedVehicle[1] : null));
                 MultiLegPlanner.PlanResult preview = multiLegService.preview(orderId);
                 if (!reasons.contains(preview.reason())) {
                     reasons.add(preview.reason());
