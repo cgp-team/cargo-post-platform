@@ -47,6 +47,10 @@
         <div style="width:100%">
           <el-checkbox v-model="formData.dispatchEnabled">开放调度（可作场站/换乘站）</el-checkbox>
         </div>
+        <div style="width:100%;color:#909399;font-size:12px;line-height:1.5">
+          新增站点默认「用户可达=是、车辆可达=否、开放调度=否」：站点创建后**立即**出现在地图与附近公交里，
+          但不会自动加入线路、也不会自动获得车辆权限或调度资格，需要按需显式勾选。
+        </div>
       </el-form-item>
       <el-form-item label="排序" prop="sort">
         <el-input-number v-model="formData.sort" :min="0" style="width:100%" />
@@ -85,8 +89,8 @@ const formData = ref<StationApi.StationVO>({
   sourceType: 'PROJECT',
   stationType: 'CARGO_STATION',
   userAccess: true,
-  vehicleAccess: true,
-  dispatchEnabled: true,
+  vehicleAccess: false,
+  dispatchEnabled: false,
   sort: 0,
   remark: '',
 })
@@ -108,8 +112,8 @@ const resetForm = () => {
     sourceType: 'PROJECT',
     stationType: 'CARGO_STATION',
     userAccess: true,
-    vehicleAccess: true,
-    dispatchEnabled: true,
+    vehicleAccess: false,
+    dispatchEnabled: false,
     sort: 0,
     remark: '',
   }

@@ -110,6 +110,23 @@ class MultiLegPlannerTest {
     }
 
     @Test
+    void station_without_dispatch_enabled_is_not_a_hub() {
+        // 202 未开放调度（新增站点默认值）→ 不能作为换乘站；201→203 只能直达兜底
+        StationDO a = station(201, "南门", 106.5765, 29.5325);
+        StationDO noDispatch = station(202, "新站点", 106.5900, 29.5250);
+        noDispatch.setDispatchEnabled(false);
+        StationDO d = station(203, "学堂湾", 106.6050, 29.5150);
+        List<RouteStationDO> routes = new ArrayList<>();
+        onRoute(routes, 301, 201);
+        onRoute(routes, 301, 202);
+        onRoute(routes, 302, 202);
+        onRoute(routes, 302, 203);
+        MultiLegPlanner.PlanResult r = planner.plan(order(201, 203), a, d, List.of(a, noDispatch, d), routes);
+        assertNotEquals(202L, r.transferStationId(), "未开放调度的站点不能作为换乘站");
+        assertEquals(1, r.legCount());
+    }
+
+    @Test
     void candidates_include_explanation_for_admin() {
         StationDO a = station(201, "南门", 106.5765, 29.5325);
         StationDO hub = station(202, "上新街", 106.5900, 29.5250);

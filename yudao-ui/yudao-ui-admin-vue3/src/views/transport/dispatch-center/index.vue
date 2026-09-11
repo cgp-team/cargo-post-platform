@@ -28,6 +28,12 @@
           <div v-if="!mapReady" style="color:#909399;font-size:12px;margin-top:6px">
             地图未就绪（需后台配置百度地图 Key）；下方运输详情不受影响
           </div>
+          <div class="map-legend">
+            <span><i class="dot station"></i>站点</span>
+            <span><i class="dot vehicle"></i>车辆</span>
+            <span><i class="line"></i>运输段</span>
+            <span><i class="dot hub"></i>换乘站</span>
+          </div>
         </ContentWrap>
         <ContentWrap title="运输详情">
           <el-empty v-if="!topology" description="点击左侧订单池中的订单查看运输链" />
@@ -38,6 +44,7 @@
               <el-tag>段数 {{ topology.totalLegs ?? topology.legs?.length ?? 0 }}</el-tag>
               <el-tag>换乘 {{ topology.transferCount ?? 0 }}</el-tag>
               <el-tag v-if="topology.totalDurationMinutes">预计 {{ topology.totalDurationMinutes }} 分钟</el-tag>
+              <el-button link type="primary" @click="openTopology">查看图形化运输链 ›</el-button>
             </div>
             <el-alert
               v-if="topology.planReason"
@@ -102,6 +109,7 @@ import { loadBaiduMapSdk } from '@/components/Map/src/utils'
 defineOptions({ name: 'TransportDispatchCenter' })
 
 const message = useMessage()
+const router = useRouter()
 const pool = ref<any[]>([])
 const topology = ref<TopologyApi.OrderTopologyVO | null>(null)
 const mapRef = ref<HTMLDivElement>()
@@ -146,6 +154,12 @@ const onSelectOrder = async (row: any) => {
   renderTopology()
 }
 
+/** 跳转到"运输拓扑"页看图形化运输链（带单号直接打开） */
+const openTopology = () => {
+  if (!topology.value?.orderId) return
+  router.push({ path: '/transport/topology', query: { orderId: topology.value.orderId } })
+}
+
 const onReplan = async (leg: any) => {
   try {
     await TopologyApi.replanLeg(leg.id, '调度中心手工重调度')
@@ -166,13 +180,15 @@ const initMap = async () => {
     map.centerAndZoom(new BMapGL.Point(106.5765, 29.5325), 12)
     map.enableScrollWheelZoom(true)
     const data = await MonitoringApi.getMonitoringMapData()
+    // 站点/线路来自地图数据；车辆走独立接口（MonitoringMapDataVO 不含 vehicles）
+    const vehicles = await MonitoringApi.getMonitoringVehicles().catch(() => [])
     ;(data?.stations || []).forEach((s: any) => {
       if (s.longitude == null) return
       const p = new BMapGL.Point(s.longitude, s.latitude)
       map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1565C0', fillColor: '#1565C0', fillOpacity: 0.3 }))
       map.addOverlay(new BMapGL.Label(s.stationName, { position: p, offset: new BMapGL.Size(6, -28) }))
     })
-    ;(data?.vehicles || []).forEach((v: any) => {
+    ;(vehicles || []).forEach((v: any) => {
       if (v.longitude == null) return
       const p = new BMapGL.Point(v.longitude, v.latitude)
       map.addOverlay(new BMapGL.Marker(p))
@@ -197,5 +213,36 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+}
+
+.map-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.map-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.map-legend .dot.station { background: #1565c0; }
+.map-legend .dot.vehicle { background: #2e7d32; }
+.map-legend .dot.hub { background: #c75b2a; }
+
+.map-legend .line {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  background: #2e7d32;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 </style>
