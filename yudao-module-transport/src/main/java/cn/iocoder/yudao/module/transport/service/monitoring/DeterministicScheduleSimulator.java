@@ -9,6 +9,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService;
+import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 
@@ -56,6 +58,17 @@ public class DeterministicScheduleSimulator {
     @Resource private RouteMapper routeMapper;
     @Resource private RouteStationMapper routeStationMapper;
     @Resource private StationMapper stationMapper;
+    /** 真实道路几何（用于让模拟车辆沿道路而非站点连线行驶）；未配置高德 key 时返回 null，自动退化为直线 */
+    @Resource private RoadPolylineService roadPolylineService;
+
+    /**
+     * 路段真实道路几何提供者：给定起终点坐标返回道路点序列（{@code [lng,lat]}），
+     * 不可用返回 null（调用方退化为两点直线，不伪装真实道路）。
+     */
+    @FunctionalInterface
+    public interface RoadGeometryProvider {
+        List<double[]> road(double fromLongitude, double fromLatitude, double toLongitude, double toLatitude);
+    }
 
     /**
      * 批量模拟：返回「有当前班次的车辆 → 位置快照」。无班次/无线路/无坐标的车辆不产出（下游按 OFFLINE 处理）。
@@ -87,7 +100,8 @@ public class DeterministicScheduleSimulator {
                 continue;
             }
             VehicleLocationSnapshot snapshot = compute(vehicle, shift, routeMap.get(shift.getRouteId()),
-                    routeStationMap.getOrDefault(shift.getRouteId(), List.of()), stationMap, now);
+                    routeStationMap.getOrDefault(shift.getRouteId(), List.of()), stationMap, now,
+                    roadPolylineService == null ? null : roadPolylineService::route);
             if (snapshot != null) {
                 result.put(vehicle.getId(), snapshot);
             }
@@ -158,11 +172,28 @@ public class DeterministicScheduleSimulator {
     public static VehicleLocationSnapshot compute(VehicleDO vehicle, ShiftDO shift, RouteDO route,
                                                   List<RouteStationDO> routeStations,
                                                   Map<Long, StationDO> stationMap, LocalTime now) {
+        return compute(vehicle, shift, route, buildPoints(routeStations, stationMap), now, null);
+    }
+
+    /**
+     * 计算单车位置快照（带真实道路几何）：在途时优先沿「上一站→下一站」的真实道路轨迹按里程比例插值，
+     * 道路几何不可用时退化回两点直线插值。
+     */
+    public static VehicleLocationSnapshot compute(VehicleDO vehicle, ShiftDO shift, RouteDO route,
+                                                  List<RouteStationDO> routeStations,
+                                                  Map<Long, StationDO> stationMap, LocalTime now,
+                                                  RoadGeometryProvider geometryProvider) {
+        return compute(vehicle, shift, route, buildPoints(routeStations, stationMap), now, geometryProvider);
+    }
+
+    /** 计算单车位置快照（点位已构建；包内/单测可见） */
+    static VehicleLocationSnapshot compute(VehicleDO vehicle, ShiftDO shift, RouteDO route,
+                                           List<Point> points, LocalTime now,
+                                           RoadGeometryProvider geometryProvider) {
         if (vehicle == null || shift == null || route == null) {
             return null;
         }
-        List<Point> points = buildPoints(routeStations, stationMap);
-        if (points.isEmpty()) {
+        if (points == null || points.isEmpty()) {
             return null;
         }
         int duration = durationMinutes(shift);
@@ -196,8 +227,10 @@ public class DeterministicScheduleSimulator {
             if (elapsed <= next.minutes()) {
                 int span = next.minutes() - prev.minutes();
                 double ratio = span > 0 ? (double) (elapsed - prev.minutes()) / span : 0;
-                double lon = prev.lon() + (next.lon() - prev.lon()) * ratio;
-                double lat = prev.lat() + (next.lat() - prev.lat()) * ratio;
+                // 真实道路优先：沿「上一站→下一站」的道路轨迹按里程比例取点；无道路几何则两点直线
+                double[] onRoad = pointOnRoad(geometryProvider, prev, next, ratio);
+                double lon = onRoad != null ? onRoad[0] : prev.lon() + (next.lon() - prev.lon()) * ratio;
+                double lat = onRoad != null ? onRoad[1] : prev.lat() + (next.lat() - prev.lat()) * ratio;
                 if (elapsed == next.minutes()) { // 恰好到站：当前站即该站，下一站取其后一站
                     Point after = i + 1 < points.size() ? points.get(i + 1) : null;
                     return builder.status(STATUS_IN_TRANSIT).progress(progress).speedKmh(0.0)
@@ -212,6 +245,8 @@ public class DeterministicScheduleSimulator {
                         .longitude(round7(lon)).latitude(round7(lat))
                         .currentStationId(prev.stationId()).currentStationName(prev.name())
                         .nextStationId(next.stationId()).nextStationName(next.name())
+                        .distanceToNextStation(round2(GeoDistanceUtil.haversineKm(
+                                lon, lat, next.lon(), next.lat())))
                         .etaToNextStationMinutes((double) (next.minutes() - elapsed))
                         .build();
             }
@@ -234,6 +269,47 @@ public class DeterministicScheduleSimulator {
                 .routeId(route.getId())
                 .routeCode(route.getRouteCode())
                 .routeName(route.getRouteName());
+    }
+
+    /**
+     * 在「上一站→下一站」的真实道路上按里程比例取点（0=起点，1=终点）。
+     * 道路几何缺失/异常时返回 {@code null}，由调用方退化为两点直线。
+     */
+    static double[] pointOnRoad(RoadGeometryProvider provider, Point from, Point to, double ratio) {
+        if (provider == null) {
+            return null;
+        }
+        List<double[]> road;
+        try {
+            road = provider.road(from.lon(), from.lat(), to.lon(), to.lat());
+        } catch (Exception e) {
+            return null;
+        }
+        if (road == null || road.size() < 2) {
+            return null;
+        }
+        double target = Math.max(0, Math.min(1, ratio));
+        double total = 0;
+        double[] cumulative = new double[road.size()];
+        for (int i = 1; i < road.size(); i++) {
+            total += GeoDistanceUtil.haversineKm(road.get(i - 1)[0], road.get(i - 1)[1],
+                    road.get(i)[0], road.get(i)[1]);
+            cumulative[i] = total;
+        }
+        if (total <= 0) {
+            return new double[]{road.get(0)[0], road.get(0)[1]};
+        }
+        double wanted = total * target;
+        for (int i = 1; i < road.size(); i++) {
+            if (wanted <= cumulative[i] || i == road.size() - 1) {
+                double segLen = cumulative[i] - cumulative[i - 1];
+                double t = segLen <= 0 ? 0 : (wanted - cumulative[i - 1]) / segLen;
+                double[] a = road.get(i - 1);
+                double[] b = road.get(i);
+                return new double[]{a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t};
+            }
+        }
+        return null;
     }
 
     /** 线路站点 → 带坐标与累计分钟的点位（无坐标站点跳过；plannedMinutes 缺失沿用上一站） */
@@ -275,6 +351,10 @@ public class DeterministicScheduleSimulator {
 
     private static double round7(double value) {
         return Math.round(value * 1e7) / 1e7;
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100) / 100.0;
     }
 
     /** 线路点位（站点 + 累计计划分钟） */

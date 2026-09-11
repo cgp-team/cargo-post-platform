@@ -31,7 +31,17 @@ public interface ProductOrderService {
     ProductOrderDO get(Long id);
 
     /** 管理端：发货（可关联承运车辆/班次，供小程序溯源） */
-    void ship(Long id, Long vehicleId, Long shiftId);
+    /**
+     * 发货（派单给司机）。
+     *
+     * @param deliverStationId 交付站点（快递集散中心/村级网点）；为空时默认取班次线路终点站
+     */
+    void ship(Long id, Long vehicleId, Long shiftId, Long deliverStationId);
+
+    /** 兼容旧调用：交付站点默认班次线路终点站 */
+    default void ship(Long id, Long vehicleId, Long shiftId) {
+        ship(id, vehicleId, shiftId, null);
+    }
 
     /** 管理端：完成 */
     void complete(Long id);

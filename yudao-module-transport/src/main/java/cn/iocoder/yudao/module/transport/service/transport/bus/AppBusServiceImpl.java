@@ -21,13 +21,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -47,6 +50,8 @@ public class AppBusServiceImpl implements AppBusService {
     @Resource private ShiftMapper shiftMapper;
     @Resource private StationMapper stationMapper;
     @Resource private AlgorithmClient algorithmClient;
+    /** 真实道路几何（高德 Web key 直连，带缓存）：线路道路轨迹的首选来源 */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     /** 附近公交数据源分层：现实公交（高德，可缺省）+ 项目自建线路；各自标注来源，不互相伪装 */
     @Resource private List<TransitProvider> transitProviders;
 
@@ -118,6 +123,10 @@ public class AppBusServiceImpl implements AppBusService {
                             : durationByShiftCode.getOrDefault(v.getShiftCode(), 60);
                     int progress = v.getProgress() != null ? v.getProgress() : 0;
                     vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
+                    // 到下一站的剩余距离/分钟：班次插值直接给出（不依赖算法服务）；
+                    // 无下一站（待发/收车）时保持 null，前端据此显示"待发车/已到终点"
+                    vo.setEtaToNextStationMinutes(v.getEtaToNextStationMinutes());
+                    vo.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
                     return vo;
                 }).toList();
     }
@@ -155,10 +164,35 @@ public class AppBusServiceImpl implements AppBusService {
                 vo.setEndStation(points.get(points.size() - 1).getStationName());
             }
             vo.setBuses(busesByRoute.getOrDefault(route.getRouteName(), List.of()));
-            // 真实道路 polyline（逐段调高德路网，带 5 分钟缓存；不可用时为 null，前端回退站点直线）
-            vo.setRoadPolyline(fetchRoutePolyline(route.getId(), vo.getPoints()));
+            // 真实道路 polyline 改为「按需查询」：见 getLinePolyline(routeId)。
+            // 这里不再逐条线路打高德（真实线网几十条 × 20~40 站会让小程序超时）。
             return vo;
         }).toList();
+    }
+
+    @Override
+    public List<AppBusLineRespVO.RoadPoint> getLinePolyline(Long routeId) {
+        if (routeId == null) {
+            return null;
+        }
+        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
+        if (mapData.getRoutes() == null) {
+            return null;
+        }
+        for (MonitoringMapDataRespVO.Route route : mapData.getRoutes()) {
+            if (!routeId.equals(route.getId()) || route.getPoints() == null) {
+                continue;
+            }
+            List<AppBusLineRespVO.Point> points = route.getPoints().stream().map(p -> {
+                AppBusLineRespVO.Point point = new AppBusLineRespVO.Point();
+                point.setStationName(p.getStationName());
+                point.setLongitude(p.getLongitude());
+                point.setLatitude(p.getLatitude());
+                return point;
+            }).toList();
+            return fetchRoutePolyline(route.getId(), points);
+        }
+        return null;
     }
 
     @Override
@@ -380,7 +414,76 @@ public class AppBusServiceImpl implements AppBusService {
         resp.setDataSource(buses.isEmpty() ? AppBusNearbyRespVO.SOURCE_NONE
                 : (hasReal && hasSimulated ? "MIXED" : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL
                         : AppBusNearbyRespVO.SOURCE_SIMULATED)));
+        fillServiceWindow(resp, mapData, buses);
         return resp;
+    }
+
+    /**
+     * 运营时段信息（前端"当前不在运营时间"如实展示的依据）：
+     * 用附近线路的启用班次推导「是否有车在途 / 下一班几点发车 / 服务时段」。
+     */
+    private void fillServiceWindow(AppBusNearbyRespVO resp, MonitoringMapDataRespVO mapData,
+                                   List<AppBusNearbyRespVO.NearbyBus> buses) {
+        boolean running = buses.stream()
+                .anyMatch(b -> AppBusNearbyRespVO.STATUS_RUNNING.equals(b.getStatus()));
+        resp.setInService(running);
+        if (mapData.getRoutes() == null || mapData.getRoutes().isEmpty()) {
+            return;
+        }
+        // 附近线路名 → 线路编号（现实公交层无项目线路时也至少给出项目线路的时段）
+        Set<String> nearbyNames = new LinkedHashSet<>();
+        if (resp.getLines() != null) {
+            resp.getLines().forEach(l -> {
+                if (l.getRouteName() != null) {
+                    nearbyNames.add(l.getRouteName());
+                }
+            });
+        }
+        Set<Long> routeIds = mapData.getRoutes().stream()
+                .filter(r -> nearbyNames.contains(r.getRouteName()))
+                .map(MonitoringMapDataRespVO.Route::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (routeIds.isEmpty()) {
+            return;
+        }
+        List<ShiftDO> shifts = shiftMapper.selectList().stream()
+                .filter(s -> s.getRouteId() != null && routeIds.contains(s.getRouteId()))
+                .filter(s -> s.getStatus() == null || s.getStatus() == 0)
+                .filter(s -> s.getPlannedDepartureTime() != null)
+                .sorted(Comparator.comparing(ShiftDO::getPlannedDepartureTime))
+                .toList();
+        if (shifts.isEmpty()) {
+            return;
+        }
+        LocalTime now = LocalTime.now();
+        // 服务时段 = 最早发车 ~ 最晚收车（发车 + 计划时长）
+        LocalTime first = shifts.get(0).getPlannedDepartureTime();
+        LocalTime last = shifts.stream()
+                .map(s -> s.getPlannedDepartureTime().plusMinutes(
+                        s.getPlannedDurationMinutes() != null ? s.getPlannedDurationMinutes() : 60))
+                .max(Comparator.naturalOrder()).orElse(first);
+        resp.setServiceWindowText(String.format("%s–%s", hhmm(first), hhmm(last)));
+        // 下一班：优先"今天还没发的最近一班"，没有则取当天最早一班（次日首班）
+        ShiftDO next = shifts.stream()
+                .filter(s -> !s.getPlannedDepartureTime().isBefore(now))
+                .findFirst().orElse(shifts.get(0));
+        resp.setNextDepartureTime(hhmm(next.getPlannedDepartureTime()));
+        resp.setNextDepartureShiftCode(next.getShiftCode());
+        // 兜底：即便还没有车辆快照（如首次加载/班次刚切换），落在任一班次窗口内也算"在运营"
+        if (!Boolean.TRUE.equals(resp.getInService())) {
+            boolean inWindow = shifts.stream().anyMatch(s -> {
+                long elapsed = java.time.Duration.between(s.getPlannedDepartureTime(), now).toMinutes();
+                int duration = s.getPlannedDurationMinutes() != null ? s.getPlannedDurationMinutes() : 60;
+                return elapsed >= 0 && elapsed <= duration;
+            });
+            resp.setInService(inWindow);
+        }
+    }
+
+    /** LocalTime → HH:mm */
+    private static String hhmm(LocalTime time) {
+        return String.format("%02d:%02d", time.getHour(), time.getMinute());
     }
 
     /** 站点 → 途经线路名（项目自建线路；基于已加载线路经停点，无额外查库） */
@@ -487,6 +590,14 @@ public class AppBusServiceImpl implements AppBusService {
      */
     private void fillEta(AppBusNearbyRespVO.NearbyBus bus, MonitoringVehicleRespVO v,
                          Map<String, StationDO> stationByName) {
+        // 班次插值/模拟引擎已给出"到下一站剩余公里 + 分钟"：优先使用（稳定、不依赖算法服务）
+        if (v.getEtaToNextStationMinutes() != null || v.getDistanceToNextStationKm() != null) {
+            bus.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
+            bus.setEtaMinutes(v.getEtaToNextStationMinutes() == null ? null
+                    : (int) Math.max(1, Math.ceil(v.getEtaToNextStationMinutes())));
+            bus.setRouteProvider("SCHEDULE");
+            return;
+        }
         String nextName = v.getNextStationName();
         if (nextName == null || v.getLongitude() == null || v.getLatitude() == null) {
             return;
@@ -560,6 +671,25 @@ public class AppBusServiceImpl implements AppBusService {
             return cached.polyline();
         }
         List<AppBusLineRespVO.RoadPoint> fullPolyline = new ArrayList<>();
+        // 0) 整条线路一次（或多个途经点分组）取真实道路：几十个站逐段请求会拖到几秒~几十秒，
+        //    小程序 10s 超时就报 request:fail timeout；分组串联通常 1~3 次请求即可拿全。
+        List<double[]> stops = new ArrayList<>();
+        for (AppBusLineRespVO.Point point : points) {
+            if (point.getLongitude() != null && point.getLatitude() != null) {
+                stops.add(new double[]{point.getLongitude(), point.getLatitude()});
+            }
+        }
+        List<double[]> through = roadPolylineService == null ? null : roadPolylineService.routeThrough(stops);
+        if (through != null && through.size() >= 2) {
+            List<AppBusLineRespVO.RoadPoint> direct = new ArrayList<>();
+            for (double[] p : through) {
+                direct.add(toRoadPoint(p[0], p[1]));
+            }
+            direct = dedupePolyline(direct);
+            routePolylineCache.put(routeId, new RoutePolylineCache(direct,
+                    System.currentTimeMillis() + 300_000));
+            return direct;
+        }
         for (int i = 0; i < points.size() - 1; i++) {
             AppBusLineRespVO.Point from = points.get(i);
             AppBusLineRespVO.Point to = points.get(i + 1);
@@ -567,6 +697,16 @@ public class AppBusServiceImpl implements AppBusService {
                     || to.getLongitude() == null || to.getLatitude() == null) {
                 continue;
             }
+            // 1) 后端直连高德驾车路网（带 10 分钟缓存）：比算法服务更稳，避免"线路轨迹变直线"
+            List<double[]> road = roadPolylineService == null ? null : roadPolylineService.route(
+                    from.getLongitude(), from.getLatitude(), to.getLongitude(), to.getLatitude());
+            if (road != null && road.size() >= 2) {
+                for (double[] p : road) {
+                    fullPolyline.add(toRoadPoint(p[0], p[1]));
+                }
+                continue;
+            }
+            // 2) 高德不可用：退回算法服务 /route
             try {
                 AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                         .origin(AlgorithmRouteReqDTO.RoutePoint.builder()

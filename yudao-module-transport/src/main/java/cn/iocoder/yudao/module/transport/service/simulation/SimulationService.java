@@ -11,6 +11,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.PlanItemActionEnum;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 
@@ -37,6 +38,8 @@ public class SimulationService {
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private StationMapper stationMapper;
     @Resource private AlgorithmClient algorithmClient;
+    /** 真实道路几何（高德 Web key 直连，带缓存）：优先于算法服务，避免算法不可用时"模拟路线变直线" */
+    @Resource private RoadPolylineService roadPolylineService;
 
     /** 启动某方案某车辆的模拟（Start）。simulationEnabled=false 时引擎内 no-op。 */
     public void start(Long planId, Long vehicleId, double multiplier) {
@@ -141,7 +144,12 @@ public class SimulationService {
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return List.of(new double[]{0, 0}, new double[]{0, 0});
         }
-        List<double[]> polyline = null;
+        // 1) 后端直连高德驾车路网（带 10 分钟缓存，最稳）
+        List<double[]> polyline = roadPolylineService == null ? null : roadPolylineService.route(
+                from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+        // 2) 高德不可用时退回算法服务 /route
+        if (polyline == null) {
         try {
             AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                     .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
@@ -157,6 +165,7 @@ public class SimulationService {
             }
         } catch (Exception ignored) {
             // 算法不可用：走直线兜底
+        }
         }
         if (polyline == null) {
             polyline = List.of(new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},

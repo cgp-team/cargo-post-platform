@@ -1155,3 +1155,8 @@ INSERT IGNORE INTO `simulation_scenario` (`id`, `tenant_id`, `name`, `descriptio
 (7, 0, '临时订单增加', '模拟运行中新增临时订单', 'ORDER_SURGE', 0, b'1', b'1', '{"orderCount":5,"triggerAtPercent":25}', '1', NOW(), '1', NOW(), b'0'),
 (8, 0, '临时订单取消', '模拟运行中取消部分订单', 'ORDER_CANCEL', 0, b'1', b'1', '{"cancelCount":3,"triggerAtPercent":60}', '1', NOW(), '1', NOW(), b'0'),
 (9, 0, '道路异常', '模拟道路施工或事故导致路线变更', 'ROAD_BLOCK', 2, b'1', b'1', '{"triggerAtPercent":45,"durationPercent":10}', '1', NOW(), '1', NOW(), b'0');
+
+-- ---------- V020：商品图片升级为真实图片 URL（本地路径/外链） ----------
+-- 原先 image 为 varchar(32)，只能存 emoji 占位；换成真实商品照片后（外链/本地路径）长度不够。
+-- MODIFY 是幂等的，重复执行安全。
+ALTER TABLE `transport_product` MODIFY COLUMN `image` varchar(255) NOT NULL DEFAULT '' COMMENT '商品图片（本地路径或图片 URL，空=前端占位图）';

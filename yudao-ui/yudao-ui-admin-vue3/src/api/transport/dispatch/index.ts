@@ -196,6 +196,38 @@ export const getDispatchPlan = (id: number): Promise<DispatchPlanRespVO> => {
   return request.get({ url: '/transport/dispatch/plan/get', params: { id } })
 }
 
+/** 方案道路轨迹点（GCJ-02） */
+export interface DispatchRoadmapPoint {
+  longitude?: number
+  latitude?: number
+}
+
+/** 方案分段道路轨迹（上一站 → 本站） */
+export interface DispatchRoadmapSegment {
+  vehicleId?: number
+  visitSequence?: number
+  fromStationId?: number
+  toStationId?: number
+  fromStationName?: string
+  toStationName?: string
+  /** AMAP 真实道路 / EUCLIDEAN 直线兜底 */
+  provider?: string
+  points?: DispatchRoadmapPoint[]
+}
+
+/** 方案真实道路地图数据 */
+export interface DispatchRoadmapRespVO {
+  planId?: number
+  /** AMAP / EUCLIDEAN / MIXED */
+  provider?: string
+  segments?: DispatchRoadmapSegment[]
+}
+
+/** 获取调度方案的真实道路地图数据（按车辆 + 经停序号的每段轨迹） */
+export const getDispatchPlanRoadmap = (id: number): Promise<DispatchRoadmapRespVO> => {
+  return request.get({ url: '/transport/dispatch/plan/roadmap', params: { id } })
+}
+
 /** 审核调度方案 */
 export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
   return request.put({ url: '/transport/dispatch/plan/review', data })

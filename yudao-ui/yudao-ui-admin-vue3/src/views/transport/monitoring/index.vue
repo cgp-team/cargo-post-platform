@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { loadBaiduMapSdk } from '@/components/Map/src/utils'
+import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
 import {
   getMonitoringMapData,
   getMonitoringVehicles,
@@ -165,10 +165,10 @@ const initMap = async () => {
   }
 }
 
-/** 站点坐标均值作为地图中心；无站点时默认成都 */
+/** 站点坐标均值作为地图中心；无站点时默认重庆邮电大学（南山·南岸区） */
 const calcCenter = (stations: MonitoringStationVO[]) => {
   const valid = stations.filter((s) => s.longitude && s.latitude)
-  if (!valid.length) return { lng: 104.0657, lat: 30.5723 }
+  if (!valid.length) return { lng: 106.5765, lat: 29.5325 }
   return {
     lng: valid.reduce((sum, s) => sum + s.longitude, 0) / valid.length,
     lat: valid.reduce((sum, s) => sum + s.latitude, 0) / valid.length
@@ -179,7 +179,9 @@ const drawStations = (stations: MonitoringStationVO[]) => {
   const BMapGL = window.BMapGL
   stations.forEach((station) => {
     if (!station.longitude || !station.latitude) return
-    const point = new BMapGL.Point(station.longitude, station.latitude)
+    // GCJ-02 → BD-09：百度底图不做转换会整体偏约 500m
+    const bd = gcj02ToBd09(station.longitude, station.latitude)
+    const point = new BMapGL.Point(bd.lng, bd.lat)
     map.addOverlay(new BMapGL.Marker(point))
     const label = new BMapGL.Label(station.stationName, {
       position: point,
@@ -201,7 +203,10 @@ const drawRoute = (route: MonitoringRouteVO, color: string) => {
   const BMapGL = window.BMapGL
   const path = route.points
     .filter((p) => p.longitude && p.latitude)
-    .map((p) => new BMapGL.Point(p.longitude, p.latitude))
+    .map((p) => {
+      const bd = gcj02ToBd09(p.longitude!, p.latitude!)
+      return new BMapGL.Point(bd.lng, bd.lat)
+    })
   if (path.length < 2) return
   map.addOverlay(
     new BMapGL.Polyline(path, {
@@ -235,7 +240,8 @@ const refreshVehicleOverlays = (list: MonitoringVehicleVO[]) => {
       removeVehicleOverlay(vehicle.vehicleId)
       return
     }
-    const point = new BMapGL.Point(vehicle.longitude, vehicle.latitude)
+    const vBd = gcj02ToBd09(vehicle.longitude, vehicle.latitude)
+    const point = new BMapGL.Point(vBd.lng, vBd.lat)
     let overlay = vehicleOverlays.get(vehicle.vehicleId)
     if (!overlay) {
       const marker = new BMapGL.Marker(point)
@@ -278,7 +284,8 @@ const removeVehicleOverlay = (vehicleId: number) => {
 /** 点击车辆列表定位到地图 */
 const locateVehicle = (vehicle: MonitoringVehicleVO) => {
   if (!map || vehicle.longitude == null || vehicle.latitude == null) return
-  map.panTo(new window.BMapGL.Point(vehicle.longitude, vehicle.latitude))
+  const bd = gcj02ToBd09(vehicle.longitude, vehicle.latitude)
+  map.panTo(new window.BMapGL.Point(bd.lng, bd.lat))
 }
 
 onMounted(initMap)

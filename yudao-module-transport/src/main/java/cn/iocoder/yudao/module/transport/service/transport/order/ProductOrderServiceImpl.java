@@ -161,7 +161,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
 
     @Override
     @Transactional
-    public void ship(Long id, Long vehicleId, Long shiftId) {
+    public void ship(Long id, Long vehicleId, Long shiftId, Long deliverStationId) {
         ProductOrderDO order = validateExists(id);
         if (!ProductOrderStatusEnum.PENDING_DELIVERY.getStatus().equals(order.getStatus())) {
             throw exception(PRODUCT_ORDER_STATUS_ILLEGAL);
@@ -173,7 +173,8 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         update.setShiftId(shiftId);
         // 司机端任务归属 + 交付站点：发货即派单给"该车绑定的司机"，交付点=班次线路终点站
         update.setDriverId(resolveDriverId(vehicleId));
-        update.setDeliverStationId(resolveDeliverStationId(shiftId));
+        // 交付站点：优先取管理员指定的网点（集散中心/村级站），否则回退班次线路终点站
+        update.setDeliverStationId(deliverStationId != null ? deliverStationId : resolveDeliverStationId(shiftId));
         orderMapper.updateById(update);
     }
 
