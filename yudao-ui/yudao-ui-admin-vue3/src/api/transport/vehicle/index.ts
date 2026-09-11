@@ -12,6 +12,8 @@ export interface VehicleVO {
   cargoCapacity?: number
   insuranceExpireDate?: string
   status?: number
+  /** 实时运营状态：0 空闲 1 在途 2 故障 3 离线（随运输段开始/完成同步） */
+  realtimeStatus?: number
   createTime?: string
 }
 

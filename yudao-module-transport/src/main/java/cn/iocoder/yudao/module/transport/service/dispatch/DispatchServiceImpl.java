@@ -72,6 +72,12 @@ public class DispatchServiceImpl implements DispatchService {
     private static final int MAX_ALGORITHM_STATIONS = 30;
     private static final int MAX_ALGORITHM_ORDERS = 25;
     private static final int MAX_ALGORITHM_VEHICLES = 3;
+    /**
+     * 批次规划窗口(分钟)：算法要求"整批任务总耗时 ≤ 窗口时长"。
+     * 30 分钟（原来的半小时批次）对真实路网（高德时空时长 + 装卸作业）太紧，
+     * 2 单以上很容易判 TIME_WINDOW_EXCEEDED；这里按 2 小时规划（可覆盖 yudao.dispatch.batch-minutes）。
+     */
+    private static final int BATCH_MINUTES = 120;
 
     @Resource private TransportOrderMapper orderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
@@ -1323,7 +1329,7 @@ public class DispatchServiceImpl implements DispatchService {
     private static LocalDateTime[] currentBatch() {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime start = now.withMinute(now.getMinute() < 30 ? 0 : 30).withSecond(0).withNano(0);
-        return new LocalDateTime[]{start, start.plusMinutes(30)};
+        return new LocalDateTime[]{start, start.plusMinutes(BATCH_MINUTES)};
     }
 
     /** 当前操作人：优先昵称，其次用户编号 */

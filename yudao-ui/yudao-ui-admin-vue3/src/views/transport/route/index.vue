@@ -24,6 +24,24 @@
         <el-table-column label="起点站点ID" prop="startStationId" align="center" />
         <el-table-column label="终点站点ID" prop="endStationId" align="center" />
         <el-table-column label="里程(km)" prop="distanceKm" align="center" />
+        <el-table-column label="来源" prop="sourceType" align="center" width="100" />
+        <el-table-column label="服务类型" prop="serviceType" align="center" width="110">
+          <template #default="scope">{{ serviceText(scope.row.serviceType) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" align="center" width="90">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === 1 ? 'danger' : 'success'">
+              {{ scope.row.status === 1 ? '停用' : '启用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="可调度" align="center" width="90">
+          <template #default="scope">
+            <el-tag :type="scope.row.dispatchEnabled === false ? 'info' : 'warning'">
+              {{ scope.row.dispatchEnabled === false ? '否' : '是' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
           <template #default="scope">
@@ -56,6 +74,8 @@ const queryParams = reactive<RouteQueryParams>({
   routeCode: '',
   routeName: '',
 }); const formRef = ref()
+const serviceText = (t?: string) =>
+  t === 'PASSENGER' ? '客运' : (t === 'MIXED' ? '客货邮' : '货运')
 const getList = async () => { loading.value = true; try { const res = await RouteApi.getRoutePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)

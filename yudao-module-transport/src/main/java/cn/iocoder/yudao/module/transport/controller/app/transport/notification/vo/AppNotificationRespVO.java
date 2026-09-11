@@ -30,6 +30,15 @@ public class AppNotificationRespVO {
     @Schema(description = "阅读状态：0未读 1已读")
     private Integer readStatus;
 
+    @Schema(description = "级别：INFO/SUCCESS/ACTION_REQUIRED/WARNING/EXCEPTION（前端据此配色/强提醒）")
+    private String level;
+
+    @Schema(description = "是否需要接收方操作（强提醒）")
+    private Boolean actionRequired;
+
+    @Schema(description = "关联运输段编号")
+    private Long legId;
+
     @Schema(description = "阅读时间")
     private LocalDateTime readTime;
 
