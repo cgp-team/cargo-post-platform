@@ -21,13 +21,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -120,6 +123,10 @@ public class AppBusServiceImpl implements AppBusService {
                             : durationByShiftCode.getOrDefault(v.getShiftCode(), 60);
                     int progress = v.getProgress() != null ? v.getProgress() : 0;
                     vo.setEtaMinutes(Math.max(1, Math.round((100 - progress) / 100.0f * duration)));
+                    // 到下一站的剩余距离/分钟：班次插值直接给出（不依赖算法服务）；
+                    // 无下一站（待发/收车）时保持 null，前端据此显示"待发车/已到终点"
+                    vo.setEtaToNextStationMinutes(v.getEtaToNextStationMinutes());
+                    vo.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
                     return vo;
                 }).toList();
     }
@@ -407,7 +414,76 @@ public class AppBusServiceImpl implements AppBusService {
         resp.setDataSource(buses.isEmpty() ? AppBusNearbyRespVO.SOURCE_NONE
                 : (hasReal && hasSimulated ? "MIXED" : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL
                         : AppBusNearbyRespVO.SOURCE_SIMULATED)));
+        fillServiceWindow(resp, mapData, buses);
         return resp;
+    }
+
+    /**
+     * 运营时段信息（前端"当前不在运营时间"如实展示的依据）：
+     * 用附近线路的启用班次推导「是否有车在途 / 下一班几点发车 / 服务时段」。
+     */
+    private void fillServiceWindow(AppBusNearbyRespVO resp, MonitoringMapDataRespVO mapData,
+                                   List<AppBusNearbyRespVO.NearbyBus> buses) {
+        boolean running = buses.stream()
+                .anyMatch(b -> AppBusNearbyRespVO.STATUS_RUNNING.equals(b.getStatus()));
+        resp.setInService(running);
+        if (mapData.getRoutes() == null || mapData.getRoutes().isEmpty()) {
+            return;
+        }
+        // 附近线路名 → 线路编号（现实公交层无项目线路时也至少给出项目线路的时段）
+        Set<String> nearbyNames = new LinkedHashSet<>();
+        if (resp.getLines() != null) {
+            resp.getLines().forEach(l -> {
+                if (l.getRouteName() != null) {
+                    nearbyNames.add(l.getRouteName());
+                }
+            });
+        }
+        Set<Long> routeIds = mapData.getRoutes().stream()
+                .filter(r -> nearbyNames.contains(r.getRouteName()))
+                .map(MonitoringMapDataRespVO.Route::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (routeIds.isEmpty()) {
+            return;
+        }
+        List<ShiftDO> shifts = shiftMapper.selectList().stream()
+                .filter(s -> s.getRouteId() != null && routeIds.contains(s.getRouteId()))
+                .filter(s -> s.getStatus() == null || s.getStatus() == 0)
+                .filter(s -> s.getPlannedDepartureTime() != null)
+                .sorted(Comparator.comparing(ShiftDO::getPlannedDepartureTime))
+                .toList();
+        if (shifts.isEmpty()) {
+            return;
+        }
+        LocalTime now = LocalTime.now();
+        // 服务时段 = 最早发车 ~ 最晚收车（发车 + 计划时长）
+        LocalTime first = shifts.get(0).getPlannedDepartureTime();
+        LocalTime last = shifts.stream()
+                .map(s -> s.getPlannedDepartureTime().plusMinutes(
+                        s.getPlannedDurationMinutes() != null ? s.getPlannedDurationMinutes() : 60))
+                .max(Comparator.naturalOrder()).orElse(first);
+        resp.setServiceWindowText(String.format("%s–%s", hhmm(first), hhmm(last)));
+        // 下一班：优先"今天还没发的最近一班"，没有则取当天最早一班（次日首班）
+        ShiftDO next = shifts.stream()
+                .filter(s -> !s.getPlannedDepartureTime().isBefore(now))
+                .findFirst().orElse(shifts.get(0));
+        resp.setNextDepartureTime(hhmm(next.getPlannedDepartureTime()));
+        resp.setNextDepartureShiftCode(next.getShiftCode());
+        // 兜底：即便还没有车辆快照（如首次加载/班次刚切换），落在任一班次窗口内也算"在运营"
+        if (!Boolean.TRUE.equals(resp.getInService())) {
+            boolean inWindow = shifts.stream().anyMatch(s -> {
+                long elapsed = java.time.Duration.between(s.getPlannedDepartureTime(), now).toMinutes();
+                int duration = s.getPlannedDurationMinutes() != null ? s.getPlannedDurationMinutes() : 60;
+                return elapsed >= 0 && elapsed <= duration;
+            });
+            resp.setInService(inWindow);
+        }
+    }
+
+    /** LocalTime → HH:mm */
+    private static String hhmm(LocalTime time) {
+        return String.format("%02d:%02d", time.getHour(), time.getMinute());
     }
 
     /** 站点 → 途经线路名（项目自建线路；基于已加载线路经停点，无额外查库） */
@@ -514,6 +590,14 @@ public class AppBusServiceImpl implements AppBusService {
      */
     private void fillEta(AppBusNearbyRespVO.NearbyBus bus, MonitoringVehicleRespVO v,
                          Map<String, StationDO> stationByName) {
+        // 班次插值/模拟引擎已给出"到下一站剩余公里 + 分钟"：优先使用（稳定、不依赖算法服务）
+        if (v.getEtaToNextStationMinutes() != null || v.getDistanceToNextStationKm() != null) {
+            bus.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
+            bus.setEtaMinutes(v.getEtaToNextStationMinutes() == null ? null
+                    : (int) Math.max(1, Math.ceil(v.getEtaToNextStationMinutes())));
+            bus.setRouteProvider("SCHEDULE");
+            return;
+        }
         String nextName = v.getNextStationName();
         if (nextName == null || v.getLongitude() == null || v.getLatitude() == null) {
             return;

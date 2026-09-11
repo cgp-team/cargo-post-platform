@@ -201,6 +201,9 @@ public class MonitoringServiceImpl implements MonitoringService {
                 vo.setDataSource(snapshot.getSource());
                 vo.setNextStationName(snapshot.getNextStationName());
                 vo.setCurrentStationName(snapshot.getCurrentStationName());
+                // 到下一站的剩余距离/分钟：班次插值与模拟引擎直接给出，前端"预计到达下一站"用它
+                vo.setDistanceToNextStationKm(snapshot.getDistanceToNextStation());
+                vo.setEtaToNextStationMinutes(snapshot.getEtaToNextStationMinutes());
                 // 班次/线路/进度：由统一快照直接给出（REAL 上报缺班次时下面再按派单/执行回填）
                 vo.setShiftId(snapshot.getShiftId());
                 vo.setShiftCode(snapshot.getShiftCode());

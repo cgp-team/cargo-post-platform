@@ -121,11 +121,14 @@ INSERT IGNORE INTO transport_postal_order (id, order_id, mail_no, carrier_code, 
 (2, 9, 'YT0987654321', 'YTO', 1, 1.20, 0, '1', NOW(), '1', NOW(), b'0'),
 (3, 10, 'ZT5678901234', 'ZTO', 3, 5.00, 0, '1', NOW(), '1', NOW(), b'0');
 
--- ---------- 农产品商品 ----------
-INSERT IGNORE INTO transport_product (id, name, from_village, price, unit, image, badge, description, stock, status, sort, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
-(1, '高山脆李', '云山村', 68.00, '斤', '🍑', '大巴直通车', '高山生态种植，皮薄肉厚，清甜多汁', 200, 0, 1, 0, '1', NOW(), '1', NOW(), b'0'),
-(2, '土鸡蛋30枚装', '大湾村', 45.00, '箱', '🥚', '大巴直通车', '农家散养土鸡蛋，30枚装', 150, 0, 2, 0, '1', NOW(), '1', NOW(), b'0'),
-(3, '有机红薯粉', '竹林乡', 28.00, '袋', '🍜', '', '传统手工制作，爽滑劲道', 300, 0, 3, 0, '1', NOW(), '1', NOW(), b'0'),
-(4, '野生山核桃', '青山镇', 55.00, '斤', '🥜', '大巴直通车', '深山野生，自然晾晒', 120, 0, 4, 0, '1', NOW(), '1', NOW(), b'0'),
-(5, '明前龙井茶', '云山村', 128.00, '盒', '🍵', '', '清明前采摘，鲜嫩甘醇', 80, 0, 5, 0, '1', NOW(), '1', NOW(), b'0'),
-(6, '农家腊肉', '溪口村', 88.00, '斤', '🥩', '大巴直通车', '柴火熏制，肥而不腻', 60, 0, 6, 0, '1', NOW(), '1', NOW(), b'0');
+-- ---------- 商城商品：重庆特产（真实商品照片） ----------
+-- 照片来源：随小程序包发布的实拍图（miniprogram/images/products/*.jpg），
+-- image 字段同时存图片 URL，便于后台管理端直接展示（随包图片见 miniprogram/utils/product-img.js 的映射）。
+DELETE FROM transport_product WHERE id BETWEEN 1 AND 6;
+INSERT INTO transport_product (id, name, from_village, price, unit, image, badge, description, stock, status, sort, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+(1, '重庆老火锅底料（牛油）', '重庆·南岸', 45.00, '袋', 'https://www.themealdb.com/images/media/meals/uuqvwu1504629254.jpg', '大巴直通车', '牛油熬制，麻辣鲜香，一袋可煮 3~4 人份', 200, 0, 1, 0, '1', NOW(), '1', NOW(), b'0'),
+(2, '重庆小面麻辣调料包', '重庆·渝中', 32.80, '盒', 'https://www.themealdb.com/images/media/meals/pbzcrx1763765096.jpg', '大巴直通车', '手工炒制辣椒油，还原街头小面的味道', 180, 0, 2, 0, '1', NOW(), '1', NOW(), b'0'),
+(3, '涪陵榨菜（鲜脆榨菜丝）', '重庆·涪陵', 15.60, '袋', 'https://www.themealdb.com/images/media/meals/44pjrn1779814409.jpg', '', '百年工艺，鲜脆爽口，佐餐下饭', 300, 0, 3, 0, '1', NOW(), '1', NOW(), b'0'),
+(4, '合川桃片（核桃味）', '重庆·合川', 22.00, '盒', 'https://www.themealdb.com/images/media/meals/t3r3ka1560461972.jpg', '大巴直通车', '糯米核桃薄片，甜而不腻，重庆老字号茶点', 160, 0, 4, 0, '1', NOW(), '1', NOW(), b'0'),
+(5, '江津米花糖', '重庆·江津', 18.80, '袋', 'https://www.themealdb.com/images/media/meals/q47rkb1762324620.jpg', '', '传统手工膨化，酥脆香甜', 220, 0, 5, 0, '1', NOW(), '1', NOW(), b'0'),
+(6, '城口老腊肉（烟熏）', '重庆·城口', 68.00, '斤', 'https://www.themealdb.com/images/media/meals/t1hg8s1780087329.jpg', '大巴直通车', '土猪后腿，柏树枝烟熏，肥而不腻', 90, 0, 6, 0, '1', NOW(), '1', NOW(), b'0');

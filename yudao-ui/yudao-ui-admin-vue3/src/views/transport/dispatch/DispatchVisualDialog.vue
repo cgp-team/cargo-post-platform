@@ -21,9 +21,9 @@
         <!-- 左：地图（加载失败 → 按真实坐标画线路示意图，演示不会中断） -->
         <div class="viz-map-wrap">
           <div ref="mapRef" class="viz-map"></div>
-          <!-- 地图未就绪时用真实坐标画线路示意图覆盖在上层，演示不中断 -->
+          <!-- 地图未就绪 / 手动切到示意图 / 站点缺坐标时，用真实坐标画线路示意图覆盖在上层，演示不中断 -->
           <svg
-            v-if="!mapReady"
+            v-if="!mapReady || showSchematic"
             class="viz-svg viz-svg-overlay"
             viewBox="0 0 1000 620"
             preserveAspectRatio="xMidYMid meet"
@@ -84,8 +84,11 @@
               stroke-width="3"
             />
           </svg>
-          <div v-if="!mapReady" class="viz-map-note">
-            {{ mapError ? '地图不可用，已切换为坐标示意图' : '地图加载中…' }}
+          <div v-if="!mapReady || showSchematic" class="viz-map-note">
+            {{ showSchematic ? '坐标示意图（按真实经纬度比例绘制）' : (mapError ? '地图不可用，已切换为坐标示意图' : '地图加载中…') }}
+          </div>
+          <div v-if="!drawableRoutes.length" class="viz-map-empty">
+            该方案暂无带经纬度的经停站点，无法绘制路线。请在「站点管理」补齐站点经纬度后重新生成方案。
           </div>
           <div class="viz-legend">
             <span class="legend-item"><span class="legend-line real"></span>真实道路</span>
@@ -100,11 +103,40 @@
             </el-button>
             <el-slider v-model="progress" :max="100" :show-tooltip="false" class="viz-slider" @input="onSeek" />
             <span class="viz-progress">{{ progress }}%</span>
+            <el-button size="small" text @click="toggleSchematic">
+              {{ showSchematic ? '切换地图' : '切换示意图' }}
+            </el-button>
           </div>
         </div>
 
         <!-- 右：每车任务段时间线 -->
         <div class="viz-timeline">
+          <!-- 多段联运：哪个订单、在哪一站、交给谁（转运站点工作人员或其他司机） -->
+          <div v-if="linkOrders.length" class="link-card">
+            <div class="link-title">多段联运交接</div>
+            <div v-for="o in linkOrders" :key="o.key" class="link-order">
+              <div class="link-order-head">
+                <span class="link-order-no">订单 {{ o.orderNo }}</span>
+                <span class="link-order-meta">
+                  {{ o.totalLegs }} 段 · 换乘 {{ o.transferCount }} 次
+                  <template v-if="o.durationMinutes"> · 约 {{ o.durationMinutes }} 分钟</template>
+                </span>
+              </div>
+              <div v-for="(leg, i) in o.legs" :key="i" class="link-leg">
+                <span class="link-seq">{{ i + 1 }}</span>
+                <span class="link-leg-text">
+                  {{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
+                  <em v-if="leg.plateNo || leg.driverName">
+                    （{{ leg.plateNo || '车辆' }}<template v-if="leg.driverName"> / {{ leg.driverName }}</template>）
+                  </em>
+                  <template v-if="leg.handoverTarget">
+                    <span class="link-transfer">　⇄ 在 {{ leg.toStationName }} 交给 {{ leg.handoverTarget }}</span>
+                  </template>
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
           <div v-for="route in visibleRoutes" :key="route.key" class="route-card">
             <div class="route-title">
@@ -146,6 +178,7 @@ import * as DispatchApi from '@/api/transport/dispatch'
 import * as DriverApi from '@/api/transport/driver'
 import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
+import * as TopologyApi from '@/api/transport/topology'
 
 defineOptions({ name: 'DispatchVisualDialog' })
 
@@ -186,6 +219,8 @@ const routes = ref<RouteView[]>([])
 const stations = ref<StationApi.StationVO[]>([])
 const vehicles = ref<VehicleApi.VehicleVO[]>([])
 const drivers = ref<DriverApi.DriverVO[]>([])
+/** 方案内订单的运输拓扑（多段联运交接展示用；取不到不影响主流程） */
+const topologies = ref<TopologyApi.OrderTopologyVO[]>([])
 
 /** 车辆配色：多车分色，便于"一车一条线"肉眼区分 */
 const ROUTE_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399']
@@ -235,6 +270,45 @@ const summary = computed(() => {
 const visibleRoutes = computed(() =>
   activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
 )
+
+/** 可绘制（至少 2 个带坐标的经停点）的线路：为空时页面给出明确提示而不是空白地图 */
+const drawableRoutes = computed(() => visibleRoutes.value.filter((r) => r.points.length >= 2))
+
+/** 多段联运交接（按订单）：哪个订单在哪一站交给谁（转运站点工作人员 / 其他司机） */
+const linkOrders = computed(() => {
+  const shown = activePlanId.value
+    ? plans.value.filter((p) => p.id === activePlanId.value)
+    : plans.value
+  const orderIds = new Set<number>()
+  shown.forEach((p) => (p.items ?? []).forEach((i) => i.orderId && orderIds.add(i.orderId)))
+  return topologies.value
+    .filter((t) => t && t.orderId != null && orderIds.has(t.orderId))
+    .map((t) => {
+      const legs = (t.legs ?? []).map((leg, index) => {
+        // 交接对象：本段结束需要交接时，指向下一段的司机（其他司机）或站点工作人员
+        const next = (t.legs ?? [])[index + 1]
+        const handover = (t.handovers ?? []).find((h) => h.stationName && h.stationName === leg.toStationName)
+        let handoverTarget = ''
+        if (leg.handoverRequired || handover) {
+          const toDriver = handover?.toDriverName || next?.driverName
+          const toPlate = handover?.toPlateNo || next?.plateNo
+          handoverTarget = toDriver
+            ? `${toDriver}${toPlate ? `（${toPlate}）` : ''}`
+            : (toPlate ? `车辆 ${toPlate}` : '转运站点工作人员')
+        }
+        return { ...leg, handoverTarget }
+      })
+      return {
+        key: `link-${t.orderId}`,
+        orderId: t.orderId,
+        orderNo: t.orderNo || `#${t.orderId}`,
+        totalLegs: t.totalLegs ?? legs.length,
+        transferCount: t.transferCount ?? 0,
+        durationMinutes: t.totalDurationMinutes,
+        legs
+      }
+    })
+})
 
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
@@ -305,6 +379,8 @@ const buildRoutes = () => {
 const mapRef = ref<HTMLDivElement>()
 const mapReady = ref(false)
 const mapError = ref('')
+/** 手动切换的"坐标示意图"模式：地图加载不出来时也能完整演示（播放同样可用） */
+const showSchematic = ref(false)
 let map: any = null
 const overlays = ref<any[]>([])
 /** 播放用的车头 marker：key = 线路 key */
@@ -340,10 +416,27 @@ const initMap = async () => {
     map = new BMapGL.Map(mapRef.value)
     map.enableScrollWheelZoom()
     mapReady.value = true
+    // 弹窗容器可能是懒渲染出来的，首帧尺寸为 0 会让地图看起来"空白"：
+    // 延迟触发一次 resize + 重画，避免必须手动缩放才能看到底图与线路
+    window.setTimeout(() => {
+      try {
+        if (typeof map.resize === 'function') map.resize()
+        if (mapRef.value && mapRef.value.clientWidth > 0 && typeof map.setViewport === 'function') {
+          redraw()
+        }
+      } catch (e) {
+        console.warn('地图 resize 失败', e)
+      }
+    }, 260)
   } catch (e) {
     console.error('调度可视化地图初始化失败', e)
     mapError.value = '地图初始化失败'
   }
+}
+
+const toggleSchematic = () => {
+  showSchematic.value = !showSchematic.value
+  if (!showSchematic.value && mapReady.value) redraw()
 }
 
 const clearOverlays = () => {
@@ -609,6 +702,13 @@ const load = async () => {
     vehicles.value = vehicleList
     drivers.value = driverList
     plans.value = await Promise.all(props.planIds.map((id) => DispatchApi.getDispatchPlan(id)))
+    // 方案内订单的运输链（多段联运交接：哪个订单在哪交给谁）
+    const orderIds = [...new Set(plans.value.flatMap((p) => (p.items ?? [])
+      .map((i) => i.orderId).filter((id): id is number => id != null)))].slice(0, 10)
+    topologies.value = orderIds.length
+      ? (await Promise.all(orderIds.map((id) => TopologyApi.getTopologyByOrder(id).catch(() => null))))
+          .filter((t): t is TopologyApi.OrderTopologyVO => !!t)
+      : []
     // 真实道路轨迹：一次请求拿到"每车每段"的道路几何（后端带缓存，高德不可用时段落 provider=EUCLIDEAN）
     const roadmaps = await Promise.all(
       props.planIds.map((id) => DispatchApi.getDispatchPlanRoadmap(id).catch(() => null))
@@ -713,6 +813,22 @@ onBeforeUnmount(stopPlay)
   padding: 2px 8px;
   border-radius: 4px;
 }
+.viz-map-empty {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  max-width: 76%;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-color-warning);
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px dashed var(--el-color-warning);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
 .viz-legend {
   position: absolute;
   right: 10px;
@@ -786,6 +902,54 @@ onBeforeUnmount(stopPlay)
   max-height: 520px;
   overflow-y: auto;
   padding-right: 4px;
+}
+.link-card {
+  border: 1px solid #c7d8ea;
+  background: #f5f9ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.link-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #123f6e;
+  margin-bottom: 6px;
+}
+.link-order {
+  margin-bottom: 8px;
+}
+.link-order-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f5e9e;
+}
+.link-order-meta {
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+.link-leg {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+  color: var(--el-text-color-primary);
+}
+.link-seq {
+  color: #1f5e9e;
+  text-align: right;
+}
+.link-leg em {
+  font-style: normal;
+  color: var(--el-text-color-secondary);
+}
+.link-transfer {
+  color: #e6a23c;
+  font-weight: 600;
 }
 .route-card {
   border: 1px solid var(--el-border-color-lighter);

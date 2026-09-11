@@ -63,6 +63,18 @@ public class AppBusNearbyRespVO {
     @Schema(description = "附近线路条数（去重，含现实与项目线路；首页\"附近有 N 条公交线路\"用）")
     private Integer lineCount;
 
+    @Schema(description = "当前是否有车辆在运营时段内（false 时前端如实展示\"当前不在运营时间\"）")
+    private Boolean inService;
+
+    @Schema(description = "下一班发车时间（HH:mm；附近线路当日无可发班次时为空）")
+    private String nextDepartureTime;
+
+    @Schema(description = "下一班发车班次编码")
+    private String nextDepartureShiftCode;
+
+    @Schema(description = "服务时间说明（如 06:30–22:30）")
+    private String serviceWindowText;
+
     @Schema(description = "附近实时车辆")
     @Data
     public static class NearbyBus {
