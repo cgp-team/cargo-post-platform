@@ -245,6 +245,8 @@ public class DeterministicScheduleSimulator {
                         .longitude(round7(lon)).latitude(round7(lat))
                         .currentStationId(prev.stationId()).currentStationName(prev.name())
                         .nextStationId(next.stationId()).nextStationName(next.name())
+                        .distanceToNextStation(round2(GeoDistanceUtil.haversineKm(
+                                lon, lat, next.lon(), next.lat())))
                         .etaToNextStationMinutes((double) (next.minutes() - elapsed))
                         .build();
             }
@@ -349,6 +351,10 @@ public class DeterministicScheduleSimulator {
 
     private static double round7(double value) {
         return Math.round(value * 1e7) / 1e7;
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100) / 100.0;
     }
 
     /** 线路点位（站点 + 累计计划分钟） */

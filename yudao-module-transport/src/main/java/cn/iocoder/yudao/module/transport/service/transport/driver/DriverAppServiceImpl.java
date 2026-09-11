@@ -188,7 +188,7 @@ public class DriverAppServiceImpl implements DriverAppService {
         // 当天班次执行记录（司机维度不限）：有记录时班次状态以执行记录为准，否则保留时钟推导
         Map<Long, ShiftExecutionDO> executionMap = loadTodayExecutionMap(
                 shifts.stream().map(ShiftDO::getId).toList());
-        return shifts.stream().map(shift -> {
+        List<AppDriverShiftRespVO> all = shifts.stream().map(shift -> {
             AppDriverShiftRespVO vo = new AppDriverShiftRespVO();
             vo.setShiftId(shift.getId());
             vo.setShiftCode(shift.getShiftCode());
@@ -209,6 +209,34 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setStops(buildStops(routeStationMap.getOrDefault(shift.getRouteId(), List.of()), stationMap));
             return vo;
         }).toList();
+        // 司机端只展示"与当前时刻相关"的班次：进行中的 + 之后最近 2 班（没有则退回当天最后一班）。
+        // 线路网扩充到几十条班次后，把全部班次一次性铺给司机端既没法用、也和司机实际工作无关。
+        List<AppDriverShiftRespVO> running = all.stream()
+                .filter(s -> Integer.valueOf(1).equals(s.getStatus()))
+                .sorted(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        LocalTime now2 = LocalTime.now();
+        List<AppDriverShiftRespVO> upcoming = all.stream()
+                .filter(s -> s.getPlannedDepartureTime() != null && s.getPlannedDepartureTime().isAfter(now2))
+                .sorted(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime))
+                .limit(2)
+                .toList();
+        List<AppDriverShiftRespVO> result = new ArrayList<>(running);
+        upcoming.forEach(s -> {
+            if (result.stream().noneMatch(r -> Objects.equals(r.getShiftId(), s.getShiftId()))) {
+                result.add(s);
+            }
+        });
+        if (result.isEmpty()) {
+            return all.stream()
+                    .filter(s -> s.getPlannedDepartureTime() != null)
+                    .max(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime))
+                    .map(List::of).orElse(List.of());
+        }
+        result.sort(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime,
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        return result;
     }
 
     @Override

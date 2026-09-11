@@ -34,3 +34,27 @@ export const deleteRoute = (id: number) => {
 export const getSimpleRouteList = (): Promise<RouteVO[]> => {
   return request.get({ url: '/transport/route/simple-list' })
 }
+
+/** 线路经停站点（站序） */
+export interface RouteStationVO {
+  stationId?: number
+  stationName?: string
+  address?: string
+  longitude?: number
+  latitude?: number
+  sequenceNo?: number
+  plannedMinutes?: number
+}
+
+/** 获取线路经停站点序列 */
+export const getRouteStations = (routeId: number): Promise<RouteStationVO[]> => {
+  return request.get({ url: '/transport/route/stations', params: { routeId } })
+}
+
+/** 保存线路经停站点序列（整线覆盖，顺序即数组顺序） */
+export const saveRouteStations = (data: {
+  routeId?: number
+  stations: { stationId: number; plannedMinutes?: number }[]
+}) => {
+  return request.put({ url: '/transport/route/stations', data })
+}
