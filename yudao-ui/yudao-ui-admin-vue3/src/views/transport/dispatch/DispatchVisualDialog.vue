@@ -158,7 +158,9 @@
               <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
                 <span class="stop-seq">{{ i + 1 }}</span>
                 <span class="stop-dot" :class="actionClass(s.actionType)"></span>
-                <span class="stop-act" :class="actionClass(s.actionType)">{{ actionLabel(s.actionType) }}</span>
+                <span class="stop-act" :class="actionClass(s.actionType)">
+                  {{ actionLabel(s.actionType) }}{{ quantityText(s) }}
+                </span>
                 <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
                 <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
                 <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
@@ -305,6 +307,15 @@ const actionClass = (action?: number) =>
           : 'act-seat'
 const timeText = (t?: string) => (t ? t.replace('T', ' ').slice(11, 16) : '')
 
+/** 本站操作数量文案：上车/下车=人数，揽收/派送=件数（没有数量时返回空串） */
+const quantityText = (stop: DispatchApi.DispatchPlanItemVO) => {
+  const q = stop.quantity
+  if (q == null || q <= 0) return ''
+  const action = stop.actionType
+  const unit = action === 0 || action === 1 || action === 2 ? '人' : '件'
+  return ` ${q}${unit}`
+}
+
 const summary = computed(() => {
   const shown = activePlanId.value
     ? plans.value.filter((p) => p.id === activePlanId.value)
@@ -361,9 +372,17 @@ const orderLegRoutes = computed<RouteView[]>(() => {
     const pts = (leg.navigationPolyline ?? [])
       .filter((p) => p.longitude != null && p.latitude != null)
       .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
+    // 运输段落库时若没有真实轨迹（ESTIMATED），先按需向后端补一次真实路网（10 分钟缓存），
+    // 避免订单视角出现"直线虚线"；取到之前先用直连兜底，取到后自动重绘。
+    const key = legKey(leg)
+    const cached = legRoadCache.value.get(key)
+    if (leg.fromLongitude != null && leg.toLongitude != null) {
+      ensureLegRoad(key, leg.fromLongitude, leg.fromLatitude!, leg.toLongitude, leg.toLatitude!)
+    }
     const fallback = leg.fromLongitude != null && leg.toLongitude != null
       ? [{ lng: leg.fromLongitude, lat: leg.fromLatitude! }, { lng: leg.toLongitude, lat: leg.toLatitude! }]
       : []
+    const road = pts.length >= 2 ? pts : (cached && cached.length >= 2 ? cached : fallback)
     return {
       key: `order-${order.orderId}-leg-${index}`,
       planId: plan?.id,
@@ -376,12 +395,41 @@ const orderLegRoutes = computed<RouteView[]>(() => {
       driverText: leg.driverName || '',
       distanceKm: Number(leg.distanceKm || 0),
       distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-',
-      points: pts.length >= 2 ? pts : fallback,
-      realSegments: leg.navigationSource === 'AMAP' ? 1 : 0,
+      points: road,
+      realSegments: road === fallback ? 0 : 1,
       totalSegments: 1
     } as RouteView
   }).filter((r) => r.points.length >= 2)
 })
+
+/** 订单分段道路缓存（key = 起终点坐标）与"正在请求"标记，避免重复请求 */
+const legRoadCache = ref<Map<string, { lng: number; lat: number }[]>>(new Map())
+const legRoadPending = new Set<string>()
+const legKey = (leg: TopologyApi.TopologyLeg) =>
+  `${leg.fromLongitude},${leg.fromLatitude}->${leg.toLongitude},${leg.toLatitude}`
+
+/** 按需补取真实道路轨迹（失败静默：保持直连兜底，不阻塞页面） */
+const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLng: number, toLat: number) => {
+  if (legRoadCache.value.has(key) || legRoadPending.has(key)) return
+  legRoadPending.add(key)
+  try {
+    const points = await DispatchApi.getRoadBetween({
+      fromLongitude: fromLng, fromLatitude: fromLat, toLongitude: toLng, toLatitude: toLat
+    })
+    if (points && points.length >= 2) {
+      const next = new Map(legRoadCache.value)
+      next.set(key, points
+        .filter((p) => p.longitude != null && p.latitude != null)
+        .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) })))
+      legRoadCache.value = next
+      redraw()
+    }
+  } catch (e) {
+    /* 高德不可用：保持直连兜底 */
+  } finally {
+    legRoadPending.delete(key)
+  }
+}
 
 /** 地图实际绘制的线路（随视角变化）：总体=全部；按车辆=选中车；按订单=选中单的分段 */
 const mapRoutes = computed<RouteView[]>(() => {
@@ -628,7 +676,8 @@ const drawMap = () => {
       map.addOverlay(marker)
       overlays.value.push(marker)
       const label = new BMapGL.Label(
-        `${index + 1}. ${actionLabel(stop.actionType)} · ${stop.stationName || stationName(stop.stationId)}`,
+        // 地图上把"在哪儿做什么、做多少"标清楚：序号 · 操作(数量) · 站名
+        `${index + 1}. ${actionLabel(stop.actionType)}${quantityText(stop)} · ${stop.stationName || stationName(stop.stationId)}`,
         { position: point, offset: new BMapGL.Size(12, -24) }
       )
       label.setStyle({

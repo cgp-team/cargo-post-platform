@@ -69,6 +69,12 @@ public interface DispatchService {
     DispatchRoadmapRespVO getPlanRoadmap(Long id);
 
     /**
+     * 两点之间的真实道路轨迹（按订单视角画线路用）：高德不可用时返回空列表（前端回退直连并标注估算）。
+     */
+    java.util.List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
+                                                             Double toLongitude, Double toLatitude);
+
+    /**
      * 获得调度方案分页
      */
     PageResult<DispatchPlanDO> getPlanPage(DispatchPlanPageReqVO reqVO);
