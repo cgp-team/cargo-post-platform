@@ -45,10 +45,19 @@ def fetch_around_bus_lines(key: str, location: str, radius: int) -> list[str]:
         if not pois:
             break
         for poi in pois:
+            found = False
             for raw in (poi.get("buslines") or []):
                 name = (raw.get("name") or "").strip()
                 if is_bus_line(name) and name not in lines:
                     lines.append(name)
+                    found = True
+            # 兼容：部分 key/接口版本 buslines 为空数组，途经线路实际写在 address 里
+            # （如 "0321路夜班车;115路;303路;347路区间;..."），这里做兜底解析
+            if not found and poi.get("address"):
+                for name in str(poi["address"]).replace("；", ";").split(";"):
+                    name = name.strip()
+                    if is_bus_line(name) and name not in lines:
+                        lines.append(name)
         page += 1
         time.sleep(0.6)
     return lines

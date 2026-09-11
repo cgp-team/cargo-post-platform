@@ -128,9 +128,24 @@ const loadPool = async () => {
   pool.value = res.list || []
 }
 
+/** 当前订单运输链的覆盖物：切换订单时逐条移除，避免新旧链路叠加 */
+const routeOverlays: any[] = []
+const clearRouteOverlays = () => {
+  if (!map) {
+    routeOverlays.length = 0
+    return
+  }
+  routeOverlays.forEach((o) => {
+    try { map.removeOverlay(o) } catch (e) { /* ignore */ }
+  })
+  routeOverlays.length = 0
+}
+
 const renderTopology = () => {
   if (!map || !topology.value) return
   const BMapGL = (window as any).BMapGL
+  // 切换订单时必须先清掉上一条运输链的覆盖物，否则新旧链路叠在一起（"点另一个订单前一个不消失"）
+  clearRouteOverlays()
   // 站点/轨迹是 GCJ-02，百度底图是 BD-09：不转换会整体偏移数百米（"站点标不准"就是这个原因）
   const pt = (lng: number, lat: number) => {
     const bd = gcj02ToBd09(lng, lat)
@@ -146,17 +161,23 @@ const renderTopology = () => {
     const p2 = pt(l.toLongitude, l.toLatitude!)
     const path = road.length >= 2 ? road : [p1, p2]
     points.push(...path)
-    map.addOverlay(new BMapGL.Polyline(path, {
+    const line = new BMapGL.Polyline(path, {
       // 白色 + 蓝色主题：真实道路实线深蓝，估算段虚线亮蓝
       strokeColor: l.navigationSource === 'AMAP' ? '#1F5E9E' : '#2E7BBF',
       strokeWeight: 5,
       strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
-    }))
+    })
+    map.addOverlay(line)
+    routeOverlays.push(line)
     if (l.handoverRequired) {
-      map.addOverlay(new BMapGL.Marker(p2))
-      map.addOverlay(new BMapGL.Label('换乘站 ' + (l.toStationName || ''), {
+      const marker = new BMapGL.Marker(p2)
+      map.addOverlay(marker)
+      routeOverlays.push(marker)
+      const label = new BMapGL.Label('换乘站 ' + (l.toStationName || ''), {
         position: p2, offset: new BMapGL.Size(10, -30)
-      }))
+      })
+      map.addOverlay(label)
+      routeOverlays.push(label)
     }
   })
   if (points.length) map.setViewport(points)
