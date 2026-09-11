@@ -9,6 +9,8 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanLogDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportHandoverDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
@@ -27,6 +29,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationT
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanLogMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
@@ -43,11 +46,18 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackM
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportHandoverStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
+import cn.iocoder.yudao.module.transport.service.dispatch.HandoverService;
+import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
+import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
+import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
 import cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
@@ -66,6 +76,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants.BAD_REQUEST;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 
 /**
@@ -119,12 +130,17 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
+    @Resource private TransportLegMapper transportLegMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
     @Resource private AlgorithmClient algorithmClient;
     @Resource private SimulationEngine simulationEngine;
+    @Resource private HandoverService handoverService;
+    @Resource private MultiLegService multiLegService;
+    @Resource private OrderEventService orderEventService;
+    @Resource private UserNotificationService userNotificationService;
 
     @Override
     public AppDriverProfileRespVO profile() {
@@ -777,6 +793,9 @@ public class DriverAppServiceImpl implements DriverAppService {
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
+        orderEventService.record(order.getId(), TransportOrderEventTypeEnum.COMPLETED, "货物已妥投，订单完成");
+        userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.COMPLETED,
+                "订单已完成", "您的货物已送达，感谢使用");
     }
 
     // ==================== 商城订单（同理寄货）：司机端装车 → 妥投 ====================
@@ -846,6 +865,9 @@ public class DriverAppServiceImpl implements DriverAppService {
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
+        orderEventService.record(order.getId(), TransportOrderEventTypeEnum.COMPLETED, "邮快件已取件核销，订单完成");
+        userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.COMPLETED,
+                "取件成功", "您的邮快件已取件，感谢使用");
     }
 
     /**
@@ -956,6 +978,265 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setDataSource("NONE");
         }
         return vo;
+    }
+
+    @Override
+    public List<AppDriverHandoverRespVO> handovers(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        return handoverService.getPendingByDriver(driver.getId()).stream()
+                .map(this::toHandoverVO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public void handoverConfirm(AppDriverHandoverConfirmReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        // 归属校验在 service 内完成：接收/交出司机可确认；接收司机未分配时可认领
+        handoverService.confirmHandover(reqVO.getHandoverId(), driver.getId(), reqVO.getPhotoUrl());
+    }
+
+    @Override
+    public List<AppDriverLegRespVO> legs(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        List<TransportLegDO> legs = transportLegMapper.selectListByDriverId(driver.getId());
+        if (legs.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, String> stationNames = stationNames(legs);
+        Map<Long, String> plateNos = plateNos(legs);
+        Map<Long, String> orderNos = orderNos(legs);
+        return legs.stream().map(leg -> toLegVO(leg, stationNames, plateNos, orderNos)).collect(Collectors.toList());
+    }
+
+    @Override
+    public AppDriverLegRespVO currentLeg(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        // 司机只能看到自己"进行中"的段（需求 §56：绝不能把前序段当成自己的起点）
+        List<TransportLegDO> active = transportLegMapper.selectActiveByDriverId(driver.getId());
+        if (active.isEmpty()) {
+            return null;
+        }
+        TransportLegDO leg = active.get(0);
+        List<TransportLegDO> one = List.of(leg);
+        return toLegVO(leg, stationNames(one), plateNos(one), orderNos(one));
+    }
+
+    @Override
+    @Transactional
+    public void legAction(String action, AppDriverLegActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        TransportLegDO leg = multiLegService.getLeg(reqVO.getLegId());
+        // 归属校验：司机只能操作自己的运输段
+        if (!Objects.equals(leg.getDriverId(), driver.getId())) {
+            throw exception(LEG_NOT_ASSIGNED);
+        }
+        switch (action) {
+            case "accept" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.DRIVER_ACCEPTED);
+            case "navigate" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.NAVIGATING);
+            case "arrive-origin" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_ORIGIN);
+            case "load" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.LOADING);
+            case "start" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.IN_TRANSIT);
+            case "arrive-dest" -> arriveDestination(leg);
+            case "handover-start" -> {
+                TransportHandoverDO handover = requireHandoverOfLeg(leg);
+                handoverService.startHandover(handover.getId(), driver.getId());
+            }
+            case "handover-confirm" -> {
+                TransportHandoverDO handover = requireHandoverOfLeg(leg);
+                handoverService.confirmHandover(handover.getId(), driver.getId(), reqVO.getPhotoUrl());
+            }
+            case "complete" -> completeLeg(leg);
+            case "exception" -> reportLegException(leg, reqVO.getRemark());
+            default -> throw exception(BAD_REQUEST);
+        }
+    }
+
+    /** 司机上报异常（车辆故障/道路中断等，需求 §108）：段置异常 + 订单置异常 + 后台告警 */
+    private void reportLegException(TransportLegDO leg, String remark) {
+        multiLegService.forceLegStatus(leg.getId(), TransportLegStatusEnum.EXCEPTION,
+                remark != null ? remark : "司机上报异常");
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                "第 " + leg.getLegSequence() + " 段异常：" + (remark != null ? remark : "司机上报"));
+        userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.EXCEPTION,
+                "运输段异常", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence()
+                        + " 段异常：" + (remark != null ? remark : "司机上报") + "，请重调度",
+                leg.getOrderId(), leg.getId());
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.WARNING, false,
+                "运输异常提醒", "您的货物运输出现异常，平台正在重新调度车辆");
+    }
+
+    /** 到达终点：需换乘 → 通知后序司机接货；最终段 → 派送中并通知用户取货（需求 §60/§86） */
+    private void arriveDestination(TransportLegDO leg) {
+        if (Boolean.TRUE.equals(leg.getHandoverRequired())) {
+            multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_DESTINATION);
+            handoverService.markSourceArrived(leg.getOrderId(), leg.getId());
+            return;
+        }
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_DESTINATION);
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.DELIVERING);
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.DELIVERING);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_ARRIVED,
+                "货物已到达目的服务站，等待用户取货");
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_ARRIVED,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED, true,
+                "货物已到达，请取货", "您的货物已到达目的服务站，请携带取件码前往取货");
+    }
+
+    /** 完成配送/取货：最后一段完成 → 订单完成 + 通知（需求 §6 禁止第一段完成即整单完成） */
+    private void completeLeg(TransportLegDO leg) {
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.COMPLETED);
+        List<TransportLegDO> all = multiLegService.getLegsByOrderId(leg.getOrderId());
+        boolean allDone = all.stream().allMatch(l -> Objects.equals(l.getStatus(),
+                TransportLegStatusEnum.COMPLETED.getStatus()));
+        if (!allDone) {
+            return; // 还有后续段：订单保持"部分完成/运输中"，绝不置完成
+        }
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.COMPLETED);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED, "全部运输段完成，订单完成");
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.SUCCESS, false,
+                "订单已完成", "您的货物已完成全部运输段，感谢使用");
+    }
+
+    private TransportHandoverDO requireHandoverOfLeg(TransportLegDO leg) {
+        TransportHandoverDO handover = handoverService.getByLeg(leg.getId());
+        if (handover == null) {
+            throw exception(HANDOVER_NOT_EXISTS);
+        }
+        return handover;
+    }
+
+    private void updateOrderStatus(Long orderId, TransportOrderStatusEnum target) {
+        TransportOrderDO update = new TransportOrderDO();
+        update.setStatus(target.getStatus());
+        transportOrderMapper.update(update, new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getId, orderId)
+                .notIn(TransportOrderDO::getStatus, TransportOrderStatusEnum.COMPLETED.getStatus(),
+                        TransportOrderStatusEnum.CANCELLED.getStatus()));
+    }
+
+    private AppDriverLegRespVO toLegVO(TransportLegDO leg, Map<Long, String> stationNames,
+                                       Map<Long, String> plateNos, Map<Long, String> orderNos) {
+        AppDriverLegRespVO vo = new AppDriverLegRespVO();
+        vo.setId(leg.getId());
+        vo.setOrderId(leg.getOrderId());
+        vo.setOrderNo(orderNos.get(leg.getOrderId()));
+        vo.setLegSequence(leg.getLegSequence());
+        vo.setFromStationId(leg.getFromStationId());
+        vo.setFromStationName(stationNames.get(leg.getFromStationId()));
+        vo.setToStationId(leg.getToStationId());
+        vo.setToStationName(stationNames.get(leg.getToStationId()));
+        vo.setStatus(leg.getStatus());
+        vo.setStatusName(TransportLegStatusEnum.nameOf(leg.getStatus()));
+        vo.setEstimatedDeparture(leg.getEstimatedDeparture());
+        vo.setEstimatedArrival(leg.getEstimatedArrival());
+        vo.setActualArrival(leg.getActualArrival());
+        vo.setVehicleId(leg.getVehicleId());
+        vo.setPlateNo(plateNos.get(leg.getVehicleId()));
+        vo.setDistanceKm(leg.getDistanceKm());
+        vo.setDurationMinutes(leg.getDurationMinutes());
+        vo.setNavigationSource(leg.getNavigationSource());
+        vo.setHandoverRequired(leg.getHandoverRequired());
+        // 换乘交接信息（需交接的段）
+        if (Boolean.TRUE.equals(leg.getHandoverRequired())) {
+            TransportHandoverDO handover = handoverService.getByLeg(leg.getId());
+            if (handover != null) {
+                vo.setHandoverId(handover.getId());
+                vo.setHandoverStatusName(TransportHandoverStatusEnum.nameOf(handover.getStatus()));
+            }
+        }
+        return vo;
+    }
+
+    private AppDriverHandoverRespVO toHandoverVO(TransportHandoverDO handover) {
+        AppDriverHandoverRespVO vo = new AppDriverHandoverRespVO();
+        vo.setId(handover.getId());
+        vo.setOrderId(handover.getOrderId());
+        vo.setOrderNo(orderNos(handover.getOrderId()));
+        vo.setStationId(handover.getStationId());
+        StationDO station = handover.getStationId() != null ? stationMapper.selectById(handover.getStationId()) : null;
+        vo.setStationName(station != null ? station.getStationName() : null);
+        vo.setFromDriverId(handover.getFromDriverId());
+        vo.setFromDriverName(driverName(handover.getFromDriverId()));
+        vo.setToDriverId(handover.getToDriverId());
+        vo.setToDriverName(driverName(handover.getToDriverId()));
+        vo.setItemCount(handover.getItemCount());
+        vo.setWeightKg(handover.getWeightKg());
+        vo.setPhotoUrl(handover.getPhotoUrl());
+        vo.setStatus(handover.getStatus());
+        vo.setStatusName(TransportHandoverStatusEnum.nameOf(handover.getStatus()));
+        vo.setHandoverTime(handover.getHandoverTime());
+        vo.setRemark(handover.getRemark());
+        if (handover.getOrderId() != null) {
+            CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, handover.getOrderId());
+            vo.setGoodsName(cargo != null ? cargo.getGoodsName() : null);
+            if (vo.getItemCount() == null && cargo != null) {
+                vo.setItemCount(cargo.getItemCount());
+            }
+            if (vo.getWeightKg() == null && cargo != null) {
+                vo.setWeightKg(cargo.getWeightKg());
+            }
+        }
+        return vo;
+    }
+
+    private String orderNos(Long orderId) {
+        if (orderId == null) {
+            return null;
+        }
+        TransportOrderDO order = transportOrderMapper.selectById(orderId);
+        return order != null ? order.getOrderNo() : null;
+    }
+
+    private Map<Long, String> orderNos(List<TransportLegDO> legs) {
+        Set<Long> orderIds = legs.stream().map(TransportLegDO::getOrderId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (orderIds.isEmpty()) {
+            return Map.of();
+        }
+        return transportOrderMapper.selectBatchIds(orderIds).stream()
+                .filter(o -> o.getId() != null)
+                .collect(Collectors.toMap(TransportOrderDO::getId, o -> o.getOrderNo() != null ? o.getOrderNo() : "",
+                        (a, b) -> a));
+    }
+
+    private String driverName(Long driverId) {
+        if (driverId == null) {
+            return null;
+        }
+        DriverDO driver = driverMapper.selectById(driverId);
+        return driver != null ? driver.getName() : null;
+    }
+
+    private Map<Long, String> stationNames(List<TransportLegDO> legs) {
+        Set<Long> stationIds = new HashSet<>();
+        legs.forEach(l -> {
+            if (l.getFromStationId() != null) stationIds.add(l.getFromStationId());
+            if (l.getToStationId() != null) stationIds.add(l.getToStationId());
+        });
+        if (stationIds.isEmpty()) {
+            return Map.of();
+        }
+        return stationMapper.selectBatchIds(stationIds).stream()
+                .filter(s -> s.getId() != null)
+                .collect(Collectors.toMap(StationDO::getId, s -> s.getStationName() != null ? s.getStationName() : "",
+                        (a, b) -> a));
+    }
+
+    private Map<Long, String> plateNos(List<TransportLegDO> legs) {
+        Set<Long> vehicleIds = legs.stream().map(TransportLegDO::getVehicleId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (vehicleIds.isEmpty()) {
+            return Map.of();
+        }
+        return vehicleMapper.selectBatchIds(vehicleIds).stream()
+                .filter(v -> v.getId() != null)
+                .collect(Collectors.toMap(VehicleDO::getId, v -> v.getPlateNo() != null ? v.getPlateNo() : "",
+                        (a, b) -> a));
     }
 
     /**

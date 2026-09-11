@@ -55,6 +55,24 @@ public interface DriverAppService {
     /** 上报车辆实时位置（按车辆 upsert） */
     void reportLocation(AppDriverLocationReqVO reqVO);
 
+    /** 待确认的货物交接任务（多段联运换乘站交接；交出/接收司机均可看到） */
+    List<AppDriverHandoverRespVO> handovers(Long driverId);
+
+    /** 确认货物交接（拍照核验，推进段与订单状态） */
+    void handoverConfirm(AppDriverHandoverConfirmReqVO reqVO);
+
+    /** 我的运输段进度（多段联运：当前司机承运的段） */
+    List<AppDriverLegRespVO> legs(Long driverId);
+
+    /** 当前运输段（司机端任务详情：只返回该司机自己的段，需求 §55~§57） */
+    AppDriverLegRespVO currentLeg(Long driverId);
+
+    /**
+     * 运输段操作（司机端按钮状态机，需求 §58）。
+     * action ∈ accept / navigate / arrive-origin / load / start / arrive-dest / handover-start / handover-confirm / complete
+     */
+    void legAction(String action, AppDriverLegActionReqVO reqVO);
+
     /**
      * 司机车辆当前位置：真实上报位置（REAL）与模拟运营引擎位置（SIMULATED）都返回，
      * 前端按「模拟模式」选择消费哪一路。

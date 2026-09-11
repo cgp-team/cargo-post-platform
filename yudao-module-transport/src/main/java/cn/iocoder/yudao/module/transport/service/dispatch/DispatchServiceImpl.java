@@ -33,6 +33,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmAdapter;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmResultValidator;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.*;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
+import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
@@ -71,6 +72,12 @@ public class DispatchServiceImpl implements DispatchService {
     private static final int MAX_ALGORITHM_STATIONS = 30;
     private static final int MAX_ALGORITHM_ORDERS = 25;
     private static final int MAX_ALGORITHM_VEHICLES = 3;
+    /**
+     * 批次规划窗口(分钟)：算法要求"整批任务总耗时 ≤ 窗口时长"。
+     * 30 分钟（原来的半小时批次）对真实路网（高德时空时长 + 装卸作业）太紧，
+     * 2 单以上很容易判 TIME_WINDOW_EXCEEDED；这里按 2 小时规划（可覆盖 yudao.dispatch.batch-minutes）。
+     */
+    private static final int BATCH_MINUTES = 120;
 
     @Resource private TransportOrderMapper orderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
@@ -88,6 +95,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private DepartureCheckMapper departureCheckMapper;
     @Resource private AlgorithmAdapter algorithmAdapter;
     @Resource private DispatchEstimationService dispatchEstimationService;
+    @Resource private MultiLegService multiLegService;
     @Resource private SocialClientApi socialClientApi;
     @Resource private MemberUserApi memberUserApi;
     @Resource private DriverMapper driverMapper;
@@ -368,6 +376,64 @@ public class DispatchServiceImpl implements DispatchService {
             }
         }
         dispatchEstimationService.estimatePlan(plan.getId(), batch[0], roadSegments);
+        // 多段联运：为方案内每个订单规划运输段（MultiLegPlanner 决定直达/2段/3段），并回写方案聚合字段。
+        // 段规划失败不影响已生成的直达方案（多段是增强能力），逐单兜底记录日志。
+        List<TransportLegDO> allLegs = new ArrayList<>();
+        List<String> reasons = new ArrayList<>();
+        // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
+        Map<Long, Long[]> orderVehicleMap = new HashMap<>();
+        for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+            Long plannedVehicleId = vehiclePlan.getVehicleId();
+            Long plannedDriverId = resolveDriverId(plannedVehicleId);
+            for (AlgorithmRouteStopDTO stop : vehiclePlan.getStops()) {
+                Long businessOrderId = stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null;
+                if (businessOrderId != null) {
+                    orderVehicleMap.putIfAbsent(businessOrderId, new Long[]{plannedVehicleId, plannedDriverId});
+                }
+            }
+        }
+        for (Long orderId : pooledIds) {
+            try {
+                Long[] plannedVehicle = orderVehicleMap.get(orderId);
+                allLegs.addAll(multiLegService.planLegs(orderId, plan.getId(),
+                        plannedVehicle != null ? plannedVehicle[0] : null,
+                        plannedVehicle != null ? plannedVehicle[1] : null));
+                MultiLegPlanner.PlanResult preview = multiLegService.preview(orderId);
+                if (!reasons.contains(preview.reason())) {
+                    reasons.add(preview.reason());
+                }
+            } catch (Exception ex) {
+                log.warn("[createSmartPlan] 订单 {} 运输段规划失败：{}", orderId, ex.getMessage());
+            }
+        }
+        if (!allLegs.isEmpty()) {
+            int transferCount = pooledIds.size() == 0 ? 0 : allLegs.size() - (int) allLegs.stream()
+                    .map(TransportLegDO::getOrderId).distinct().count();
+            // 方案总里程口径统一：各运输段**真实路网里程**之和（Leg 已由高德路网回写；无路网时为估算值）
+            BigDecimal totalLegDistance = allLegs.stream().map(TransportLegDO::getDistanceKm)
+                    .filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            DispatchPlanDO planUpdate = new DispatchPlanDO();
+            planUpdate.setId(plan.getId());
+            planUpdate.setPlanNo(taskNo + "-P" + plan.getId());
+            planUpdate.setPlanningMode(allLegs.size() > pooledIds.size()
+                    ? DispatchPlanningModeEnum.MULTI_LEG.getMode() : DispatchPlanningModeEnum.DIRECT.getMode());
+            planUpdate.setTotalLegCount(allLegs.size());
+            planUpdate.setTransferCount(Math.max(0, transferCount));
+            planUpdate.setPlanReason(String.join("；", reasons));
+            planUpdate.setEstimatedStartTime(allLegs.stream().map(TransportLegDO::getEstimatedDeparture)
+                    .filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(null));
+            planUpdate.setEstimatedArrivalTime(allLegs.stream().map(TransportLegDO::getEstimatedArrival)
+                    .filter(Objects::nonNull).max(LocalDateTime::compareTo).orElse(null));
+            if (totalLegDistance.compareTo(BigDecimal.ZERO) > 0) {
+                planUpdate.setTotalDistance(totalLegDistance);
+            }
+            dispatchPlanMapper.updateById(planUpdate);
+            plan.setPlanNo(planUpdate.getPlanNo());
+            plan.setPlanningMode(planUpdate.getPlanningMode());
+            plan.setTotalLegCount(planUpdate.getTotalLegCount());
+            plan.setTransferCount(planUpdate.getTransferCount());
+            plan.setPlanReason(planUpdate.getPlanReason());
+        }
         return plan.getId();
     }
 
@@ -934,6 +1000,10 @@ public class DispatchServiceImpl implements DispatchService {
         if (depot == null) {
             throw exception(DISPATCH_DEPOT_NOT_EXISTS);
         }
+        // 站点启用 ≠ 可用于调度：手工派单同样要校验"是否开放调度"（不相信前端）
+        if (!StationAccessUtil.dispatchEnabled(depot)) {
+            throw exception(STATION_NOT_DISPATCH_ENABLED);
+        }
         return depot;
     }
 
@@ -1274,7 +1344,7 @@ public class DispatchServiceImpl implements DispatchService {
     private static LocalDateTime[] currentBatch() {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime start = now.withMinute(now.getMinute() < 30 ? 0 : 30).withSecond(0).withNano(0);
-        return new LocalDateTime[]{start, start.plusMinutes(30)};
+        return new LocalDateTime[]{start, start.plusMinutes(BATCH_MINUTES)};
     }
 
     /** 当前操作人：优先昵称，其次用户编号 */

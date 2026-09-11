@@ -7,6 +7,10 @@ export interface RouteVO {
   startStationId?: number
   endStationId?: number
   distanceKm?: number
+  status?: number // 0=启用 1=停用
+  sourceType?: string // REAL / PROJECT
+  serviceType?: string // PASSENGER / CARGO / MIXED
+  dispatchEnabled?: boolean
   createTime?: string
 }
 

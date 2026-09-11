@@ -34,6 +34,13 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="实时状态" align="center" width="100">
+          <template #default="scope">
+            <el-tag :type="realtimeTagType(scope.row.realtimeStatus)" size="small">
+              {{ realtimeText(scope.row.realtimeStatus) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
           <template #default="scope">
@@ -53,6 +60,10 @@ import * as VehicleApi from '@/api/transport/vehicle'
 import VehicleForm from './VehicleForm.vue'
 defineOptions({ name: 'TransportVehicle' })
 const message = useMessage()
+const realtimeText = (s?: number) =>
+  ({ 0: '空闲', 1: '在途', 2: '故障', 3: '离线' } as Record<number, string>)[s ?? 0] || '空闲'
+const realtimeTagType = (s?: number) =>
+  s === 1 ? 'warning' : (s === 2 ? 'danger' : (s === 3 ? 'info' : 'success'))
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])

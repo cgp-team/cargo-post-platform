@@ -33,6 +33,9 @@ public class AppBusLineRespVO {
     @Schema(description = "该线路当前在线车辆")
     private List<AppBusRespVO> buses;
 
+    @Schema(description = "真实道路轨迹（GCJ-02，来自高德路网；算法不可用时为 null，前端回退到 points 直线）")
+    private List<RoadPoint> roadPolyline;
+
     @Schema(description = "线路途经点")
     @Data
     public static class Point {
@@ -48,6 +51,15 @@ public class AppBusLineRespVO {
         private Double latitude;
         @Schema(description = "从线路起点计划分钟数（累计）")
         private Integer plannedMinutes;
+    }
+
+    @Schema(description = "道路轨迹点")
+    @Data
+    public static class RoadPoint {
+        @Schema(description = "经度")
+        private Double longitude;
+        @Schema(description = "纬度")
+        private Double latitude;
     }
 
 }

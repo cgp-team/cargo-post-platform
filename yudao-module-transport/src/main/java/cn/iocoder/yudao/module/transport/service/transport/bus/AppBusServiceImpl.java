@@ -60,6 +60,13 @@ public class AppBusServiceImpl implements AppBusService {
     /** 路线缓存：key = rounded(车辆坐标,4位):下一站id → 共享相同路线的 ETA（节流高德） */
     private final Map<String, RouteEta> etaCache = new ConcurrentHashMap<>();
 
+    /** 线路真实道路 polyline 缓存：key=routeId → 整条线路的道路点序列，TTL 5 分钟（路网几何稳定，无需频繁重算） */
+    private final Map<Long, RoutePolylineCache> routePolylineCache = new ConcurrentHashMap<>();
+
+    /** 线路道路轨迹缓存条目 */
+    private record RoutePolylineCache(List<AppBusLineRespVO.RoadPoint> polyline, long expireAt) {
+    }
+
     /** 路线缓存条目 */
     private record RouteEta(Double distanceKm, Integer etaMinutes, String provider, long expireAt) {
     }
@@ -148,6 +155,8 @@ public class AppBusServiceImpl implements AppBusService {
                 vo.setEndStation(points.get(points.size() - 1).getStationName());
             }
             vo.setBuses(busesByRoute.getOrDefault(route.getRouteName(), List.of()));
+            // 真实道路 polyline（逐段调高德路网，带 5 分钟缓存；不可用时为 null，前端回退站点直线）
+            vo.setRoadPolyline(fetchRoutePolyline(route.getId(), vo.getPoints()));
             return vo;
         }).toList();
     }
@@ -535,6 +544,90 @@ public class AppBusServiceImpl implements AppBusService {
 
     private static Double round2(double value) {
         return Math.round(value * 100) / 100.0;
+    }
+
+    /**
+     * 按站点序列逐段取真实道路 polyline，拼接为整条线路轨迹。
+     * 缓存 5 分钟（路网几何稳定）；某段失败/不可用时该段回退为直线（起终点两点），不伪装真实道路。
+     * 返回 null 表示整条线路无法绘制（少于 2 个有效坐标点）。
+     */
+    private List<AppBusLineRespVO.RoadPoint> fetchRoutePolyline(Long routeId, List<AppBusLineRespVO.Point> points) {
+        if (routeId == null || points == null || points.size() < 2) {
+            return null;
+        }
+        RoutePolylineCache cached = routePolylineCache.get(routeId);
+        if (cached != null && cached.expireAt() > System.currentTimeMillis()) {
+            return cached.polyline();
+        }
+        List<AppBusLineRespVO.RoadPoint> fullPolyline = new ArrayList<>();
+        for (int i = 0; i < points.size() - 1; i++) {
+            AppBusLineRespVO.Point from = points.get(i);
+            AppBusLineRespVO.Point to = points.get(i + 1);
+            if (from.getLongitude() == null || from.getLatitude() == null
+                    || to.getLongitude() == null || to.getLatitude() == null) {
+                continue;
+            }
+            try {
+                AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
+                        .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
+                                .latitude(from.getLatitude()).longitude(from.getLongitude()).build())
+                        .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
+                                .latitude(to.getLatitude()).longitude(to.getLongitude()).build())
+                        .build());
+                if (route != null && Boolean.TRUE.equals(route.getAvailable())
+                        && route.getPolyline() != null && !route.getPolyline().isEmpty()) {
+                    for (AlgorithmRouteRespDTO.PolylinePoint p : route.getPolyline()) {
+                        fullPolyline.add(toRoadPoint(p.getLongitude(), p.getLatitude()));
+                    }
+                } else {
+                    addFallbackPoint(fullPolyline, from);
+                    addFallbackPoint(fullPolyline, to);
+                }
+            } catch (Exception e) {
+                log.debug("[bus-lines] 获取线路{}分段{}->{}道路polyline失败：{}",
+                        routeId, from.getStationName(), to.getStationName(), e.getMessage());
+                addFallbackPoint(fullPolyline, from);
+                addFallbackPoint(fullPolyline, to);
+            }
+        }
+        fullPolyline = dedupePolyline(fullPolyline);
+        if (fullPolyline.isEmpty()) {
+            return null;
+        }
+        routePolylineCache.put(routeId, new RoutePolylineCache(fullPolyline, System.currentTimeMillis() + 300_000));
+        return fullPolyline;
+    }
+
+    private static AppBusLineRespVO.RoadPoint toRoadPoint(Double longitude, Double latitude) {
+        AppBusLineRespVO.RoadPoint rp = new AppBusLineRespVO.RoadPoint();
+        rp.setLongitude(longitude);
+        rp.setLatitude(latitude);
+        return rp;
+    }
+
+    private static void addFallbackPoint(List<AppBusLineRespVO.RoadPoint> list, AppBusLineRespVO.Point point) {
+        if (point.getLongitude() == null || point.getLatitude() == null) {
+            return;
+        }
+        list.add(toRoadPoint(point.getLongitude(), point.getLatitude()));
+    }
+
+    /** 去掉相邻重复点（分段拼接处会出现重复的起终点） */
+    private static List<AppBusLineRespVO.RoadPoint> dedupePolyline(List<AppBusLineRespVO.RoadPoint> polyline) {
+        if (polyline == null || polyline.size() <= 1) {
+            return polyline == null ? new ArrayList<>() : polyline;
+        }
+        List<AppBusLineRespVO.RoadPoint> result = new ArrayList<>();
+        result.add(polyline.get(0));
+        for (int i = 1; i < polyline.size(); i++) {
+            AppBusLineRespVO.RoadPoint prev = result.get(result.size() - 1);
+            AppBusLineRespVO.RoadPoint curr = polyline.get(i);
+            if (!java.util.Objects.equals(prev.getLongitude(), curr.getLongitude())
+                    || !java.util.Objects.equals(prev.getLatitude(), curr.getLatitude())) {
+                result.add(curr);
+            }
+        }
+        return result;
     }
 
 }

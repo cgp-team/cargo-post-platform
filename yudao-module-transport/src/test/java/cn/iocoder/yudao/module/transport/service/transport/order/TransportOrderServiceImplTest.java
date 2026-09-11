@@ -54,6 +54,8 @@ class TransportOrderServiceImplTest {
     @Mock private MemberUserApi memberUserApi;
     @Mock private StationMapper stationMapper;
     @Mock private CargoReviewService cargoReviewService;
+    @Mock private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
+    @Mock private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
 
     private TransportOrderServiceImpl orderService;
 
@@ -67,6 +69,8 @@ class TransportOrderServiceImplTest {
         ReflectionTestUtils.setField(orderService, "memberUserApi", memberUserApi);
         ReflectionTestUtils.setField(orderService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(orderService, "cargoReviewService", cargoReviewService);
+        ReflectionTestUtils.setField(orderService, "orderEventService", orderEventService);
+        ReflectionTestUtils.setField(orderService, "userNotificationService", userNotificationService);
     }
 
     private AppSendOrderCreateReqVO sendReqVO(Long pickup, Long delivery) {
