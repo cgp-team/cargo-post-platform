@@ -3,6 +3,7 @@ package cn.iocoder.yudao.module.transport.service.dispatch;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import org.springframework.stereotype.Service;
 
@@ -45,6 +46,8 @@ public class AutoDispatchPlanner {
         List<StationDO> enabled = stations.stream()
                 .filter(s -> s.getId() != null && s.getLongitude() != null && s.getLatitude() != null)
                 .filter(s -> s.getStatus() == null || s.getStatus() == STATUS_ENABLED)
+                // 站点启用 ≠ 可用于调度：只有 dispatchEnabled=true 的站点才能作为场站（新增站点不会自动成为场站）
+                .filter(StationAccessUtil::dispatchEnabled)
                 .toList();
         if (enabled.isEmpty()) {
             return null;

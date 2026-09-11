@@ -105,6 +105,11 @@ class DriverAppServiceImplTest {
     @Mock private MemberUserApi memberUserApi;
     @Mock private cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderItemMapper productOrderItemMapper;
     @Mock private cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService productOrderService;
+    @Mock private cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper transportLegMapper;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.HandoverService handoverService;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService multiLegService;
+    @Mock private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
+    @Mock private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
 
     private DriverAppServiceImpl driverAppService;
 
@@ -130,6 +135,11 @@ class DriverAppServiceImplTest {
         ReflectionTestUtils.setField(driverAppService, "memberUserApi", memberUserApi);
         ReflectionTestUtils.setField(driverAppService, "productOrderItemMapper", productOrderItemMapper);
         ReflectionTestUtils.setField(driverAppService, "productOrderService", productOrderService);
+        ReflectionTestUtils.setField(driverAppService, "transportLegMapper", transportLegMapper);
+        ReflectionTestUtils.setField(driverAppService, "handoverService", handoverService);
+        ReflectionTestUtils.setField(driverAppService, "multiLegService", multiLegService);
+        ReflectionTestUtils.setField(driverAppService, "orderEventService", orderEventService);
+        ReflectionTestUtils.setField(driverAppService, "userNotificationService", userNotificationService);
     }
 
     @AfterEach

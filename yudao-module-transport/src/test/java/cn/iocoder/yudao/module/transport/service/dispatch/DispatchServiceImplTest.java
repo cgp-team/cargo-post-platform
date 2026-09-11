@@ -76,6 +76,7 @@ class DispatchServiceImplTest {
     @Mock private RouteStationMapper routeStationMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
     @Mock private DispatchEstimationService dispatchEstimationService;
+    @Mock private MultiLegService multiLegService;
 
     private DispatchServiceImpl dispatchService;
 
@@ -98,6 +99,8 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "routeStationMapper", routeStationMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
         ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
+        // 多段联运：mock 的 planLegs 默认返回空列表（不新建运输段），不影响既有直达方案断言
+        ReflectionTestUtils.setField(dispatchService, "multiLegService", multiLegService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
         // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }

@@ -113,10 +113,17 @@ ON DUPLICATE KEY UPDATE
     weight_kg = VALUES(weight_kg),
     volume_m3 = VALUES(volume_m3),
     goods_name = VALUES(goods_name),
+    goods_note = VALUES(goods_note),
     audit_status = VALUES(audit_status),
     review_status = VALUES(review_status),
     pickup_service_mode = VALUES(pickup_service_mode),
+    delivery_service_mode = VALUES(delivery_service_mode),
+    receiver_name = VALUES(receiver_name),
+    receiver_mobile = VALUES(receiver_mobile),
+    receiver_address = VALUES(receiver_address),
     original_address = VALUES(original_address),
+    original_latitude = VALUES(original_latitude),
+    original_longitude = VALUES(original_longitude),
     deleted = b'0';
 
 -- 校验（预期：3 行站点、3 行重邮片区待入池订单）
