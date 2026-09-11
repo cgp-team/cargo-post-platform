@@ -324,7 +324,10 @@ class DispatchServiceImplTest {
                 StationDO.builder().id(13L).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1); // 仅抢占 1/2
 
-        assertThrows(IllegalStateException.class, () -> dispatchService.createSmartPlan(smartReqVO()));
+        // 并发抢占失败：异常统一转成业务可读错误（前端不再只显示"服务器错误，请联系管理员"）
+        var ex = assertThrows(cn.iocoder.yudao.framework.common.exception.ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getMessage() != null && ex.getMessage().contains("智能调度"));
         verify(algorithmAdapter, never()).plan(any());
     }
 
