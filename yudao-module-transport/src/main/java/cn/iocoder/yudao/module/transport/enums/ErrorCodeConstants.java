@@ -82,4 +82,26 @@ public interface ErrorCodeConstants {
     ErrorCode DEVELOPER_MODE_REQUIRED = new ErrorCode(1_005_015_000, "请先开启开发者模式");
     ErrorCode SIMULATION_DISABLED = new ErrorCode(1_005_015_001, "当前环境未开启模拟能力");
     ErrorCode SIMULATION_PERMISSION_DENIED = new ErrorCode(1_005_015_002, "无模拟控制权限");
+    // Multi-Leg（多段联运 / 货物交接 / 订单事件 / 用户通知）
+    ErrorCode LEG_NOT_EXISTS = new ErrorCode(1_005_016_000, "运输段不存在");
+    ErrorCode LEG_STATUS_ILLEGAL = new ErrorCode(1_005_016_001, "运输段当前状态不允许该操作");
+    ErrorCode HANDOVER_NOT_EXISTS = new ErrorCode(1_005_016_002, "交接记录不存在");
+    ErrorCode HANDOVER_STATUS_ILLEGAL = new ErrorCode(1_005_016_003, "交接记录当前状态不允许该操作");
+    ErrorCode HANDOVER_NOT_ASSIGNED = new ErrorCode(1_005_016_004, "该交接记录不属于当前司机");
+    ErrorCode MULTI_LEG_NOT_REQUIRED = new ErrorCode(1_005_016_005, "该订单无需多段联运");
+    ErrorCode NOTIFICATION_NOT_EXISTS = new ErrorCode(1_005_016_006, "通知不存在");
+    ErrorCode NOTIFICATION_NOT_YOURS = new ErrorCode(1_005_016_007, "无权操作该通知");
+    // 站点可达性（用户可达 / 车辆可达 / 可调度，三者独立）
+    ErrorCode STATION_NOT_USER_ACCESSIBLE = new ErrorCode(1_005_016_008, "所选站点用户无法到达，请重新选择");
+    ErrorCode STATION_NOT_VEHICLE_ACCESSIBLE = new ErrorCode(1_005_016_009, "所选站点车辆无法进入，请更换可服务站点");
+    ErrorCode STATION_NOT_DISPATCH_ENABLED = new ErrorCode(1_005_016_010, "所选站点未开放调度，不能作为场站/换乘站");
+    // 运输段状态机 / 交接
+    ErrorCode LEG_NOT_ASSIGNED = new ErrorCode(1_005_016_011, "该运输段不属于当前司机");
+    ErrorCode LEG_TRANSITION_ILLEGAL = new ErrorCode(1_005_016_012, "运输段当前状态不允许该操作：{}");
+    ErrorCode HANDOVER_SOURCE_NOT_ARRIVED = new ErrorCode(1_005_016_013, "前序司机尚未确认到达，不能确认接货");
+    ErrorCode HANDOVER_TIMEOUT = new ErrorCode(1_005_016_014, "交接超时，已标记异常并转人工处理");
+    // 资源时间冲突（车辆/司机不能被两段冲突任务同时占用，需求 §48/§49/§113）
+    ErrorCode VEHICLE_TIME_CONFLICT = new ErrorCode(1_005_016_015, "车辆在该时段已有冲突任务：{}");
+    ErrorCode DRIVER_TIME_CONFLICT = new ErrorCode(1_005_016_016, "司机在该时段已有冲突任务：{}");
+    ErrorCode NO_AVAILABLE_RESOURCE = new ErrorCode(1_005_016_017, "当前无可调度车辆/司机（时段冲突或被占用）");
 }

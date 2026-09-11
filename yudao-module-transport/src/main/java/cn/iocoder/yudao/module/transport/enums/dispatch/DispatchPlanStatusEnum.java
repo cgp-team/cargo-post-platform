@@ -19,7 +19,9 @@ public enum DispatchPlanStatusEnum {
     /** 已完成 */
     COMPLETED(3, "已完成"),
     /** 已作废（审核驳回或人工废弃） */
-    VOID(4, "已作废");
+    VOID(4, "已作废"),
+    /** 执行异常（车辆故障/长时间超时等，需人工介入或重调度） */
+    EXCEPTION(5, "异常");
 
     private final Integer status;
     private final String name;

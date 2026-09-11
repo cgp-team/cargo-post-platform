@@ -15,10 +15,14 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewStatusEnum;
 import cn.iocoder.yudao.module.transport.service.order.CargoReviewResult;
 import cn.iocoder.yudao.module.transport.service.order.CargoReviewService;
 import cn.iocoder.yudao.module.transport.service.order.CargoReviewServiceImpl;
+import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
+import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
+import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +44,8 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_OR
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.SEND_STATIONS_SAME;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_DISABLED;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_EXISTS;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_USER_ACCESSIBLE;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.STATION_NOT_VEHICLE_ACCESSIBLE;
 
 @Service
 @Validated
@@ -52,6 +58,8 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     @Resource private MemberUserApi memberUserApi;
     @Resource private StationMapper stationMapper;
     @Resource private CargoReviewService cargoReviewService;
+    @Resource private OrderEventService orderEventService;
+    @Resource private UserNotificationService userNotificationService;
 
     @Override
     @Transactional
@@ -161,6 +169,11 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         // Phase 2 承运审核：客户提交后先审核，结果决定生命周期（通过→待入池，需操作→待客户操作，
         // 需人工→待审核，拒运→取消）；审核结果与原因码落子表，供小程序实时展示
         applyAutoReview(order, sub);
+        // 订单事件时间线 + 用户通知（事件驱动，供小程序消息中心/后台时间线展示）
+        orderEventService.record(order.getId(), TransportOrderEventTypeEnum.ORDER_CREATED,
+                "寄货订单创建：" + order.getOrderNo());
+        userNotificationService.send(userId, TransportOrderEventTypeEnum.ORDER_CREATED,
+                "寄货订单已提交", "您的订单 " + order.getOrderNo() + " 已提交，正在处理", order.getId());
         return order.getId();
     }
 
@@ -186,10 +199,38 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         }
         cargoOrderMapper.updateById(upd);
         // 主表生命周期流转
+        Integer lifecycle = resolveReviewLifecycle(result.getReviewStatus());
         TransportOrderDO orderUpd = new TransportOrderDO();
         orderUpd.setId(order.getId());
-        orderUpd.setStatus(resolveReviewLifecycle(result.getReviewStatus()));
+        orderUpd.setStatus(lifecycle);
         orderMapper.updateById(orderUpd);
+        // 审核结果事件 + 通知（与生命周期一一对应，事件类型即用户可读的推进节点）
+        recordReviewEvent(order, lifecycle, result);
+    }
+
+    /** 记录自动审核结果事件并推送用户通知（审核通过/需客户操作/待人工/拒运） */
+    private void recordReviewEvent(TransportOrderDO order, Integer lifecycle, CargoReviewResult result) {
+        if (TransportOrderStatusEnum.READY_FOR_POOL.getStatus().equals(lifecycle)) {
+            orderEventService.record(order.getId(), TransportOrderEventTypeEnum.REVIEW_PASSED,
+                    "承运审核通过，已进入待入池（可被智能调度）");
+            userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.REVIEW_PASSED,
+                    "订单审核通过", "您的订单 " + order.getOrderNo() + " 已通过承运审核，等待调度");
+        } else if (TransportOrderStatusEnum.WAITING_CUSTOMER_ACTION.getStatus().equals(lifecycle)) {
+            orderEventService.record(order.getId(), TransportOrderEventTypeEnum.STATION_RECOMMENDED,
+                    "需客户将货物送至就近服务站点后确认：" + CargoReviewServiceImpl.reasonText(result.getReasonCodes()));
+            userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.STATION_RECOMMENDED,
+                    "请确认送货站点", "为完成承运，请将货物送至推荐服务站点并确认");
+        } else if (TransportOrderStatusEnum.PENDING_REVIEW.getStatus().equals(lifecycle)) {
+            orderEventService.record(order.getId(), TransportOrderEventTypeEnum.REVIEW_PASSED,
+                    "需人工审核：" + CargoReviewServiceImpl.reasonText(result.getReasonCodes()));
+            userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.REVIEW_PASSED,
+                    "订单待人工审核", "您的订单正在人工审核，请耐心等待");
+        } else {
+            orderEventService.record(order.getId(), TransportOrderEventTypeEnum.REVIEW_REJECTED,
+                    "承运审核未通过：" + CargoReviewServiceImpl.reasonText(result.getReasonCodes()));
+            userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.REVIEW_REJECTED,
+                    "订单未能承运", "您的订单未通过承运审核：" + CargoReviewServiceImpl.reasonText(result.getReasonCodes()));
+        }
     }
 
     /** 审核结果 → 订单生命周期状态（与 CargoReviewService 契约一致） */
@@ -226,6 +267,13 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         }
         if (station.getStatus() != null && station.getStatus() != 0) {
             throw exception(STATION_DISABLED);
+        }
+        // 站点启用 ≠ 用户可达 ≠ 车辆可达：下单即校验（不相信前端），校园禁行区站点不能作为取/送站
+        if (!StationAccessUtil.userAccessible(station)) {
+            throw exception(STATION_NOT_USER_ACCESSIBLE);
+        }
+        if (!StationAccessUtil.vehicleAccessible(station)) {
+            throw exception(STATION_NOT_VEHICLE_ACCESSIBLE);
         }
     }
 

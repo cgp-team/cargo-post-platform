@@ -26,4 +26,16 @@ public class RouteDO extends TenantBaseDO {
     private Long endStationId;
 
     private BigDecimal distanceKm;
+
+    /** 线路状态：0=启用 1=停用（停用线路不得用于附近公交/地图/调度/导航，需求 §38） */
+    private Integer status;
+
+    /** 数据来源：REAL 现实公交线路 / PROJECT 项目自建货运线路（需求 §11/§12/§13） */
+    private String sourceType;
+
+    /** 服务类型：PASSENGER 客运 / CARGO 货运 / MIXED 客货邮 */
+    private String serviceType;
+
+    /** 是否可用于调度（作干线/接驳线路） */
+    private Boolean dispatchEnabled;
 }

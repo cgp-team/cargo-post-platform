@@ -155,7 +155,9 @@ class AmapDistanceProvider:
             "key": self._key,
             "origin": self._coord(origin),
             "destination": self._coord(destination),
-            "extensions": "base",
+            # 高德驾车路径：extensions=all 才返回 paths[].polyline（真实道路坐标序列）；
+            # extensions=base 只给 distance/duration，polyline 恒为空 → 前端只能画直线。
+            "extensions": "all",
         }
         try:
             response = self._client.get(AMAP_DRIVING_URL, params=params)
@@ -172,7 +174,22 @@ class AmapDistanceProvider:
         distance_m = float(path.get("distance") or 0)
         duration_s = float(path.get("duration") or 0)
         polyline = self._parse_polyline(path.get("polyline") or "")
+        if not polyline:
+            # 高德 v3 驾车 + extensions=all：path 级不返回 polyline，路径点分散在 steps[].polyline，
+            # 逐段拼接后再去重（相邻 step 首尾点重复），否则前端只能画直线。
+            raw = ";".join(str(step.get("polyline") or "") for step in (path.get("steps") or []))
+            polyline = self._dedupe_points(self._parse_polyline(raw))
         return distance_m / 1000.0, duration_s, polyline
+
+    @staticmethod
+    def _dedupe_points(points: list[RoutePoint]) -> list[RoutePoint]:
+        """去掉相邻重复点（相邻 step 的衔接点会重复出现）。"""
+        result: list[RoutePoint] = []
+        for point in points:
+            if result and result[-1].longitude == point.longitude and result[-1].latitude == point.latitude:
+                continue
+            result.append(point)
+        return result
 
     @staticmethod
     def _parse_polyline(raw: str) -> list[RoutePoint]:

@@ -1,0 +1,261 @@
+<template>
+  <ContentWrap title="调度中心（订单池 · 实时地图 · 运输详情 · 事件时间线）">
+    <el-row :gutter="12">
+      <!-- ① 订单池 -->
+      <el-col :span="6">
+        <ContentWrap title="订单池">
+          <el-button size="small" @click="loadPool"><Icon icon="ep:refresh" />刷新</el-button>
+          <el-table
+            :data="pool"
+            highlight-current-row
+            style="margin-top:8px"
+            height="560"
+            size="small"
+            @current-change="onSelectOrder"
+          >
+            <el-table-column label="订单号" prop="orderNo" align="center" show-overflow-tooltip />
+            <el-table-column label="状态" align="center" width="90">
+              <template #default="scope">{{ orderStatusText(scope.row.status) }}</template>
+            </el-table-column>
+          </el-table>
+        </ContentWrap>
+      </el-col>
+
+      <!-- ② 实时地图 + ③ 运输详情 -->
+      <el-col :span="11">
+        <ContentWrap title="实时地图（站点 / 车辆 / 选中订单运输链）">
+          <div ref="mapRef" style="width:100%;height:300px"></div>
+          <div v-if="!mapReady" style="color:#909399;font-size:12px;margin-top:6px">
+            地图未就绪（需后台配置百度地图 Key）；下方运输详情不受影响
+          </div>
+          <div class="map-legend">
+            <span><i class="dot station"></i>站点</span>
+            <span><i class="dot vehicle"></i>车辆</span>
+            <span><i class="line"></i>运输段</span>
+            <span><i class="line dashed"></i>估算段</span>
+            <span><i class="dot hub"></i>换乘站</span>
+          </div>
+        </ContentWrap>
+        <ContentWrap title="运输详情">
+          <el-empty v-if="!topology" description="点击左侧订单池中的订单查看运输链" />
+          <template v-else>
+            <div class="summary">
+              <el-tag>订单 {{ topology.orderNo || topology.orderId }}</el-tag>
+              <el-tag type="warning">{{ topology.planningModeName || '—' }}</el-tag>
+              <el-tag>段数 {{ topology.totalLegs ?? topology.legs?.length ?? 0 }}</el-tag>
+              <el-tag>换乘 {{ topology.transferCount ?? 0 }}</el-tag>
+              <el-tag v-if="topology.totalDurationMinutes">预计 {{ topology.totalDurationMinutes }} 分钟</el-tag>
+              <el-button link type="primary" @click="openTopology">查看图形化运输链 ›</el-button>
+            </div>
+            <el-alert
+              v-if="topology.planReason"
+              :title="'方案说明：' + topology.planReason"
+              type="info"
+              :closable="false"
+              style="margin:8px 0"
+            />
+            <el-table :data="topology.legs || []" size="small" border>
+              <el-table-column label="段" prop="legSequence" align="center" width="50" />
+              <el-table-column label="路线" align="center">
+                <template #default="scope">
+                  {{ scope.row.fromStationName }} → {{ scope.row.toStationName }}
+                </template>
+              </el-table-column>
+              <el-table-column label="司机" prop="driverName" align="center" width="90" />
+              <el-table-column label="车辆" prop="plateNo" align="center" width="120" />
+              <el-table-column label="状态" prop="statusName" align="center" width="100" />
+              <el-table-column label="操作" align="center" width="110">
+                <template #default="scope">
+                  <el-button
+                    v-if="scope.row.status === 99"
+                    link
+                    type="warning"
+                    v-hasPermi="['transport:topology:query']"
+                    @click="onReplan(scope.row)"
+                  >重调度</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
+        </ContentWrap>
+      </el-col>
+
+      <!-- ④ 事件时间线 -->
+      <el-col :span="7">
+        <ContentWrap title="事件时间线">
+          <el-empty v-if="!topology || !(topology.timeline || []).length" description="暂无事件" />
+          <el-timeline v-else>
+            <el-timeline-item
+              v-for="(t, i) in topology.timeline"
+              :key="i"
+              :timestamp="t.eventTime"
+              placement="top"
+            >
+              <b>{{ t.eventTypeName || t.eventType }}</b>
+              <div style="color:#606266;font-size:12px">{{ t.detail }}</div>
+            </el-timeline-item>
+          </el-timeline>
+        </ContentWrap>
+      </el-col>
+    </el-row>
+  </ContentWrap>
+</template>
+
+<script setup lang="ts">
+import * as DispatchApi from '@/api/transport/dispatch'
+import * as TopologyApi from '@/api/transport/topology'
+import * as MonitoringApi from '@/api/transport/monitoring'
+import { loadBaiduMapSdk } from '@/components/Map/src/utils'
+
+defineOptions({ name: 'TransportDispatchCenter' })
+
+const message = useMessage()
+const router = useRouter()
+const pool = ref<any[]>([])
+const topology = ref<TopologyApi.OrderTopologyVO | null>(null)
+const mapRef = ref<HTMLDivElement>()
+const mapReady = ref(false)
+let map: any = null
+
+const ORDER_STATUS: Record<number, string> = {
+  0: '已创建', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消',
+  8: '待入池', 9: '部分完成', 10: '运输中', 11: '换乘中', 12: '派送中', 13: '异常'
+}
+const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS[s] || '—')
+
+const loadPool = async () => {
+  const res = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 100 })
+  pool.value = res.list || []
+}
+
+const renderTopology = () => {
+  if (!map || !topology.value) return
+  const BMapGL = (window as any).BMapGL
+  const legs = topology.value.legs || []
+  const points: any[] = []
+  legs.forEach((l) => {
+    if (l.fromLongitude == null || l.toLongitude == null) return
+    // 真实道路轨迹优先（navigationSource=AMAP）；无则回退站点直连（虚线＝估算，不伪装真实道路）
+    const road = (l.navigationPolyline || []).map((p) => new BMapGL.Point(p.longitude, p.latitude))
+    const p1 = new BMapGL.Point(l.fromLongitude, l.fromLatitude)
+    const p2 = new BMapGL.Point(l.toLongitude, l.toLatitude)
+    const path = road.length >= 2 ? road : [p1, p2]
+    points.push(...path)
+    map.addOverlay(new BMapGL.Polyline(path, {
+      // 白色 + 蓝色主题：真实道路实线深蓝，估算段虚线亮蓝
+      strokeColor: l.navigationSource === 'AMAP' ? '#1F5E9E' : '#2E7BBF',
+      strokeWeight: 5,
+      strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
+    }))
+    if (l.handoverRequired) {
+      map.addOverlay(new BMapGL.Marker(p2))
+      map.addOverlay(new BMapGL.Label('换乘站 ' + (l.toStationName || ''), {
+        position: p2, offset: new BMapGL.Size(10, -30)
+      }))
+    }
+  })
+  if (points.length) map.setViewport(points)
+}
+
+const onSelectOrder = async (row: any) => {
+  if (!row || !row.id) return
+  topology.value = await TopologyApi.getTopologyByOrder(row.id)
+  renderTopology()
+}
+
+/** 跳转到"运输拓扑"页看图形化运输链（带单号直接打开） */
+const openTopology = () => {
+  if (!topology.value?.orderId) return
+  router.push({ path: '/transport/topology', query: { orderId: topology.value.orderId } })
+}
+
+const onReplan = async (leg: any) => {
+  try {
+    await TopologyApi.replanLeg(leg.id, '调度中心手工重调度')
+    message.success('重调度成功')
+    const row = pool.value.find((o) => o.id === topology.value?.orderId)
+    if (row) await onSelectOrder(row)
+  } catch (e) {
+    message.error('重调度失败：当前无可调度车辆/司机')
+  }
+}
+
+const initMap = async () => {
+  try {
+    await loadBaiduMapSdk(15000)
+    const BMapGL = (window as any).BMapGL
+    if (!BMapGL || !mapRef.value) return
+    map = new BMapGL.Map(mapRef.value)
+    map.centerAndZoom(new BMapGL.Point(106.5765, 29.5325), 12)
+    map.enableScrollWheelZoom(true)
+    const data = await MonitoringApi.getMonitoringMapData()
+    // 站点/线路来自地图数据；车辆走独立接口（MonitoringMapDataVO 不含 vehicles）
+    const vehicles = await MonitoringApi.getMonitoringVehicles().catch(() => [])
+    ;(data?.stations || []).forEach((s: any) => {
+      if (s.longitude == null) return
+      const p = new BMapGL.Point(s.longitude, s.latitude)
+      map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1F5E9E', fillColor: '#1F5E9E', fillOpacity: 0.3 }))
+      map.addOverlay(new BMapGL.Label(s.stationName, { position: p, offset: new BMapGL.Size(6, -28) }))
+    })
+    ;(vehicles || []).forEach((v: any) => {
+      if (v.longitude == null) return
+      const p = new BMapGL.Point(v.longitude, v.latitude)
+      map.addOverlay(new BMapGL.Marker(p))
+      map.addOverlay(new BMapGL.Label(v.plateNo || '运输车辆', { position: p, offset: new BMapGL.Size(-20, -30) }))
+    })
+    mapReady.value = true
+    renderTopology()
+  } catch (e) {
+    mapReady.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadPool()
+  initMap()
+})
+</script>
+
+<style scoped>
+.summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.map-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.map-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.map-legend .dot.station { background: #1f5e9e; }
+.map-legend .dot.vehicle { background: #2e7bbf; }
+.map-legend .dot.hub { background: #123f6e; }
+
+.map-legend .line {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  background: #1f5e9e;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.map-legend .line.dashed {
+  background: repeating-linear-gradient(90deg, #2e7bbf 0 4px, transparent 4px 7px);
+}
+</style>
