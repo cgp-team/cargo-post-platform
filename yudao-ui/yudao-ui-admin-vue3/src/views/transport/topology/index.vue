@@ -38,6 +38,42 @@
       </el-table>
     </ContentWrap>
 
+    <ContentWrap v-if="data && (data.legs?.length ?? 0) > 0" title="运输链（图形化）">
+      <div class="chain">
+        <div class="node origin">
+          <div class="n-title">📍 {{ data.originStationName || '起点' }}</div>
+          <div class="n-sub">起点站</div>
+          <div class="n-sub" v-if="data.orderNo">{{ data.orderNo }}</div>
+        </div>
+        <template v-for="(leg, i) in data.legs" :key="leg.id ?? i">
+          <div class="arrow" :class="legClass(leg.status)">━━▶</div>
+          <div class="node leg" :class="legClass(leg.status)">
+            <div class="n-title">第 {{ leg.legSequence }} 段 · {{ leg.statusName }}</div>
+            <div class="n-sub">🚚 {{ leg.driverName || '待分配' }} / {{ leg.plateNo || '待派车' }}</div>
+            <div class="n-sub">{{ leg.fromStationName }} → {{ leg.toStationName }}</div>
+            <div class="n-sub">
+              {{ leg.distanceKm ?? '—' }}km · {{ leg.durationMinutes ?? '—' }}min<template v-if="leg.navigationSource === 'ESTIMATED'"> · 估算</template>
+            </div>
+          </div>
+          <template v-if="handoverAfter(leg)">
+            <div class="arrow hub">⇄</div>
+            <div class="node hub" :class="handoverClass(handoverAfter(leg)!.status)">
+              <div class="n-title">🔄 换乘交接 · {{ handoverAfter(leg)!.statusName }}</div>
+              <div class="n-sub">换乘站：{{ handoverAfter(leg)!.stationName }}</div>
+              <div class="n-sub">
+                {{ handoverAfter(leg)!.fromDriverName || '—' }} → {{ handoverAfter(leg)!.toDriverName || '待接' }}
+              </div>
+            </div>
+          </template>
+        </template>
+        <div class="arrow">━━▶</div>
+        <div class="node dest">
+          <div class="n-title">🏁 {{ data.destinationStationName || '终点' }}</div>
+          <div class="n-sub">目的站</div>
+        </div>
+      </div>
+    </ContentWrap>
+
     <ContentWrap v-if="data" title="运输段">
       <el-table :data="data.legs || []" stripe border>
         <el-table-column label="段" prop="legSequence" align="center" width="70" />
@@ -81,8 +117,26 @@ import * as TopologyApi from '@/api/transport/topology'
 defineOptions({ name: 'TransportTopology' })
 
 const message = useMessage()
+const route = useRoute()
 const orderId = ref<number | undefined>(undefined)
 const data = ref<TopologyApi.OrderTopologyVO | null>(null)
+
+/** 段状态配色：已完成=绿 / 进行中=橙 / 未开始=灰 / 异常=红 */
+const legClass = (status?: number) => {
+  if (status === 11) return 'done'
+  if (status === 99) return 'exception'
+  if (status != null && status >= 7 && status <= 10) return 'doing'
+  return 'todo'
+}
+const handoverClass = (status?: number) => {
+  if (status === 4) return 'done'
+  if (status === 7) return 'exception'
+  if (status === 0 || status === 5) return 'todo'
+  return 'doing'
+}
+/** 换乘交接挂在"来源段目的站"之后（交接站点 = 来源段目的站） */
+const handoverAfter = (leg: TopologyApi.TopologyLeg) =>
+  (data.value?.handovers || []).find((h) => h.stationName && h.stationName === leg.toStationName)
 
 const load = async () => {
   if (!orderId.value) {
@@ -91,6 +145,15 @@ const load = async () => {
   }
   data.value = await TopologyApi.getTopologyByOrder(orderId.value)
 }
+
+onMounted(() => {
+  // 支持从调度中心带单号直接打开
+  const q = Number(route.query.orderId)
+  if (q) {
+    orderId.value = q
+    load()
+  }
+})
 </script>
 
 <style scoped>
@@ -100,4 +163,55 @@ const load = async () => {
   flex-wrap: wrap;
   margin-top: 8px;
 }
+
+/* ==================== 运输链（图形化） ==================== */
+.chain {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.node {
+  min-width: 180px;
+  max-width: 260px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 2px solid #dcdfe6;
+  background: #fafafa;
+}
+
+.node .n-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.node .n-sub {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.5;
+}
+
+.node.origin { border-color: #2e7d32; background: #f1f8f2; }
+.node.dest { border-color: #1565c0; background: #f0f6fc; }
+.node.done { border-color: #67c23a; background: #f0f9eb; }
+.node.doing { border-color: #e6a23c; background: #fdf6ec; }
+.node.todo { border-color: #c0c4cc; background: #fafafa; }
+.node.exception { border-color: #f56c6c; background: #fef0f0; }
+.node.hub { border-style: dashed; border-color: #c75b2a; background: #fff7f0; }
+.node.hub.done { border-style: solid; border-color: #67c23a; background: #f0f9eb; }
+
+.arrow {
+  display: flex;
+  align-items: center;
+  color: #c0c4cc;
+  font-size: 14px;
+}
+
+.arrow.done { color: #67c23a; }
+.arrow.doing { color: #e6a23c; }
+.arrow.exception { color: #f56c6c; }
+.arrow.hub { color: #c75b2a; }
 </style>

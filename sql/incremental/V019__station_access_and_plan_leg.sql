@@ -130,6 +130,12 @@ CALL tr_add_col_if_missing('transport_user_notification','action_required',
 
 DROP PROCEDURE IF EXISTS tr_add_col_if_missing;
 
+-- ---------- 新增站点默认"不开放车辆权限/调度资格"（需求 §34）----------
+-- 说明：上面补列时为兼容历史数据用了 DEFAULT 1（老站点仍可用）；这里把"新行默认值"改为 0，
+-- 不修改任何已有数据，只影响此后 INSERT 未显式给值的新站点。
+ALTER TABLE `transport_station` ALTER COLUMN `vehicle_access` SET DEFAULT b'0';
+ALTER TABLE `transport_station` ALTER COLUMN `dispatch_enabled` SET DEFAULT b'0';
+
 -- ---------- 索引（幂等：已存在则忽略）----------
 SET @idx_exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_leg' AND INDEX_NAME = 'idx_leg_plan');

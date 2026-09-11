@@ -13,18 +13,28 @@
 --     exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}" "${DB_NAME}" < sql/mysql/demo-cqupt-stations.sql
 
 INSERT INTO transport_station
-    (id, station_code, station_name, station_level, longitude, latitude, address, status, tenant_id, creator, updater, deleted)
+    (id, station_code, station_name, station_level, longitude, latitude, address, status,
+     source_type, station_type, user_access, vehicle_access, dispatch_enabled,
+     tenant_id, creator, updater, deleted)
 VALUES
     -- 校园内取货点（村级站点，用户步行可达）
-    (101, 'ST101', '重庆邮电大学站', 2, 106.5765000, 29.5325000, '重庆邮电大学崇文门', 0, 0, '1', '1', b'0'),
+    -- 校内站：用户能到，但运输车辆进不去（vehicle_access=0），也不作调度场站（dispatch_enabled=0）
+    (101, 'ST101', '重庆邮电大学站', 2, 106.5765000, 29.5325000, '重庆邮电大学崇文门', 0,
+     'PROJECT', 'CARGO_STATION', b'1', b'0', b'0', 0, '1', '1', b'0'),
     -- 附近场站（可作调度场站/接驳点）
-    (102, 'ST102', '黄桷垭站', 1, 106.5748000, 29.5370000, '南岸区黄桷垭正街', 0, 0, '1', '1', b'0')
+    (102, 'ST102', '黄桷垭站', 1, 106.5748000, 29.5370000, '南岸区黄桷垭正街', 0,
+     'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name),
     longitude = VALUES(longitude),
     latitude = VALUES(latitude),
     address = VALUES(address),
     status = 0,
+    source_type = VALUES(source_type),
+    station_type = VALUES(station_type),
+    user_access = VALUES(user_access),
+    vehicle_access = VALUES(vehicle_access),
+    dispatch_enabled = VALUES(dispatch_enabled),
     deleted = b'0';
 
 INSERT INTO transport_route
@@ -68,9 +78,12 @@ ON DUPLICATE KEY UPDATE
 --
 -- 时间窗用 NOW() 相对值：算法按时间窗判可行，写死的历史日期会判不可行。
 INSERT INTO transport_station
-    (id, station_code, station_name, station_level, longitude, latitude, address, status, tenant_id, creator, updater, deleted)
+    (id, station_code, station_name, station_level, longitude, latitude, address, status,
+     source_type, station_type, user_access, vehicle_access, dispatch_enabled,
+     tenant_id, creator, updater, deleted)
 VALUES
-    (103, 'ST103', '南山站', 2, 106.5830000, 29.5230000, '南岸区南山植物园路', 0, 0, '1', '1', b'0')
+    (103, 'ST103', '南山站', 2, 106.5830000, 29.5230000, '南岸区南山植物园路', 0,
+     'PROJECT', 'CARGO_STATION', b'1', b'1', b'1', 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     station_name = VALUES(station_name),
     longitude = VALUES(longitude),
