@@ -81,10 +81,39 @@ VALUES
 ON DUPLICATE KEY UPDATE
     item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), goods_name = VALUES(goods_name), deleted = b'0';
 
+-- 用户实际场景：重庆邮电大学明志苑2舍 → 重庆交通大学门口（书本）
+--   明志苑2舍在重邮校内 → 车辆进不去，按可达性规则取最近可服务站点「邮电大学」公交站；
+--   重庆交通大学南岸校区门口的公交站是「七公里」
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (210, 'TPDEMO5', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '七公里' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 18.00, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    status = 8, deleted = b'0';
+
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode, receiver_name, receiver_mobile,
+     receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (210, 210, '文件票据', b'0', 1, 2.00, 0.0080, '书本', '重邮明志苑2舍寄出', 1, 1,
+     'NEAREST_STATION', 'STATION_TO_STATION', '交大收件人', '13900000010', '重庆交通大学门口',
+     '重庆邮电大学明志苑2舍', 29.5310000, 106.6043000, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), goods_name = VALUES(goods_name),
+    original_address = VALUES(original_address), deleted = b'0';
+
 SELECT o.id, o.order_no, ps.station_name AS pickup, ps.source_type AS pickup_src,
        ds.station_name AS delivery, ds.source_type AS delivery_src
 FROM transport_order o
 JOIN transport_station ps ON ps.id = o.pickup_station_id
 JOIN transport_station ds ON ds.id = o.delivery_station_id
-WHERE o.id BETWEEN 201 AND 209
+WHERE o.id BETWEEN 201 AND 210
 ORDER BY o.id;
