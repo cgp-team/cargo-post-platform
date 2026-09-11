@@ -43,6 +43,9 @@ public class AppBusRespVO {
     @Schema(description = "预计到站分钟数（由进度与班次计划时长估算）")
     private Integer etaMinutes;
 
+    @Schema(description = "待发车时距发车分钟数（车未在途时给出；前端显示“N 分钟后发车”，不要写成到站分钟）")
+    private Integer waitDepartureMinutes;
+
     @Schema(description = "预计到达下一站分钟数（班次计划给出，前端“预计 X 分钟到达下一站”用）")
     private Double etaToNextStationMinutes;
 

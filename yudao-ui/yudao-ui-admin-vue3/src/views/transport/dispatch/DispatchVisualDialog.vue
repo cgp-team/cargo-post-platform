@@ -90,6 +90,14 @@
           <div v-if="!drawableRoutes.length" class="viz-map-empty">
             该方案暂无带经纬度的经停站点，无法绘制路线。请在「站点管理」补齐站点经纬度后重新生成方案。
           </div>
+          <!-- 车辆配色图例：演示时一眼看清"哪条线是哪台车" -->
+          <div v-if="visibleRoutes.length" class="viz-vehicle-legend">
+            <div v-for="r in visibleRoutes" :key="'lg-' + r.key" class="legend-vehicle">
+              <span class="legend-vehicle-color" :style="{ background: r.color }"></span>
+              <span class="legend-vehicle-name">{{ r.title }}</span>
+              <span class="legend-vehicle-meta">{{ r.orderCount }} 单 · {{ r.stops.length }} 站</span>
+            </div>
+          </div>
           <div class="viz-legend">
             <span class="legend-item"><span class="legend-line real"></span>真实道路</span>
             <span class="legend-item"><span class="legend-line est"></span>直线估算</span>
@@ -222,8 +230,24 @@ const drivers = ref<DriverApi.DriverVO[]>([])
 /** 方案内订单的运输拓扑（多段联运交接展示用；取不到不影响主流程） */
 const topologies = ref<TopologyApi.OrderTopologyVO[]>([])
 
-/** 车辆配色：多车分色，便于"一车一条线"肉眼区分 */
-const ROUTE_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399']
+/**
+ * 车辆配色：每台车一条线、颜色互不相同，演示时一眼能分清（白+蓝主题下 12 色高对比）。
+ * 颜色数量 ≥ 常见车队规模，超出后循环（并在图例里标出）。
+ */
+const ROUTE_COLORS = [
+  '#1F5E9E', // 深蓝（主色）
+  '#E6A23C', // 橙
+  '#2E9E6B', // 绿
+  '#D9534F', // 红
+  '#7B5BD6', // 紫
+  '#0FA3B1', // 青
+  '#D4801A', // 琥珀
+  '#C2185B', // 玫红
+  '#4A7C1F', // 橄榄绿
+  '#5A6ACF', // 靛蓝
+  '#8D6E63', // 棕
+  '#00838F'  // 深青
+]
 
 const stationName = (id?: number) =>
   id == null ? '' : stations.value.find((s) => s.id === id)?.stationName || ''
@@ -313,6 +337,8 @@ const linkOrders = computed(() => {
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
   const list: RouteView[] = []
+  // 颜色在所有方案间全局递增：保证同屏每台车颜色都不同（原来按方案重置，多车会撞色）
+  let colorIndex = 0
   plans.value.forEach((plan) => {
     const byVehicle = new Map<number, RouteStop[]>()
     ;(plan.items ?? []).forEach((item) => {
@@ -320,7 +346,6 @@ const buildRoutes = () => {
       if (!byVehicle.has(key)) byVehicle.set(key, [])
       byVehicle.get(key)!.push(item)
     })
-    let colorIndex = 0
     byVehicle.forEach((stops, vehicleId) => {
       stops.sort((a, b) => (a.visitSequence ?? 0) - (b.visitSequence ?? 0))
       const orderNos = [...new Set(stops.map((s) => s.orderNo).filter(Boolean) as string[])]
@@ -445,6 +470,25 @@ const clearOverlays = () => {
   moverMarkers.value = {}
 }
 
+/**
+ * 彻底释放地图实例。
+ * Dialog 关闭后容器 DOM 会被销毁重建，而 BMapGL 实例仍指向旧节点 → 再次打开就是空白地图
+ * （"越优化越看不见"就是这个原因）。所以每次关闭都要销毁实例，下次打开重新初始化。
+ */
+const resetMap = () => {
+  try {
+    if (map && typeof map.clearOverlays === 'function') map.clearOverlays()
+  } catch (e) { /* ignore */ }
+  try {
+    if (map && typeof map.destroy === 'function') map.destroy()
+  } catch (e) { /* ignore */ }
+  map = null
+  mapReady.value = false
+  mapError.value = ''
+  overlays.value = []
+  moverMarkers.value = {}
+}
+
 /** 地图上画线路 + 站点标记 + 播放用车辆 marker */
 const drawMap = () => {
   if (!mapReady.value || !map) return
@@ -504,8 +548,11 @@ const drawMap = () => {
       map.addOverlay(marker)
       overlays.value.push(marker)
     })
-    // 车头 marker（播放时沿线路移动）
-    const mover = new BMapGL.Marker(path[0])
+    // 车头 marker（播放时沿线路移动）：用线路同色圆点，播放时也能分清是哪台车
+    const moverIcon = new BMapGL.Icon(moverIconUrl(route.color), new BMapGL.Size(22, 22), {
+      anchor: new BMapGL.Size(11, 11)
+    })
+    const mover = new BMapGL.Marker(path[0], { icon: moverIcon })
     map.addOverlay(mover)
     overlays.value.push(mover)
     moverMarkers.value[route.key] = { marker: mover, path }
@@ -519,6 +566,14 @@ const drawMap = () => {
 const arrowIcon = (color: string) => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
     <path d="M16 3 L27 28 L16 22 L5 28 Z" fill="${color}" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+  </svg>`
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+}
+
+/** 播放中的车头圆点图标（颜色随线路） */
+const moverIconUrl = (color: string) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <circle cx="16" cy="16" r="11" fill="${color}" stroke="#ffffff" stroke-width="4"/>
   </svg>`
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
 }
@@ -692,6 +747,8 @@ const load = async () => {
   if (!props.planIds.length) return
   loading.value = true
   stopPlay()
+  // 每次打开都重建地图实例（上一个实例绑定的 DOM 已被 Dialog 销毁）
+  resetMap()
   try {
     const [stationList, vehicleList, driverList] = await Promise.all([
       StationApi.getSimpleStationList().catch(() => []),
@@ -741,7 +798,10 @@ watch(
   () => props.modelValue,
   (v) => {
     if (v) load()
-    else stopPlay()
+    else {
+      stopPlay()
+      resetMap()
+    }
   }
 )
 // 已在打开状态下切换到另一套方案（如列表里再点一次「可视化」）也要重新加载
@@ -843,6 +903,41 @@ onBeforeUnmount(stopPlay)
   border: 1px solid #c7d8ea;
   border-radius: 6px;
   padding: 3px 8px;
+}
+.viz-vehicle-legend {
+  position: absolute;
+  left: 10px;
+  bottom: 56px;
+  z-index: 3;
+  max-width: 56%;
+  max-height: 40%;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #c7d8ea;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.legend-vehicle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.legend-vehicle-color {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.legend-vehicle-name {
+  color: #123f6e;
+  font-weight: 600;
+}
+.legend-vehicle-meta {
+  color: var(--el-text-color-secondary);
 }
 .viz-legend .legend-item {
   display: inline-flex;
