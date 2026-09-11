@@ -25,6 +25,17 @@ public interface MultiLegService {
      */
     List<TransportLegDO> planLegs(Long orderId, Long planId);
 
+    /**
+     * 规划运输段并**沿用调度算法的车辆/司机分配**（实现"一车多单"拼载）。
+     *
+     * <p>说明：本方法用 REQUIRES_NEW 独立事务写段，读不到调用方事务里尚未提交的
+     * `transport_dispatch_plan_item`，所以由调用方把该订单在算法方案里的车辆/司机直接传入。</p>
+     *
+     * @param planVehicleId 算法分配给该订单的车辆编号（可空）
+     * @param planDriverId  算法分配给该订单的司机编号（可空）
+     */
+    List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId);
+
     /** 只规划不落库（后台"调度结果解释"：候选方案/评分/理由） */
     MultiLegPlanner.PlanResult preview(Long orderId);
 
