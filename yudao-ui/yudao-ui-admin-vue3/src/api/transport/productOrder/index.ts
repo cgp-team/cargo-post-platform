@@ -43,6 +43,8 @@ export interface ProductOrderShipReqVO {
   id: number
   vehicleId?: number
   shiftId?: number
+  /** 交付站点（集散中心/村级网点）：不填则默认班次线路终点站 */
+  deliverStationId?: number
 }
 
 export const getProductOrderPage = (params: PageParam & Partial<ProductOrderVO>) => {

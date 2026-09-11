@@ -14,4 +14,7 @@ public class ProductOrderShipReqVO {
     private Long vehicleId;
     @Schema(description = "承运班次编号(选填,溯源用)")
     private Long shiftId;
+    @Schema(description = "交付站点编号(选填)：快递/包裹的实际交付网点（如「四公里集散中心」「重邮南门货运站」）；" +
+            "不填则默认班次线路终点站")
+    private Long deliverStationId;
 }

@@ -64,7 +64,7 @@ public class ProductOrderController {
     @Operation(summary = "订单发货")
     @PreAuthorize("@ss.hasPermission('transport:product-order:ship')")
     public CommonResult<Boolean> ship(@Valid @RequestBody ProductOrderShipReqVO reqVO) {
-        productOrderService.ship(reqVO.getId(), reqVO.getVehicleId(), reqVO.getShiftId());
+        productOrderService.ship(reqVO.getId(), reqVO.getVehicleId(), reqVO.getShiftId(), reqVO.getDeliverStationId());
         return success(true);
     }
 

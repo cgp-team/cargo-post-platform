@@ -24,6 +24,26 @@
           <el-option v-for="s in shiftOptions" :key="s.id!" :label="shiftLabel(s)" :value="s.id!" />
         </el-select>
       </el-form-item>
+      <el-form-item label="交付站点">
+        <el-select
+          v-model="formData.deliverStationId"
+          placeholder="不选则默认班次线路终点站"
+          filterable
+          clearable
+          style="width:100%"
+        >
+          <el-option
+            v-for="s in stationOptions"
+            :key="s.id!"
+            :label="s.stationName"
+            :value="s.id!"
+          />
+        </el-select>
+        <div class="ship-tip">
+          快递/包裹的实际交付网点（如「四公里交通换乘枢纽站」集散中心、收件地址最近的村级站「重邮南门货运站」）；
+          不选则默认在班次线路终点站交付。
+        </div>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取 消</el-button>
@@ -32,10 +52,21 @@
   </Dialog>
 </template>
 
+<style lang="scss" scoped>
+.ship-tip {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+</style>
+
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
 import * as VehicleApi from '@/api/transport/vehicle'
 import * as ShiftApi from '@/api/transport/shift'
+import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
 
 const message = useMessage()
@@ -52,6 +83,7 @@ const formData = ref<ProductOrderApi.ProductOrderShipReqVO>({
 
 const vehicleOptions = ref<VehicleApi.VehicleVO[]>([])
 const shiftOptions = ref<ShiftApi.ShiftVO[]>([])
+const stationOptions = ref<StationApi.StationVO[]>([])
 
 const shiftLabel = (s: ShiftApi.ShiftVO) =>
   s.plannedDepartureTime ? `${s.shiftCode} ${s.plannedDepartureTime}` : s.shiftCode
@@ -63,11 +95,14 @@ const loadOptions = async () => {
   try {
     shiftOptions.value = await ShiftApi.getSimpleShiftList()
   } catch (e) { /* ignore */ }
+  try {
+    stationOptions.value = await StationApi.getSimpleStationList()
+  } catch (e) { /* ignore */ }
 }
 
 const open = (id: number) => {
   dialogVisible.value = true
-  formData.value = { id, vehicleId: undefined, shiftId: undefined }
+  formData.value = { id, vehicleId: undefined, shiftId: undefined, deliverStationId: undefined }
   formRef.value?.resetFields()
   loadOptions()
 }
