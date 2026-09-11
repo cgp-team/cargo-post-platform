@@ -156,9 +156,10 @@ class DispatchEstimationServiceTest {
         assertEquals(T0.plusMinutes(2 + 3 + 3 + 3 + 5), etaById.get(4L)); // RETURN：作业 3 分钟 +300s
         ArgumentCaptor<DispatchPlanDO> captor = ArgumentCaptor.forClass(DispatchPlanDO.class);
         verify(dispatchPlanMapper).updateById(captor.capture());
-        // 耗时 16 分钟；成本按路网公里 2.5+3.0+4.5=10.0 × 2.50 = 25.00（非直线 3.852km）
+        // 耗时 16 分钟；成本口径 = 货运分摊骨架里程(10.0km × 35%) × 2.50 + 停站作业(2 站 × 3 分钟 × 0.1) = 8.75 + 0.60 = 9.35
+        // （利用公交空闲运力：车本来就要跑，只有增量/分摊成本计到货运头上，不再让包裹承担整趟公交成本）
         assertEquals(16, captor.getValue().getEstDurationMinutes());
-        assertEquals(0, captor.getValue().getEstCost().compareTo(new BigDecimal("25.00")));
+        assertEquals(0, captor.getValue().getEstCost().compareTo(new BigDecimal("9.35")));
         // 有路网分段 → 明确记录 AMAP（高德真实时长）
         assertEquals("AMAP", captor.getValue().getRouteProvider());
     }
@@ -331,10 +332,10 @@ class DispatchEstimationServiceTest {
         DispatchPlanDO plan = captor.getValue();
         // 耗时：车 7 为 2+3+2+3+5=15 分钟，车 8 为 5+3+5=13 分钟，取最大 15
         assertEquals(15, plan.getEstDurationMinutes());
-        // 收入：客运 2 人 × 0.963km × 1.00 = 1.93；货运 2 件 × 5.00 = 10.00；合计 11.93
-        assertEquals(0, plan.getEstRevenue().compareTo(new BigDecimal("11.93")));
-        // 成本：两车总里程 (3.852 + 3.852)km × 2.50 = 19.26
-        assertEquals(0, plan.getEstCost().compareTo(new BigDecimal("19.26")));
+        // 收入：客运 2 人 × 0.963km × 1.00 = 1.93；货运 2 件 × 5.00 = 10.00 + 里程费 1.926km × 1.3 × 1.00 = 2.50 → 14.43
+        assertEquals(0, plan.getEstRevenue().compareTo(new BigDecimal("14.43")));
+        // 成本：分摊骨架里程 (3.852 + 3.852)km × 35% × 2.50 = 6.74 + 停站作业(3 站 × 3 分钟 × 0.1 = 0.90) = 7.64
+        assertEquals(0, plan.getEstCost().compareTo(new BigDecimal("7.64")));
     }
 
     // ==================== 测试夹具 ====================
