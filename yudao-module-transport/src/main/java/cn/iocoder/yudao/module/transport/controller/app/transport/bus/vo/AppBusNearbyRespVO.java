@@ -124,6 +124,9 @@ public class AppBusNearbyRespVO {
         @Schema(description = "预计到站分钟（高德路网 duration 向上取整；无可靠位置为 null）")
         private Integer etaMinutes;
 
+        @Schema(description = "待发车时距发车分钟数（未在途时给出；前端显示“N 分钟后发车”）")
+        private Integer waitDepartureMinutes;
+
         @Schema(description = "路网来源：AMAP=高德真实 / EUCLIDEAN=直线估算")
         private String routeProvider;
 
