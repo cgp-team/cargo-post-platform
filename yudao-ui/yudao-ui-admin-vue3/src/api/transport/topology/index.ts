@@ -28,6 +28,8 @@ export interface TopologyLeg {
   distanceKm?: number
   durationMinutes?: number
   navigationSource?: string
+  /** 真实道路轨迹点（AMAP 时非空；前端优先用它画线） */
+  navigationPolyline?: { longitude: number; latitude: number }[]
   estimatedArrival?: string
   actualArrival?: string
   handoverRequired?: boolean
