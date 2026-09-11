@@ -46,14 +46,20 @@ public class MultiLegPlanner {
     static final double MAX_DIRECT_KM = 60.0;
     /** 直达优先容差(分钟)：联运比直达快不超过该值仍选直达（避免为省几分钟强制换乘） */
     static final int DIRECT_PREFER_MARGIN_MINUTES = 10;
-    /** 2 段联运可接受绕行比例 / 保底(km) */
-    static final double TWO_LEG_DETOUR_RATIO = 0.6;
-    static final double TWO_LEG_MIN_DETOUR_KM = 3.0;
-    /** 3 段联运可接受绕行比例 / 保底(km)（允许比 2 段更绕，才可能有 3 段场景） */
-    static final double THREE_LEG_DETOUR_RATIO = 1.0;
-    static final double THREE_LEG_MIN_DETOUR_KM = 6.0;
-    /** 3 段联运候选枢纽数上限（避免 O(n²) 爆炸） */
-    static final int THREE_LEG_HUB_LIMIT = 6;
+    /**
+     * 换乘方案可接受绕行比例 / 保底(km)。
+     * 说明：公交线网是"固定线路 + 换乘"而非直线，真实换乘必然绕行（如 邮电大学→磁器街 需经
+     * 南坪站、五公里两次换乘）；这里的阈值按公交线网实测校准，过紧会把真实可行方案误判为"不可行"。
+     */
+    static final double TWO_LEG_DETOUR_RATIO = 0.8;
+    static final double TWO_LEG_MIN_DETOUR_KM = 4.0;
+    static final double THREE_LEG_DETOUR_RATIO = 1.6;
+    static final double THREE_LEG_MIN_DETOUR_KM = 8.0;
+    /**
+     * 换乘枢纽候选数上限：真实公交线网里换乘点往往不在"最近几个站"里（如 邮电大学→磁器街 需经
+     * 南坪站、五公里），上限过小会漏掉可行链路。170 站量级下 O(n²) 组合仅 3 万次，开销可忽略。
+     */
+    static final int THREE_LEG_HUB_LIMIT = 200;
 
     /** 运输段草案 */
     public record LegDraft(int sequence, Long fromStationId, Long toStationId,
