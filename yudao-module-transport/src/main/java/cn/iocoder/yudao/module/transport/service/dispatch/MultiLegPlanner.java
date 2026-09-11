@@ -7,6 +7,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanningModeEnum
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import org.springframework.stereotype.Service;
+import jakarta.annotation.Resource;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -61,6 +62,9 @@ public class MultiLegPlanner {
      */
     static final int THREE_LEG_HUB_LIMIT = 200;
 
+    /** 高德公交兜底：**仅当本地线网+算法解不出可行换乘方案时**才调用（尽量少用高德） */
+    @Resource private AmapTransitFallbackService amapTransitFallbackService;
+
     /** 运输段草案 */
     public record LegDraft(int sequence, Long fromStationId, Long toStationId,
                            double distanceKm, int durationMinutes, boolean handoverRequired) {
@@ -99,7 +103,7 @@ public class MultiLegPlanner {
             throw new IllegalArgumentException("取/送站缺少坐标，无法规划运输段");
         }
         Set<Long> stationsOfRoute;
-        RouteIndex index = new RouteIndex(routeStations);
+        RouteIndex index = new RouteIndex(routeStations, stations);
         double directKm = distance(pickup, delivery);
         List<Candidate> candidates = new ArrayList<>();
 
@@ -122,14 +126,22 @@ public class MultiLegPlanner {
             candidates.add(threeLeg);
         }
 
-        // 4) 兜底：既无直达线路也无可用换乘站（数据不全）→ 按取送站直达兜底，保证可调度
+        // 4) 本地线网解不出 → 用高德"不乘地铁"公交方案兜底（仅这一次，且带冷却/缓存）
+        if (candidates.isEmpty()) {
+            Candidate amapCandidate = fromAmapSuggestion(pickup, delivery, stations);
+            if (amapCandidate != null) {
+                candidates.add(amapCandidate);
+            }
+        }
+
+        // 5) 仍无解：按取送站直达兜底，并在理由里说明"本地线网无解"（不伪造换乘）
         if (candidates.isEmpty()) {
             Candidate fallback = new Candidate(DispatchPlanningModeEnum.DIRECT.getMode(),
                     DispatchPlanningModeEnum.DIRECT.getName(), 1, 0, round2(directKm),
                     durationOf(List.of(directKm)), score(1, 0, 0, directKm),
                     List.of(new LegDraft(1, pickup.getId(), delivery.getId(), round2(directKm),
                             travelMinutes(directKm), false)),
-                    null, "暂无可用线路/换乘站数据，按取送站直达兜底");
+                    null, "本地公交线网未覆盖该起终点，按取送站直送兜底（建议人工核实或补充线路数据）");
             candidates.add(fallback);
         }
 
@@ -152,6 +164,48 @@ public class MultiLegPlanner {
                 candidates, chosen.transferStationId(), reason);
     }
 
+    /**
+     * 用高德公交建议构造候选方案：把建议里的"上/下车站名"映射回本地站点，映射齐全才成腿
+     * （映射不上就不造腿，避免伪造数据）；距离/时长先用直线估算，后续由路网回填。
+     */
+    private Candidate fromAmapSuggestion(StationDO pickup, StationDO delivery, List<StationDO> stations) {
+        if (amapTransitFallbackService == null || pickup.getLongitude() == null || delivery.getLongitude() == null) {
+            return null;
+        }
+        AmapTransitFallbackService.Suggestion suggestion = amapTransitFallbackService.suggestBusOnly(
+                pickup.getLongitude().doubleValue(), pickup.getLatitude().doubleValue(),
+                delivery.getLongitude().doubleValue(), delivery.getLatitude().doubleValue());
+        if (suggestion == null || suggestion.legs().isEmpty()) {
+            return null;
+        }
+        java.util.Map<String, StationDO> byName = new java.util.HashMap<>();
+        for (StationDO station : stations) {
+            if (station.getStationName() != null) {
+                byName.putIfAbsent(station.getStationName().trim(), station);
+            }
+        }
+        List<LegDraft> legs = new ArrayList<>();
+        int sequence = 1;
+        for (AmapTransitFallbackService.SuggestedLeg leg : suggestion.legs()) {
+            StationDO from = sequence == 1 ? pickup : byName.get(leg.fromStopName().trim());
+            StationDO to = sequence == suggestion.legs().size()
+                    ? delivery : byName.get(leg.toStopName().trim());
+            if (from == null || to == null) {
+                return null; // 建议站点不在本地库里 → 不造腿
+            }
+            double km = distance(from, to);
+            legs.add(new LegDraft(sequence++, from.getId(), to.getId(), round2(km),
+                    travelMinutes(km), sequence <= suggestion.legs().size()));
+        }
+        double totalKm = legs.stream().mapToDouble(LegDraft::distanceKm).sum();
+        int duration = durationOf(legs.stream().map(LegDraft::distanceKm).toList());
+        return new Candidate(DispatchPlanningModeEnum.MULTI_LEG.getMode(),
+                DispatchPlanningModeEnum.MULTI_LEG.getName(), legs.size(), legs.size() - 1,
+                round2(totalKm), duration, score(legs.size(), legs.size() - 1, 0, totalKm),
+                legs, legs.get(0).toStationId(),
+                "本地线网未覆盖，采纳高德公交方案：" + suggestion.describe());
+    }
+
     private Candidate directCandidate(StationDO pickup, StationDO delivery, double directKm) {
         return new Candidate(DispatchPlanningModeEnum.DIRECT.getMode(), DispatchPlanningModeEnum.DIRECT.getName(),
                 1, 0, round2(directKm), durationOf(List.of(directKm)), score(1, 0, 0, directKm),
@@ -169,8 +223,9 @@ public class MultiLegPlanner {
                     || !index.sameRoute(hub.getId(), delivery.getId())) {
                 continue; // 换乘站必须多线路交汇（取货线路能到、送达线路能走）
             }
-            double d1 = distance(pickup, hub);
-            double d2 = distance(hub, delivery);
+            // 公交沿固定线路行驶：用"沿线路站序"的实际乘车里程，而不是两点直线
+            double d1 = index.hopKm(pickup.getId(), hub.getId(), pickup, hub);
+            double d2 = index.hopKm(hub.getId(), delivery.getId(), hub, delivery);
             double detour = d1 + d2 - directKm;
             if (detour > tolerance) {
                 continue;
@@ -210,9 +265,9 @@ public class MultiLegPlanner {
                 if (!index.sameRoute(h1.getId(), h2.getId()) || !index.sameRoute(h2.getId(), delivery.getId())) {
                     continue;
                 }
-                double d1 = distance(pickup, h1);
-                double d2 = distance(h1, h2);
-                double d3 = distance(h2, delivery);
+                double d1 = index.hopKm(pickup.getId(), h1.getId(), pickup, h1);
+                double d2 = index.hopKm(h1.getId(), h2.getId(), h1, h2);
+                double d3 = index.hopKm(h2.getId(), delivery.getId(), h2, delivery);
                 double detour = d1 + d2 + d3 - directKm;
                 if (detour > tolerance) {
                     continue;
@@ -317,16 +372,36 @@ public class MultiLegPlanner {
     /** 线路覆盖索引：stationId → 所属线路集合；用于"多线路交汇"判断 */
     private static final class RouteIndex {
         private final java.util.Map<Long, Set<Long>> byStation;
+        /** 线路 → 按站序排列的站点 id */
+        private final java.util.Map<Long, java.util.List<Long>> orderedStations = new java.util.HashMap<>();
+        /** 站点 id → 站点（算站间里程用） */
+        private final java.util.Map<Long, StationDO> stationById = new java.util.HashMap<>();
 
-        RouteIndex(List<RouteStationDO> routeStations) {
+        RouteIndex(List<RouteStationDO> routeStations, List<StationDO> stations) {
             java.util.Map<Long, Set<Long>> map = new java.util.HashMap<>();
+            java.util.Map<Long, java.util.List<RouteStationDO>> byRoute = new java.util.HashMap<>();
             for (RouteStationDO rs : routeStations) {
                 if (rs.getStationId() == null || rs.getRouteId() == null) {
                     continue;
                 }
                 map.computeIfAbsent(rs.getStationId(), k -> new HashSet<>()).add(rs.getRouteId());
+                byRoute.computeIfAbsent(rs.getRouteId(), k -> new java.util.ArrayList<>()).add(rs);
             }
             this.byStation = map;
+            for (StationDO station : stations) {
+                if (station.getId() != null) {
+                    stationById.put(station.getId(), station);
+                }
+            }
+            for (java.util.Map.Entry<Long, java.util.List<RouteStationDO>> entry : byRoute.entrySet()) {
+                java.util.List<Long> ordered = entry.getValue().stream()
+                        .sorted(java.util.Comparator.comparing(RouteStationDO::getSequenceNo,
+                                java.util.Comparator.nullsLast(Integer::compareTo)))
+                        .map(RouteStationDO::getStationId)
+                        .filter(java.util.Objects::nonNull)
+                        .toList();
+                orderedStations.put(entry.getKey(), ordered);
+            }
         }
 
         /** 是否存在同一条线路同时覆盖两个站点 */
@@ -340,6 +415,43 @@ public class MultiLegPlanner {
                 return false;
             }
             return ra.stream().anyMatch(rb::contains);
+        }
+
+        /**
+         * 沿线路实际乘车里程：两站在同一条线路上时，按站序累加相邻站间距（公交沿线路行驶，不是直线）；
+         * 共站线路多于一条时取里程最短者；不共线则退化为两点直线距离。
+         */
+        double hopKm(Long a, Long b, StationDO from, StationDO to) {
+            if (a == null || b == null) {
+                return distance(from, to);
+            }
+            double best = Double.MAX_VALUE;
+            Set<Long> routesA = byStation.getOrDefault(a, Set.of());
+            Set<Long> routesB = byStation.getOrDefault(b, Set.of());
+            for (Long routeId : routesA) {
+                if (!routesB.contains(routeId)) {
+                    continue;
+                }
+                java.util.List<Long> ordered = orderedStations.get(routeId);
+                if (ordered == null) {
+                    continue;
+                }
+                int i = ordered.indexOf(a);
+                int j = ordered.indexOf(b);
+                if (i < 0 || j < 0) {
+                    continue;
+                }
+                double km = 0;
+                for (int k = Math.min(i, j); k < Math.max(i, j); k++) {
+                    StationDO s1 = stationById.get(ordered.get(k));
+                    StationDO s2 = stationById.get(ordered.get(k + 1));
+                    if (s1 != null && s2 != null) {
+                        km += distance(s1, s2);
+                    }
+                }
+                best = Math.min(best, km);
+            }
+            return best == Double.MAX_VALUE ? distance(from, to) : best;
         }
     }
 
