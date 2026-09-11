@@ -64,6 +64,11 @@ public interface DispatchService {
     DispatchPlanRespVO getPlan(Long id);
 
     /**
+     * 获得调度方案的真实道路地图数据（按车辆 + 经停序号的每段轨迹；高德不可用时段落为两点直线并标注 provider）。
+     */
+    DispatchRoadmapRespVO getPlanRoadmap(Long id);
+
+    /**
      * 获得调度方案分页
      */
     PageResult<DispatchPlanDO> getPlanPage(DispatchPlanPageReqVO reqVO);

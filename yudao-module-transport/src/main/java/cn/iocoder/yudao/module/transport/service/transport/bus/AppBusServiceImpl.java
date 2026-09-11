@@ -47,6 +47,8 @@ public class AppBusServiceImpl implements AppBusService {
     @Resource private ShiftMapper shiftMapper;
     @Resource private StationMapper stationMapper;
     @Resource private AlgorithmClient algorithmClient;
+    /** 真实道路几何（高德 Web key 直连，带缓存）：线路道路轨迹的首选来源 */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     /** 附近公交数据源分层：现实公交（高德，可缺省）+ 项目自建线路；各自标注来源，不互相伪装 */
     @Resource private List<TransitProvider> transitProviders;
 
@@ -155,10 +157,35 @@ public class AppBusServiceImpl implements AppBusService {
                 vo.setEndStation(points.get(points.size() - 1).getStationName());
             }
             vo.setBuses(busesByRoute.getOrDefault(route.getRouteName(), List.of()));
-            // 真实道路 polyline（逐段调高德路网，带 5 分钟缓存；不可用时为 null，前端回退站点直线）
-            vo.setRoadPolyline(fetchRoutePolyline(route.getId(), vo.getPoints()));
+            // 真实道路 polyline 改为「按需查询」：见 getLinePolyline(routeId)。
+            // 这里不再逐条线路打高德（真实线网几十条 × 20~40 站会让小程序超时）。
             return vo;
         }).toList();
+    }
+
+    @Override
+    public List<AppBusLineRespVO.RoadPoint> getLinePolyline(Long routeId) {
+        if (routeId == null) {
+            return null;
+        }
+        MonitoringMapDataRespVO mapData = monitoringService.getMapData();
+        if (mapData.getRoutes() == null) {
+            return null;
+        }
+        for (MonitoringMapDataRespVO.Route route : mapData.getRoutes()) {
+            if (!routeId.equals(route.getId()) || route.getPoints() == null) {
+                continue;
+            }
+            List<AppBusLineRespVO.Point> points = route.getPoints().stream().map(p -> {
+                AppBusLineRespVO.Point point = new AppBusLineRespVO.Point();
+                point.setStationName(p.getStationName());
+                point.setLongitude(p.getLongitude());
+                point.setLatitude(p.getLatitude());
+                return point;
+            }).toList();
+            return fetchRoutePolyline(route.getId(), points);
+        }
+        return null;
     }
 
     @Override
@@ -560,6 +587,25 @@ public class AppBusServiceImpl implements AppBusService {
             return cached.polyline();
         }
         List<AppBusLineRespVO.RoadPoint> fullPolyline = new ArrayList<>();
+        // 0) 整条线路一次（或多个途经点分组）取真实道路：几十个站逐段请求会拖到几秒~几十秒，
+        //    小程序 10s 超时就报 request:fail timeout；分组串联通常 1~3 次请求即可拿全。
+        List<double[]> stops = new ArrayList<>();
+        for (AppBusLineRespVO.Point point : points) {
+            if (point.getLongitude() != null && point.getLatitude() != null) {
+                stops.add(new double[]{point.getLongitude(), point.getLatitude()});
+            }
+        }
+        List<double[]> through = roadPolylineService == null ? null : roadPolylineService.routeThrough(stops);
+        if (through != null && through.size() >= 2) {
+            List<AppBusLineRespVO.RoadPoint> direct = new ArrayList<>();
+            for (double[] p : through) {
+                direct.add(toRoadPoint(p[0], p[1]));
+            }
+            direct = dedupePolyline(direct);
+            routePolylineCache.put(routeId, new RoutePolylineCache(direct,
+                    System.currentTimeMillis() + 300_000));
+            return direct;
+        }
         for (int i = 0; i < points.size() - 1; i++) {
             AppBusLineRespVO.Point from = points.get(i);
             AppBusLineRespVO.Point to = points.get(i + 1);
@@ -567,6 +613,16 @@ public class AppBusServiceImpl implements AppBusService {
                     || to.getLongitude() == null || to.getLatitude() == null) {
                 continue;
             }
+            // 1) 后端直连高德驾车路网（带 10 分钟缓存）：比算法服务更稳，避免"线路轨迹变直线"
+            List<double[]> road = roadPolylineService == null ? null : roadPolylineService.route(
+                    from.getLongitude(), from.getLatitude(), to.getLongitude(), to.getLatitude());
+            if (road != null && road.size() >= 2) {
+                for (double[] p : road) {
+                    fullPolyline.add(toRoadPoint(p[0], p[1]));
+                }
+                continue;
+            }
+            // 2) 高德不可用：退回算法服务 /route
             try {
                 AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                         .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
