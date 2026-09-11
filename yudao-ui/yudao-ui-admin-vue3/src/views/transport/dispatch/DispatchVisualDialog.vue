@@ -119,57 +119,67 @@
 
         <!-- 右：每车任务段时间线 -->
         <div class="viz-timeline">
-          <!-- 多段联运：哪个订单、在哪一站、交给谁（转运站点工作人员或其他司机） -->
-          <div v-if="linkOrders.length" class="link-card">
-            <div class="link-title">多段联运交接</div>
-            <div v-for="o in linkOrders" :key="o.key" class="link-order">
-              <div class="link-order-head">
-                <span class="link-order-no">订单 {{ o.orderNo }}</span>
-                <span class="link-order-meta">
+          <!-- 两个视角，避免信息堆在一起：按车辆看"怎么走、在哪做什么"；按订单看"整条链路与换乘交接" -->
+          <div class="panel-tabs">
+            <div class="panel-tab" :class="{ active: panelTab === 'vehicle' }" @click="panelTab = 'vehicle'">
+              按车辆（路线 + 操作）
+            </div>
+            <div class="panel-tab" :class="{ active: panelTab === 'order' }" @click="panelTab = 'order'">
+              按订单（含联运交接）
+            </div>
+          </div>
+
+          <!-- 视角一：每台车一条线，按行驶顺序列出经停与本站操作 -->
+          <template v-if="panelTab === 'vehicle'">
+            <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
+            <div v-for="route in visibleRoutes" :key="route.key" class="route-card">
+              <div class="route-title">
+                <span class="route-color" :style="{ background: route.color }"></span>
+                <span class="route-name">{{ route.title }}</span>
+              </div>
+              <div class="route-sub">
+                {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                <template v-if="route.driverText"> · {{ route.driverText }}</template>
+              </div>
+              <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
+                <span class="stop-seq">{{ i + 1 }}</span>
+                <span class="stop-dot" :class="actionClass(s.actionType)"></span>
+                <span class="stop-act" :class="actionClass(s.actionType)">{{ actionLabel(s.actionType) }}</span>
+                <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
+                <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
+                <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- 视角二：每张订单的分段路线；不同车辆用地图上同一套颜色，交接点写清交给谁 -->
+          <template v-else>
+            <div v-if="!linkOrders.length" class="text-gray-400 text-sm">
+              本方案暂无订单运输链（或该订单还未生成运输段）
+            </div>
+            <div v-for="o in linkOrders" :key="o.key" class="order-card">
+              <div class="order-head">
+                <span class="order-no">订单 {{ o.orderNo }}</span>
+                <span class="order-meta">
                   {{ o.totalLegs }} 段 · 换乘 {{ o.transferCount }} 次
                   <template v-if="o.durationMinutes"> · 约 {{ o.durationMinutes }} 分钟</template>
                 </span>
               </div>
-              <div v-for="(leg, i) in o.legs" :key="i" class="link-leg">
-                <span class="link-seq">{{ i + 1 }}</span>
-                <span class="link-leg-text">
-                  {{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
-                  <em v-if="leg.plateNo || leg.driverName">
-                    （{{ leg.plateNo || '车辆' }}<template v-if="leg.driverName"> / {{ leg.driverName }}</template>）
-                  </em>
-                  <template v-if="leg.handoverTarget">
-                    <span class="link-transfer">　⇄ 在 {{ leg.toStationName }} 交给 {{ leg.handoverTarget }}</span>
-                  </template>
+              <div v-for="(leg, i) in o.legs" :key="i" class="order-leg">
+                <span class="leg-color" :style="{ background: leg.color }"></span>
+                <span class="leg-seq">{{ i + 1 }}</span>
+                <span class="leg-text">
+                  <b>{{ leg.plateNo || '车辆' }}</b>{{ leg.driverName ? ` · ${leg.driverName}` : '' }}
+                  ：{{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
                 </span>
               </div>
+              <div v-for="(leg, i) in o.legs" :key="'h' + i">
+                <div v-if="leg.handoverTarget" class="order-transfer">
+                  ⇄ 在 <b>{{ leg.toStationName }}</b> 交给 {{ leg.handoverTarget }}
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
-          <div v-for="route in visibleRoutes" :key="route.key" class="route-card">
-            <div class="route-title">
-              <span class="route-color" :style="{ background: route.color }"></span>
-              <span class="route-name">{{ route.title }}</span>
-              <span class="route-meta">
-                {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
-                <template v-if="route.driverText"> · 司机 {{ route.driverText }}</template>
-                <template v-if="route.totalSegments">
-                  · 轨迹
-                  <span :class="route.realSegments === route.totalSegments ? 'trace-real' : 'trace-est'">
-                    {{ route.realSegments === route.totalSegments ? '真实道路' : `真实 ${route.realSegments}/${route.totalSegments} 段` }}
-                  </span>
-                </template>
-              </span>
-            </div>
-            <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
-              <span class="stop-seq">{{ i + 1 }}</span>
-              <span class="stop-dot" :class="actionClass(s.actionType)"></span>
-              <span class="stop-act" :class="actionClass(s.actionType)">{{ actionLabel(s.actionType) }}</span>
-              <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
-              <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
-              <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
-            </div>
-          </div>
+          </template>
         </div>
       </div>
     </div>
@@ -295,6 +305,19 @@ const visibleRoutes = computed(() =>
   activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
 )
 
+/** 右栏视角：按车辆 / 按订单（信息分两块展示，避免堆在一起） */
+const panelTab = ref<'vehicle' | 'order'>('vehicle')
+
+/** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
+const plateColorMap = computed(() => {
+  const map = new Map<string, string>()
+  routes.value.forEach((r) => {
+    const plate = vehicles.value.find((v) => v.plateNo && r.title.includes(v.plateNo))?.plateNo
+    if (plate) map.set(plate, r.color)
+  })
+  return map
+})
+
 /** 可绘制（至少 2 个带坐标的经停点）的线路：为空时页面给出明确提示而不是空白地图 */
 const drawableRoutes = computed(() => visibleRoutes.value.filter((r) => r.points.length >= 2))
 
@@ -320,7 +343,8 @@ const linkOrders = computed(() => {
             ? `${toDriver}${toPlate ? `（${toPlate}）` : ''}`
             : (toPlate ? `车辆 ${toPlate}` : '转运站点工作人员')
         }
-        return { ...leg, handoverTarget }
+        // 用地图上"该车牌对应车辆线"的颜色，保证右栏与地图颜色一致（换车=换色，一眼看出联运）
+        return { ...leg, handoverTarget, color: plateColorMap.value.get(leg.plateNo || '') || '#909399' }
       })
       return {
         key: `link-${t.orderId}`,
@@ -997,6 +1021,79 @@ onBeforeUnmount(stopPlay)
   max-height: 520px;
   overflow-y: auto;
   padding-right: 4px;
+}
+.panel-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.panel-tab {
+  padding: 4px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  user-select: none;
+}
+.panel-tab.active {
+  background: #1f5e9e;
+  border-color: #1f5e9e;
+  color: #fff;
+}
+.route-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+}
+.order-card {
+  border: 1px solid #c7d8ea;
+  background: #f5f9ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.order-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.order-no {
+  font-size: 13px;
+  font-weight: 600;
+  color: #123f6e;
+}
+.order-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.order-leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.leg-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.leg-seq {
+  color: var(--el-text-color-placeholder);
+  width: 12px;
+  text-align: right;
+}
+.leg-text {
+  color: var(--el-text-color-primary);
+}
+.order-transfer {
+  margin-left: 28px;
+  font-size: 12px;
+  color: #e6a23c;
+  line-height: 1.6;
 }
 .link-card {
   border: 1px solid #c7d8ea;
