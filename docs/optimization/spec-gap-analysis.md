@@ -95,18 +95,40 @@
 | §104~§107 Demo 场景 | ✅ | `sql/mysql/demo-multi-leg.sql`：直达(TPDEMO1)/两段(TPDEMO2)/三段(TPDEMO3) + 换乘站 + 站点可达性 |
 | §108 异常 Demo | ✅ | 司机上报异常（`leg/exception`）→ 段/订单置异常 + 后台告警 → `POST /transport/topology/replan-leg` 只重规划该段；无资源时保持异常并置方案异常；交接超时/争议接口亦具备 |
 | §130 demo-seed 一键恢复 | ✅ | `demo-cqupt-stations.sql` + `demo-cqupt-vehicles.sql` + `demo-multi-leg.sql` |
-| §121/§122 三端一致性黑盒验收 | ❌ | 需启动后端 + 算法服务后人工验收（本机 RabbitMQ/MinIO/算法未运行） |
+| §121/§122 三端一致性黑盒验收 | 🟡 | 已用真实后端 + 算法服务跑通主链：一键调度 → 两段联运（2 台不同车）→ 司机A执行第1段 → 到达换乘站自动建交接并通知司机B → 司机B接货确认（原子推进 Leg1 完成 + Leg2 运输中）→ 司机B到达 → 完成 → 订单完成；同时验证了非法跳级被拒（运输中→已完成 返回业务错误）。用户端拓扑/消息中心、后台拓扑三端状态一致（均为"已完成/第2段"）。剩余：RabbitMQ/MinIO 相关模块与 41 步全量脚本化未覆盖 |
 
 ## 八、明确未做（优先级建议）
 
-1. **P0** 启动三件套（后端 + 算法 18081 + RabbitMQ/MinIO）跑 §121 黑盒 41 步验收。
-2. **P2** §125~§127 回场（return-to-depot）闭环建模。
-3. **P3** §100 后台线路/车辆管理页补可达性与实时状态列。
-4. **P3** §109 单独建 `CargoHandoverTest` / `DriverLegTaskTest`（规则已有实现与状态机覆盖）。
+1. **P2** §125~§127 回场（return-to-depot）闭环建模。
+2. **P3** §121 把已跑通的主链固化成脚本化黑盒（含 RabbitMQ/MinIO 相关模块）。
+3. **P3** §109 补齐 `MultiLegPlannerTest` 之外的端到端回归（当前主链为人工 API 验收）。
 
 ## 九、环境变更（本机）
 
 - **Redis 已开启 requirepass**：密码取自 `C:\Program Files\Redis\redis.windows-service.conf`，
   已写入 `yudao-server/src/main/resources/application-local.yaml`（`spring.data.redis.password`）。
   若本机 Redis 未设密码请注释该行；也可用环境变量 `SPRING_DATA_REDIS_PASSWORD` 覆盖。
-- 数据库：`ruoyi-vue-pro` 已补齐 `transport-schema.sql` + `transport-schema-incremental.sql` + `V018` + `V019` + 演示数据 + 菜单（6930~6934）。
+- 数据库：`ruoyi-vue-pro` 已补齐 `transport-schema.sql` + `transport-schema-incremental.sql` + `V018` + `V019` + 演示数据 + 菜单（6930~6935）。
+- 服务：本机 MySQL/Redis 已运行；算法服务 `python -m uvicorn app.main:app --port 18081`（需 `AMAP_KEY`）、
+  后端 `mvn -o org.springframework.boot:spring-boot-maven-plugin:3.5.15:run`（在 yudao-server 目录）均已实测跑通。
+
+## 十、运行时验证中发现并修复的真实缺陷（跑起来才暴露）
+
+| # | 现象 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | 算法接口全部 422（真实道路 polyline / 智能调度都失败） | 算法 RestTemplate 用了 classpath 上的 **YAML 转换器**（同样声明支持 application/json 且排序靠前），请求体被序列化成 YAML（`---\norigin:`） | `AlgorithmAdapterConfiguration` 只保留 JSON 转换器 |
+| 2 | 高德路径 `polyline` 恒为空（地图只能画直线） | 算法服务用 `extensions=base`；且高德 v3 驾车在 `extensions=all` 时路径点在 **steps[].polyline**，path 级无该字段 | `distance.py` 改 `extensions=all` + 拼接 steps polyline + 去重 |
+| 3 | 算法服务不可用时 `/bus/lines` 超时（前端 15s 轮询堆积） | 每个站点对都「重试 + 2s 连接超时」串行等待 | `AlgorithmClient.route` 重试收紧为 1 次 + 失败 30s 冷却快速失败（回退直线并标注估算） |
+| 4 | 两段联运被分到**同一辆车** | 首选绑定被其他方案占用后回退，未避让"本方案已用车辆" | `assignVehicles` 优先选本方案未用车辆；并补 3 号演示车（docx §54） |
+| 5 | 一键调度单笔以上即 `TIME_WINDOW_EXCEEDED` | 批次窗口硬编码 30 分钟，算法按高德真实路网时长校验"整批总耗时 ≤ 窗口" | 批次窗口放宽为 2 小时（可配置），并补 422 详情日志 |
+
+## 十一、实测结论（本机真实跑通）
+
+- `GET /app-api/transport/bus/nearby` → 200，`buses` 非空（CQUPT 演示车辆，标注 SIMULATED）。
+- `GET /app-api/transport/bus/lines` → 200（~2.5s），6 条线路全部返回**真实道路 polyline（97~214 点）**。
+- 一键智能调度（订单归集 → `/dispatch/plan/smart`）→ 生成方案；两段联运订单得到
+  「多段联运 / 2 段 / 1 次换乘」，**两段使用两台不同车辆**，候选方案含直达/三段对比与推荐理由。
+- 司机端全链路：接受 → 导航 → 到达取货点 → 装货 → 发车 → 到达换乘站（自动建交接 + 通知后序司机）→
+  后序司机到站 → 开始交接 → 确认接货（Leg1 完成 + Leg2 运输中）→ 到达 → 完成 → 订单完成。
+- 非法跳级（运输中直接完成）被状态机拒绝并返回业务错误码。
+- 三端一致：用户端拓扑与消息中心、后台拓扑、司机端任务状态一致。

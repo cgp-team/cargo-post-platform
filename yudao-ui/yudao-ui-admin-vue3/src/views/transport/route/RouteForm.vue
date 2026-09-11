@@ -20,6 +20,29 @@
       <el-form-item label="里程(km)" prop="distanceKm">
         <el-input v-model.number="formData.distanceKm" placeholder="请输入里程(km)" />
       </el-form-item>
+      <el-form-item label="数据来源" prop="sourceType">
+        <el-select v-model="formData.sourceType" placeholder="请选择" style="width:100%">
+          <el-option label="项目自建线路" value="PROJECT" />
+          <el-option label="现实公交线路" value="REAL" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="服务类型" prop="serviceType">
+        <el-select v-model="formData.serviceType" placeholder="请选择" style="width:100%">
+          <el-option label="货运" value="CARGO" />
+          <el-option label="客运" value="PASSENGER" />
+          <el-option label="客货邮混合" value="MIXED" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="线路状态" prop="status">
+        <el-radio-group v-model="formData.status">
+          <el-radio :label="0">启用</el-radio>
+          <el-radio :label="1">停用</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="开放调度" prop="dispatchEnabled">
+        <el-switch v-model="formData.dispatchEnabled" />
+        <span style="margin-left:8px;color:#909399;font-size:12px">停用/不开放调度的线路不会用于附近公交、地图与联运换乘</span>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取 消</el-button>
@@ -40,13 +63,19 @@ const formType = ref('')
 const formRef = ref()
 const emit = defineEmits(['success'])
 const stationList = ref<StationApi.StationVO[]>([])
-const formData = ref<any>({ routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null })
+const formData = ref<any>({
+  routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null,
+  sourceType: 'PROJECT', serviceType: 'CARGO', status: 0, dispatchEnabled: true
+})
 const formRules = reactive({
   routeCode: [{ required: true, message: '线路编码不能为空', trigger: 'blur' }],
   routeName: [{ required: true, message: '线路名称不能为空', trigger: 'blur' }],
 })
 const resetForm = () => {
-  formData.value = { routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null }
+  formData.value = {
+    routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null,
+    sourceType: 'PROJECT', serviceType: 'CARGO', status: 0, dispatchEnabled: true
+  }
   formRef.value?.resetFields()
 }
 const open = (type: string, id?: number) => {

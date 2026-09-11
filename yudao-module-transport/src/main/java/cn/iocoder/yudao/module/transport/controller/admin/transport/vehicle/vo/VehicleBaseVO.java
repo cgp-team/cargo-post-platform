@@ -28,4 +28,7 @@ public class VehicleBaseVO {
 
     @Schema(description="vehicle status: 0 available, 1 disabled")
     private Integer status;
+
+    @Schema(description="实时运营状态：0 空闲 1 在途 2 故障 3 离线（随运输段开始/完成同步）")
+    private Integer realtimeStatus;
 }

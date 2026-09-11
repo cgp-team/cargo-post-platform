@@ -79,7 +79,8 @@ INSERT INTO transport_driver_status
     (id, driver_id, online_status, current_vehicle_id, last_heartbeat, last_latitude, last_longitude, tenant_id, create_time, update_time)
 VALUES
     (101, 101, 1, 101, NOW(), 29.5325000, 106.5765000, 0, NOW(), NOW()),
-    (102, 102, 1, 102, NOW(), 29.5370000, 106.5748000, 0, NOW(), NOW())
+    (102, 102, 1, 102, NOW(), 29.5370000, 106.5748000, 0, NOW(), NOW()),
+    (103, 103, 1, 103, NOW(), 29.5325000, 106.5765000, 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE
     online_status = VALUES(online_status),
     current_vehicle_id = VALUES(current_vehicle_id),
@@ -224,3 +225,12 @@ ON DUPLICATE KEY UPDATE
 -- 校验：Demo 站点/线路/订单
 SELECT id, station_name, user_access, vehicle_access, dispatch_enabled FROM transport_station WHERE id IN (101, 107);
 SELECT id, order_no, pickup_station_id, delivery_station_id FROM transport_order WHERE id IN (206, 207, 208);
+
+-- ========== 演示订单归属演示会员（小程序端才能查看运输拓扑并收到通知）==========
+-- demo-member.sql 预置演示会员 13800000000（member_user.id 通常为 3，这里按手机号动态取）
+UPDATE transport_order
+SET member_user_id = (SELECT id FROM member_user WHERE mobile = '13800000000' ORDER BY id LIMIT 1)
+WHERE id BETWEEN 201 AND 208
+  AND EXISTS (SELECT 1 FROM member_user WHERE mobile = '13800000000');
+
+SELECT id, order_no, member_user_id FROM transport_order WHERE id BETWEEN 201 AND 208 ORDER BY id;

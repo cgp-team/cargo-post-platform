@@ -11,6 +11,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.TransportDriverStatusMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
@@ -50,6 +51,7 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private TransportOrderMapper orderMapper;
     @Resource private StationMapper stationMapper;
     @Resource private RouteStationMapper routeStationMapper;
+    @Resource private RouteMapper routeMapper;
     @Resource private DriverVehicleMapper driverVehicleMapper;
     @Resource private VehicleMapper vehicleMapper;
     @Resource private TransportDriverStatusMapper driverStatusMapper;
@@ -85,7 +87,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             throw exception(STATION_NOT_EXISTS);
         }
         MultiLegPlanner.PlanResult result = multiLegPlanner.plan(order, pickup, delivery,
-                stationMapper.selectList(), routeStationMapper.selectList());
+                stationMapper.selectList(), routeStationsForPlanning());
 
         List<TransportLegDO> legs = new ArrayList<>();
         LocalDateTime cursor = LocalDateTime.now().plusMinutes(MultiLegPlanner.PREPARE_MINUTES);
@@ -131,7 +133,20 @@ public class MultiLegServiceImpl implements MultiLegService {
             throw exception(STATION_NOT_EXISTS);
         }
         return multiLegPlanner.plan(order, pickup, delivery,
-                stationMapper.selectList(), routeStationMapper.selectList());
+                stationMapper.selectList(), routeStationsForPlanning());
+    }
+
+    /**
+     * 供规划使用的线路站点：只保留"启用且可用于调度"的线路（需求 §38：
+     * 停用线路不得用于调度/导航），避免拿停用线路当换乘通道。
+     */
+    private List<RouteStationDO> routeStationsForPlanning() {
+        List<RouteStationDO> all = routeStationMapper.selectList();
+        if (routeMapper == null) {
+            return all;
+        }
+        java.util.Set<Long> enabledRouteIds = new java.util.HashSet<>(routeMapper.selectEnabledDispatchRouteIds());
+        return all.stream().filter(rs -> enabledRouteIds.contains(rs.getRouteId())).toList();
     }
 
     @Override
@@ -393,18 +408,13 @@ public class MultiLegServiceImpl implements MultiLegService {
         List<TransportLegDO> assigned = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
             TransportLegDO leg = legs.get(i);
-            // 轮转起点：让相邻段优先用不同车辆（bindings 已按 vehicleId 升序）
-            DriverVehicleDO chosen = null;
-            for (int k = 0; k < bindings.size(); k++) {
-                DriverVehicleDO binding = bindings.get((i + k) % bindings.size());
-                boolean conflict = legConflictService != null && (legConflictService.vehicleConflicts(
-                        binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), assigned, null)
-                        || legConflictService.driverConflicts(binding.getDriverId(), leg.getEstimatedDeparture(),
-                        leg.getEstimatedArrival(), assigned, null));
-                if (!conflict) {
-                    chosen = binding;
-                    break;
-                }
+            // 相邻段优先用**不同**车辆（换乘的意义，需求 §111：Leg1.vehicle != Leg2.vehicle）：
+            // 第一轮只挑"本方案还没用过且无时段冲突"的绑定；没有才退而求其次允许复用。
+            java.util.Set<Long> usedVehicles = assigned.stream().map(TransportLegDO::getVehicleId)
+                    .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+            DriverVehicleDO chosen = pickBinding(bindings, leg, assigned, usedVehicles, true);
+            if (chosen == null) {
+                chosen = pickBinding(bindings, leg, assigned, usedVehicles, false);
             }
             if (chosen == null) {
                 log.warn("[multi-leg] 订单 {} 第 {} 段在 {}~{} 无可用车辆/司机（时段冲突），保持未分配",
@@ -416,6 +426,25 @@ public class MultiLegServiceImpl implements MultiLegService {
             leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
             assigned.add(leg);
         }
+    }
+
+    /** 选一个可用绑定；strictUnused=true 时跳过本方案已用车辆（保证相邻段不同车） */
+    private DriverVehicleDO pickBinding(List<DriverVehicleDO> bindings, TransportLegDO leg,
+                                        List<TransportLegDO> assigned, java.util.Set<Long> usedVehicles,
+                                        boolean strictUnused) {
+        for (DriverVehicleDO binding : bindings) {
+            if (strictUnused && usedVehicles.contains(binding.getVehicleId())) {
+                continue;
+            }
+            boolean conflict = legConflictService != null && (legConflictService.vehicleConflicts(
+                    binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), assigned, null)
+                    || legConflictService.driverConflicts(binding.getDriverId(), leg.getEstimatedDeparture(),
+                    leg.getEstimatedArrival(), assigned, null));
+            if (!conflict) {
+                return binding;
+            }
+        }
+        return null;
     }
 
 }

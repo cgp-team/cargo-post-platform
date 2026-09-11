@@ -44,6 +44,16 @@ CALL tr_add_col_if_missing('transport_station','remark',
 CALL tr_add_col_if_missing('transport_vehicle','realtime_status',
   'ALTER TABLE `transport_vehicle` ADD COLUMN `realtime_status` tinyint NOT NULL DEFAULT 0 COMMENT ''实时状态：0空闲 1在途 2故障 3离线'' AFTER `status`');
 
+-- ---------- transport_route：来源 / 服务类型 / 可调度（需求 §35/§38） ----------
+CALL tr_add_col_if_missing('transport_route','source_type',
+  'ALTER TABLE `transport_route` ADD COLUMN `source_type` varchar(20) NOT NULL DEFAULT ''PROJECT'' COMMENT ''数据来源：REAL/PROJECT'' AFTER `distance_km`');
+CALL tr_add_col_if_missing('transport_route','service_type',
+  'ALTER TABLE `transport_route` ADD COLUMN `service_type` varchar(20) NOT NULL DEFAULT ''CARGO'' COMMENT ''服务类型：PASSENGER/CARGO/MIXED'' AFTER `source_type`');
+CALL tr_add_col_if_missing('transport_route','dispatch_enabled',
+  'ALTER TABLE `transport_route` ADD COLUMN `dispatch_enabled` bit(1) NOT NULL DEFAULT b''1'' COMMENT ''是否可用于调度'' AFTER `service_type`');
+CALL tr_add_col_if_missing('transport_route','status',
+  'ALTER TABLE `transport_route` ADD COLUMN `status` tinyint NOT NULL DEFAULT 0 COMMENT ''线路状态：0启用 1停用'' AFTER `distance_km`');
+
 -- ---------- transport_dispatch_plan：运输方案（TransportPlan） ----------
 CALL tr_add_col_if_missing('transport_dispatch_plan','plan_no',
   'ALTER TABLE `transport_dispatch_plan` ADD COLUMN `plan_no` varchar(64) NOT NULL DEFAULT '''' COMMENT ''方案号（人可读）'' AFTER `task_id`');

@@ -16,6 +16,7 @@ public interface VehicleMapper extends BaseMapperX<VehicleDO> {
         return selectPage(reqVO, new LambdaQueryWrapperX<VehicleDO>()
                 .likeIfPresent(VehicleDO::getPlateNo, reqVO.getPlateNo())
                 .eqIfPresent(VehicleDO::getStatus, reqVO.getStatus())
+                .eqIfPresent(VehicleDO::getRealtimeStatus, reqVO.getRealtimeStatus())
                 .betweenIfPresent(VehicleDO::getCreateTime, reqVO.getCreateTime())
                 .orderByDesc(VehicleDO::getId));
     }
