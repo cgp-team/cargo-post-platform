@@ -6,13 +6,16 @@ import cn.iocoder.yudao.framework.security.core.LoginUser;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverLegActionReqVO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 import cn.iocoder.yudao.module.transport.service.dispatch.HandoverService;
 import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
@@ -49,6 +52,7 @@ class DriverLegTaskTest {
 
     @Mock private DriverMapper driverMapper;
     @Mock private TransportLegMapper transportLegMapper;
+    @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private MemberUserApi memberUserApi;
     @Mock private StationMapper stationMapper;
     @Mock private VehicleMapper vehicleMapper;
@@ -65,6 +69,7 @@ class DriverLegTaskTest {
         service = new DriverAppServiceImpl();
         ReflectionTestUtils.setField(service, "driverMapper", driverMapper);
         ReflectionTestUtils.setField(service, "transportLegMapper", transportLegMapper);
+        ReflectionTestUtils.setField(service, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(service, "memberUserApi", memberUserApi);
         ReflectionTestUtils.setField(service, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(service, "vehicleMapper", vehicleMapper);
@@ -101,7 +106,9 @@ class DriverLegTaskTest {
         when(transportLegMapper.selectActiveByDriverId(DRIVER_ID)).thenReturn(List.of(
                 TransportLegDO.builder().id(7L).orderId(100L)
                         .driverId(DRIVER_ID).fromStationId(201L).toStationId(202L).legSequence(1)
-                        .vehicleId(11L).status(TransportLegStatusEnum.IN_TRANSIT.getStatus()).build()));
+                        .vehicleId(11L).planId(55L).status(TransportLegStatusEnum.IN_TRANSIT.getStatus()).build()));
+        when(dispatchPlanMapper.selectById(55L)).thenReturn(DispatchPlanDO.builder()
+                .id(55L).status(DispatchPlanStatusEnum.ISSUED.getStatus()).build());
         when(stationMapper.selectBatchIds(any())).thenReturn(List.of());
         when(vehicleMapper.selectBatchIds(any())).thenReturn(List.of());
         when(transportOrderMapper.selectBatchIds(any())).thenReturn(List.of());
@@ -111,6 +118,21 @@ class DriverLegTaskTest {
         assertEquals(7L, vo.getId());
         assertEquals(1, vo.getLegSequence());
         verify(transportLegMapper).selectActiveByDriverId(DRIVER_ID);
+    }
+
+    @Test
+    void current_leg_hides_legs_of_pending_plan() {
+        // P1-E 回归：待审核方案（状态 0）的段不能进司机端"当前运输段"
+        when(transportLegMapper.selectActiveByDriverId(DRIVER_ID)).thenReturn(List.of(
+                TransportLegDO.builder().id(8L).orderId(100L)
+                        .driverId(DRIVER_ID).fromStationId(201L).toStationId(202L).legSequence(1)
+                        .vehicleId(11L).planId(66L).status(TransportLegStatusEnum.ASSIGNED.getStatus()).build()));
+        when(dispatchPlanMapper.selectById(66L)).thenReturn(DispatchPlanDO.builder()
+                .id(66L).status(DispatchPlanStatusEnum.PENDING.getStatus()).build());
+
+        var vo = service.currentLeg(null);
+
+        org.junit.jupiter.api.Assertions.assertNull(vo); // 等待派单：无已下发方案的活跃段
     }
 
     @Test

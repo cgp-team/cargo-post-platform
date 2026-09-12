@@ -86,9 +86,7 @@ spring:
       host: 127.0.0.1 # 地址
       port: 6379 # 端口
       database: 0 # 数据库索引
-      # 本机 Windows Redis 服务已开启 requirepass（见 C:\Program Files\Redis\redis.windows-service.conf）
-      # 若本机 Redis 未设置密码，把下面这行注释掉即可；也可用环境变量覆盖：SPRING_DATA_REDIS_PASSWORD
-      password: ZqPseJXg9o7WyONu2lthvTwcLC6Yz345
+#      password: dev # 密码，建议生产环境开启
 
 --- #################### 定时任务相关配置 ####################
 

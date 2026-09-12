@@ -190,6 +190,15 @@ export const createSmartPlan = (data: DispatchSmartPlanReqVO): Promise<number> =
   return request.post({ url: '/transport/dispatch/plan/smart', data })
 }
 
+/**
+ * 预热真实道路轨迹：订单池订单的取送站点对 + 今日方案运输段起终点对，
+ * 逐对调用高德并把取到的轨迹落库（transport_leg.navigation_polyline）。
+ * 高德配额恢复后调用一次，调度可视化就不会再出现"两站直线相连"。
+ */
+export const prefetchRoadGeometry = (): Promise<number> => {
+  return request.post({ url: '/transport/dispatch/plan/prefetch-road' })
+}
+
 /** 智能派单前约束校验（订单统计/运力预警/站点标记/时序检查） */
 export const validateDispatch = (data: DispatchValidateReqVO): Promise<DispatchValidateRespVO> => {
   return request.post({ url: '/transport/dispatch/validate', data })

@@ -4,6 +4,7 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.service.transport.driver.DriverAppService;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
+import cn.iocoder.yudao.module.transport.enums.notification.NotificationRecipientTypeEnum;
 import cn.iocoder.yudao.module.transport.controller.app.transport.notification.vo.AppNotificationRespVO;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
 import cn.iocoder.yudao.framework.common.pojo.PageParam;
@@ -246,7 +247,7 @@ public class AppDriverController {
     @Parameter(name = "id", description = "通知编号", required = true)
     public CommonResult<Boolean> messageRead(@RequestParam("id") Long id,
                                              @RequestParam("driverId") Long driverId) {
-        userNotificationService.markAsRead(id, driverId);
+        userNotificationService.markAsRead(id, NotificationRecipientTypeEnum.DRIVER, driverId);
         return success(true);
     }
 

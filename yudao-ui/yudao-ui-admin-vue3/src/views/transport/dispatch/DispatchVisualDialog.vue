@@ -522,6 +522,9 @@ const selectJourney = (key: string) => {
  * 需求明确要求"把直线去掉"，所以缺路网数据的段宁可不画（列表里标注"缺路网轨迹"）。
  */
 const resolveLegRoad = (leg: TopologyApi.TopologyLeg): { lng: number; lat: number }[] => {
+  // 该段路网来源不是高德真实道路（EUCLIDEAN 直线兜底）→ 不画，避免斜穿城市的假轨迹。
+  // 只在高德可用（navigationSource=AMAP）且轨迹点足够时才绘制真实道路。
+  if (leg.navigationSource && leg.navigationSource !== 'AMAP') return []
   const stored = (leg.navigationPolyline ?? [])
     .filter((p) => p.longitude != null && p.latitude != null)
     .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
