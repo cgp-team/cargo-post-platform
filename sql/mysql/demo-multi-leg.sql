@@ -3,6 +3,7 @@
 -- 用途：让"无直达线路 → 经换乘站拆分多段 → 司机在换乘站交接 → 订单部分完成/完成"
 --       这条多段联运主链路有真实可演示的数据。
 -- 前置：先执行 demo-cqupt-stations.sql（站点 101/102/103）与 demo-cqupt-vehicles.sql（司机 101/102）。
+-- 时间窗：订单最晚送达 = NOW() + 2 小时（与 demo-real-orders.sql 同一口径：一个任务段时间内调度完）。
 -- 幂等：INSERT ... ON DUPLICATE KEY UPDATE。
 --
 -- 执行（服务器仓库根目录）：
@@ -42,8 +43,8 @@ INSERT INTO transport_order
     (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
      status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
 VALUES
-    (204, 'TPCQ0004', 2, 102, 103, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 11.00, 0, '1', DATE_SUB(NOW(), INTERVAL 15 MINUTE), '1', NOW(), b'0'),
-    (205, 'TPCQ0005', 2, 103, 102, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 10.50, 0, '1', DATE_SUB(NOW(), INTERVAL 10 MINUTE), '1', NOW(), b'0')
+    (204, 'TPCQ0004', 2, 102, 103, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 11.00, 0, '1', DATE_SUB(NOW(), INTERVAL 15 MINUTE), '1', NOW(), b'0'),
+    (205, 'TPCQ0005', 2, 103, 102, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 10.50, 0, '1', DATE_SUB(NOW(), INTERVAL 10 MINUTE), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
@@ -206,9 +207,9 @@ INSERT INTO transport_order
      status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
 VALUES
     -- 206 直达（347路同线）/ 207 两段（347→320，海棠溪换乘）/ 208 三段（347→320→轨道3号线）
-    (206, 'TPDEMO1', 2, 201, 202, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 9 MINUTE), '1', NOW(), b'0'),
-    (207, 'TPDEMO2', 2, 201, 203, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 16.00, 0, '1', DATE_SUB(NOW(), INTERVAL 8 MINUTE), '1', NOW(), b'0'),
-    (208, 'TPDEMO3', 2, 201, 204, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 21.00, 0, '1', DATE_SUB(NOW(), INTERVAL 7 MINUTE), '1', NOW(), b'0')
+    (206, 'TPDEMO1', 2, 201, 202, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 9 MINUTE), '1', NOW(), b'0'),
+    (207, 'TPDEMO2', 2, 201, 203, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 16.00, 0, '1', DATE_SUB(NOW(), INTERVAL 8 MINUTE), '1', NOW(), b'0'),
+    (208, 'TPDEMO3', 2, 201, 204, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 21.00, 0, '1', DATE_SUB(NOW(), INTERVAL 7 MINUTE), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id), delivery_station_id = VALUES(delivery_station_id),
     earliest_pickup_time = VALUES(earliest_pickup_time), latest_delivery_time = VALUES(latest_delivery_time),

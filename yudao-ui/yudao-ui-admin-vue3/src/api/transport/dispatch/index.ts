@@ -252,6 +252,15 @@ export const recycleDemoPool = (planIds?: number[]) => {
   return request.post({ url: '/transport/dispatch/demo/recycle-pool', data: planIds || [] })
 }
 
+/**
+ * 预热真实道路轨迹：订单池订单的取送站点对 + 今日方案运输段起终点对，
+ * 逐对调用高德并把取到的轨迹落库（transport_leg.navigation_polyline）。
+ * 高德配额恢复后调用一次，调度可视化就不会再出现"两站直线相连"。
+ */
+export const prefetchRoadGeometry = (): Promise<number> => {
+  return request.post({ url: '/transport/dispatch/plan/prefetch-road' })
+}
+
 /** 发车核验 */
 export const checkDeparture = (data: DispatchCheckReqVO) => {
   return request.post({ url: '/transport/dispatch/departure-check', data })

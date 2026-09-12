@@ -94,6 +94,13 @@ public class DispatchController {
         return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude));
     }
 
+    @PostMapping("/plan/prefetch-road")
+    @Operation(summary = "预热订单池/今日方案的真实道路轨迹（高德配额恢复后调用一次，落库后可视化不再出现两点直线）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<Integer> prefetchRoad() {
+        return success(dispatchService.prefetchRoadGeometry());
+    }
+
     @PostMapping("/demo/recycle-pool")
     @Operation(summary = "演示态：把方案订单放回待入池（方便反复一键演示；生产环境关闭开关后为空操作）")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")
