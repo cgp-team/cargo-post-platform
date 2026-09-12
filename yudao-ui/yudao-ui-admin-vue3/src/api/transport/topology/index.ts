@@ -31,6 +31,8 @@ export interface TopologyLeg {
   /** 真实道路轨迹点（AMAP 时非空；前端优先用它画线） */
   navigationPolyline?: { longitude: number; latitude: number }[]
   estimatedArrival?: string
+  /** 计划离站时刻（任务段该段的出发时间，前端用于展示"几点到几点"） */
+  estimatedDeparture?: string
   actualArrival?: string
   handoverRequired?: boolean
 }

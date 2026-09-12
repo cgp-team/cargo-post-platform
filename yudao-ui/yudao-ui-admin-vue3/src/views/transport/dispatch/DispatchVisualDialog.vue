@@ -142,7 +142,7 @@
           <div class="panel-tip">
             {{ panelTab === 'all' ? '地图显示全部车辆线路'
               : panelTab === 'vehicle' ? '点选下方某台车，地图只显示它的线路'
-              : '点选某张订单，地图只显示这单的分段路线' }}
+              : '按司机归堆、按任务段执行顺序排列：从第 1 单依次点下去，地图会一段段连成这名司机这趟任务段的总路线' }}
           </div>
 
           <!-- 视角一/二：每台车一条线，按行驶顺序列出经停与本站操作 -->
@@ -162,11 +162,16 @@
               <div class="route-sub">
                 <template v-if="route.legs">
                   {{ route.legs.length }} 段 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                  <template v-if="route.windowText"> · 任务窗口 {{ route.windowText }}</template>
                 </template>
                 <template v-else>
                   {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
                 </template>
                 <template v-if="route.driverText"> · {{ route.driverText }}</template>
+              </div>
+              <div v-if="(route.pendingCount || 0) > 0" class="route-pending-hint">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ route.pendingCount }} 段真实路线获取中，稍后自动刷新（不再用两点直线代替）</span>
               </div>
               <!-- 运输段口径（真实车辆）：一段一行，写清从哪到哪、哪单、是真实道路还是直线估算 -->
               <template v-if="route.legs">
@@ -174,11 +179,11 @@
                   <span class="stop-seq">{{ lg.seq }}</span>
                   <span class="stop-dot" :class="lg.estimated ? 'act-seat' : 'act-deliver'"></span>
                   <span class="stop-act" :class="lg.estimated ? 'act-seat' : 'act-deliver'">
-                    {{ lg.estimated ? '直线估算' : '真实道路' }}
+                    {{ lg.estimated ? '真实路线获取中' : '真实道路' }}
                   </span>
                   <span class="stop-station">{{ lg.fromName }} → {{ lg.toName }}</span>
                   <span v-if="lg.orderNo" class="stop-order">{{ lg.orderNo }}</span>
-                  <span class="stop-time">{{ lg.timeText }}</span>
+                  <span class="stop-time">{{ lg.timeRangeText || lg.timeText }}</span>
                   <span v-if="lg.distanceText && lg.distanceText !== '-'" class="stop-time">{{ lg.distanceText }}km</span>
                   <div v-if="lg.handoverText" class="stop-handover">
                     <span class="stop-handover-icon">🔄</span>
@@ -212,16 +217,26 @@
             <div v-if="!linkOrders.length" class="text-gray-400 text-sm">
               本方案暂无订单运输链（或该订单还未生成运输段）
             </div>
+            <!-- 按司机归堆：同一司机的订单按任务段执行顺序（第一单 → 最后一单）从上到下排；
+                 依次点击这些订单，地图上会连成这名司机这个任务段的总路线（段段相接）。 -->
+            <template v-for="g in linkOrderGroups" :key="'group-' + g.key">
+              <div class="order-group-head">
+                <span class="order-group-dot" :style="{ background: g.color }"></span>
+                <span class="order-group-title">{{ g.title }}</span>
+                <span class="order-group-meta">任务段 · {{ g.orders.length }} 单（按执行顺序）</span>
+              </div>
             <div
-              v-for="o in linkOrders"
+              v-for="o in g.orders"
               :key="o.key"
               class="order-card selectable"
               :class="{ dimmed: selectedOrderKey && selectedOrderKey !== o.key, picked: selectedOrderKey === o.key }"
               @click="selectOrder(o.key)"
             >
               <div class="order-head">
+                <span class="order-seq">{{ o.seqInDriver }}/{{ o.driverOrderCount }}</span>
                 <span class="order-no">订单 {{ o.orderNo }}</span>
                 <span class="order-meta">
+                  <template v-if="o.startTime">{{ timeText(o.startTime) }}–{{ timeText(o.endTime) }} · </template>
                   {{ o.totalLegs }} 段 · 换乘 {{ o.transferCount }} 次
                   <template v-if="o.durationMinutes"> · 约 {{ o.durationMinutes }} 分钟</template>
                 </span>
@@ -248,6 +263,7 @@
                 </div>
               </div>
             </div>
+            </template>
           </template>
         </div>
       </div>
@@ -296,6 +312,8 @@ interface VehicleLegRow {
   estimated: boolean
   handoverText: string
   timeText: string
+  /** 该段计划时间区间（离站–到达，写清"几点到几点"）；缺离站时间时退化为"到达 HH:mm" */
+  timeRangeText: string
   distanceText: string
 }
 interface RouteView {
@@ -319,6 +337,11 @@ interface RouteView {
   totalSegments: number
   /** 按车辆视角：该车真实执行的运输段（存在时优先按它展示，而不是算法单车经停明细） */
   legs?: VehicleLegRow[]
+  /** 任务时间窗（该方案内该车最早离站 ~ 最晚到达）：一套方案 = 一个任务时间窗 */
+  windowText?: string
+  /** 还有多少段真实道路轨迹没取到（这些段不再用两点直线代替，取到后自动重绘） */
+  pendingCount?: number
+  /** 归属方案：分组时同一天的多套方案不合并，避免被当成"一台车跑了一整天" */
   /** 该车车牌（运输段分组口径） */
   plateNo?: string
 }
@@ -377,6 +400,29 @@ const actionClass = (action?: number) =>
           ? 'act-deliver'
           : 'act-seat'
 const timeText = (t?: string) => (t ? t.replace('T', ' ').slice(11, 16) : '')
+
+/** 一段运输的计划时间区间文案：09:12–09:35（缺离站时间时退化为"到达 09:35"） */
+const timeRangeText = (departure?: string, arrival?: string) => {
+  const d = timeText(departure)
+  const a = timeText(arrival)
+  if (d && a) return `${d}–${a}`
+  if (a) return `到达 ${a}`
+  return d ? `${d}–` : ''
+}
+
+/**
+ * 一套方案（一个任务时间窗）的时间范围：该车全部运输段最早离站 ~ 最晚到达。
+ * 演示口径：一个任务段时间内完成这批订单，卡片上要写清"这趟几点到几点"。
+ */
+const windowTextOf = (legs: TopologyApi.TopologyLeg[]) => {
+  const departures = legs.map((l) => l.estimatedDeparture).filter(Boolean) as string[]
+  const arrivals = legs.map((l) => l.estimatedArrival).filter(Boolean) as string[]
+  const start = departures.length ? timeText(departures.reduce((a, b) => (a < b ? a : b))) : ''
+  const end = arrivals.length ? timeText(arrivals.reduce((a, b) => (a > b ? a : b))) : ''
+  if (start && end) return `${start}–${end}`
+  if (end) return `～${end}`
+  return start ? `${start}–` : ''
+}
 
 /**
  * 本站操作数量文案：**只标货运件数**（揽收/派送 = 件）。
@@ -467,38 +513,24 @@ const orderLegRoutes = computed<RouteView[]>(() => {
   const order = linkOrders.value.find((o) => o.key === selectedOrderKey.value) ?? linkOrders.value[0]
   if (!order) return []
   const plan = plans.value.find((p) => (p.items ?? []).some((i) => i.orderId === order.orderId))
-  return order.legs.map((leg, index) => {
-    const pts = (leg.navigationPolyline ?? [])
-      .filter((p) => p.longitude != null && p.latitude != null)
-      .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
-    // 运输段落库时若没有真实轨迹（ESTIMATED），先按需向后端补一次真实路网（10 分钟缓存），
-    // 避免订单视角出现"直线虚线"；取到之前先用直连兜底，取到后自动重绘。
-    const key = legKey(leg)
-    const cached = legRoadCache.value.get(key)
-    if (leg.fromLongitude != null && leg.toLongitude != null) {
-      ensureLegRoad(key, leg.fromLongitude, leg.fromLatitude!, leg.toLongitude, leg.toLatitude!)
-    }
-    const fallback = leg.fromLongitude != null && leg.toLongitude != null
-      ? [{ lng: leg.fromLongitude, lat: leg.fromLatitude! }, { lng: leg.toLongitude, lat: leg.toLatitude! }]
-      : []
-    const road = pts.length >= 2 ? pts : (cached && cached.length >= 2 ? cached : fallback)
-    return {
-      key: `order-${order.orderId}-leg-${index}`,
-      planId: plan?.id,
-      color: leg.color || '#909399',
-      title: `${leg.plateNo || '车辆'} 第 ${index + 1} 段`,
-      orderNos: [order.orderNo],
-      orderCount: 1,
-      stops: [],
-      locatedStops: [],
-      driverText: leg.driverName || '',
-      distanceKm: Number(leg.distanceKm || 0),
-      distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-',
-      points: road,
-      realSegments: road === fallback ? 0 : 1,
-      totalSegments: 1
-    } as RouteView
-  }).filter((r) => r.points.length >= 2)
+  // 每个司机（车辆）一条"累计"路线：从该司机任务段的第一单，一直连到当前点开的这一单。
+  // 依次点击同一司机的订单时，地图上的线会一段段接上，形成这名司机这个任务段走的总路线，
+  // 而不是每单各画一段互不相连的线（看起来像做完一单瞬移到别处接单）。
+  const routes: RouteView[] = []
+  const seen = new Set<string>()
+  order.legs.forEach((leg) => {
+    const plate = leg.plateNo || leg.driverName || '未知车辆'
+    if (seen.has(plate)) return
+    seen.add(plate)
+    const all = rowsByPlate.value.get(plate) ?? []
+    // 当前订单的这段在该司机任务段里的位置：只画到"点到的这一单"为止
+    const cut = all.findIndex((r) => r.leg.id != null && r.leg.id === leg.id)
+    const rows = cut >= 0 ? all.slice(0, cut + 1) : all.filter((r) => r.orderId === order.orderId)
+    if (!rows.length) return
+    const route = buildDriverSegmentRoute(plate, rows, plan?.id)
+    if (route) routes.push(route)
+  })
+  return routes
 })
 
 /** 订单视角中各 leg 是否使用直线估算（key = leg index，value = true 表示估算） */
@@ -588,6 +620,105 @@ const topologyLegs = computed(() => {
   return rows
 })
 
+/** 当前视角展示的方案内订单号集合（「全部方案」时 = 已加载的全部方案） */
+const planOrderIds = computed(() => {
+  const shown = activePlanId.value ? plans.value.filter((p) => p.id === activePlanId.value) : plans.value
+  const ids = new Set<number>()
+  shown.forEach((p) => (p.items ?? []).forEach((i) => i.orderId && ids.add(i.orderId)))
+  return ids
+})
+
+/**
+ * 同一司机（车辆）在本方案内、按时间排好序的全部承运段 = 该司机这个任务段的执行顺序。
+ * 订单视角按司机归堆、依次点击时，用它把段连成整条任务段路线。
+ */
+const rowsByPlate = computed(() => {
+  const map = new Map<string, { leg: TopologyApi.TopologyLeg; orderId?: number; orderNo?: string }[]>()
+  topologyLegs.value
+    .filter((r) => r.orderId != null && planOrderIds.value.has(r.orderId))
+    .forEach((r) => {
+      const plate = r.leg.plateNo || r.leg.driverName || '未知车辆'
+      if (!map.has(plate)) map.set(plate, [])
+      map.get(plate)!.push(r)
+    })
+  const timeKey = (leg: TopologyApi.TopologyLeg) => leg.estimatedDeparture || leg.estimatedArrival || ''
+  map.forEach((rows) =>
+    rows.sort(
+      (a, b) =>
+        timeKey(a.leg).localeCompare(timeKey(b.leg)) || (a.leg.legSequence ?? 0) - (b.leg.legSequence ?? 0)
+    )
+  )
+  return map
+})
+
+/**
+ * 把一名司机在本任务段内的若干运输段连成一条线：按时间顺序拼接真实道路轨迹。
+ * 段与段首尾相接（同一坐标）时去重；不重合说明中间还有空驶/沿骨架运行的连接段，
+ * 保留首点让地图把这段也画出来，保证"一段段可以连接上"。
+ */
+const buildDriverSegmentRoute = (
+  plate: string,
+  rows: { leg: TopologyApi.TopologyLeg; orderId?: number; orderNo?: string }[],
+  planId?: number
+): RouteView | null => {
+  const points: { lng: number; lat: number }[] = []
+  const orderNos: string[] = []
+  let distanceKm = 0
+  let realSegments = 0
+  let pendingCount = 0
+  rows.forEach((row) => {
+    const leg = row.leg
+    const stored = (leg.navigationPolyline ?? [])
+      .filter((p) => p.longitude != null && p.latitude != null)
+      .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
+    const key = legKey(leg)
+    const cached = legRoadCache.value.get(key)
+    const hasCoords =
+      leg.fromLongitude != null && leg.fromLatitude != null && leg.toLongitude != null && leg.toLatitude != null
+    if (hasCoords) {
+      ensureLegRoad(key, leg.fromLongitude!, leg.fromLatitude!, leg.toLongitude!, leg.toLatitude!)
+    }
+    const real = stored.length >= 2 ? stored : (cached && cached.length >= 2 ? cached : null)
+    if (real) {
+      realSegments++
+      real.forEach((p, i) => {
+        if (i === 0 && points.length) {
+          const prev = points[points.length - 1]
+          if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+        }
+        points.push(p)
+      })
+    } else if (hasCoords) {
+      // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：只记该段待取，取到真实轨迹后自动重绘
+      pendingCount++
+    }
+    distanceKm += Number(leg.distanceKm || 0)
+    if (row.orderNo && !orderNos.includes(row.orderNo)) orderNos.push(row.orderNo)
+  })
+  if (points.length < 2) return null
+  const driver = rows.map((r) => r.leg).find((l) => l.driverName)?.driverName
+  const lastOrderNo = orderNos[orderNos.length - 1]
+  return {
+    key: `order-seg-${planId ?? 0}-${plate}`,
+    planId,
+    color: plateColorMap.value.get(plate) || '#909399',
+    title: `${plate} 任务段${lastOrderNo ? `（到订单 ${lastOrderNo}）` : ''}`,
+    orderNos,
+    orderCount: orderNos.length,
+    stops: [],
+    locatedStops: [],
+    driverText: driver || '',
+    distanceKm,
+    distanceText: distanceKm ? distanceKm.toFixed(1) : '-',
+    points,
+    realSegments,
+    totalSegments: rows.length,
+    windowText: windowTextOf(rows.map((r) => r.leg)),
+    pendingCount,
+    plateNo: plate
+  }
+}
+
 /** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
 const plateColorMap = computed(() => {
   const map = new Map<string, string>()
@@ -615,7 +746,7 @@ const linkOrders = computed(() => {
     : plans.value
   const orderIds = new Set<number>()
   shown.forEach((p) => (p.items ?? []).forEach((i) => i.orderId && orderIds.add(i.orderId)))
-  return topologies.value
+  const list = topologies.value
     .filter((t) => t && t.orderId != null && orderIds.has(t.orderId))
     .map((t) => {
       const legs = (t.legs ?? []).map((leg, index) => {
@@ -633,6 +764,10 @@ const linkOrders = computed(() => {
         // 用地图上"该车牌对应车辆线"的颜色，保证右栏与地图颜色一致（换车=换色，一眼看出联运）
         return { ...leg, handoverTarget, color: plateColorMap.value.get(leg.plateNo || '') || '#909399' }
       })
+      // 司机（车辆）归堆用：一单由多段组成时，按承运该单的第一段车辆归堆
+      const legList = t.legs ?? []
+      const first = legList[0]
+      const last = legList[legList.length - 1]
       return {
         key: `link-${t.orderId}`,
         orderId: t.orderId,
@@ -640,9 +775,59 @@ const linkOrders = computed(() => {
         totalLegs: t.totalLegs ?? legs.length,
         transferCount: t.transferCount ?? 0,
         durationMinutes: t.totalDurationMinutes,
-        legs
+        legs,
+        plateKey: first?.plateNo || first?.driverName || '未知车辆',
+        driverName: first?.driverName || '',
+        startTime: first?.estimatedDeparture || first?.estimatedArrival || '',
+        endTime: last?.estimatedArrival || last?.estimatedDeparture || '',
+        /** 该司机任务段内的第几单（1 = 第一单，N = 最后一单） */
+        seqInDriver: 0,
+        /** 该司机在本方案内一共负责几单 */
+        driverOrderCount: 0
       }
     })
+  // 订单视角排序：同一司机（车辆）的订单归在一堆，堆内按该司机任务段的执行顺序（第一单 → 最后一单，
+  // 取承运段离站时间）从上到下排；依次点击即可把地图上的线一段段接成这名司机的整条任务段路线。
+  list.sort((a, b) => {
+    const byDriver = a.plateKey.localeCompare(b.plateKey)
+    if (byDriver !== 0) return byDriver
+    const byTime = (a.startTime || '').localeCompare(b.startTime || '')
+    if (byTime !== 0) return byTime
+    return (a.orderId ?? 0) - (b.orderId ?? 0)
+  })
+  const counts = new Map<string, number>()
+  list.forEach((o) => counts.set(o.plateKey, (counts.get(o.plateKey) || 0) + 1))
+  let lastPlate = ''
+  let seq = 0
+  list.forEach((o) => {
+    if (o.plateKey !== lastPlate) {
+      lastPlate = o.plateKey
+      seq = 0
+    }
+    o.seqInDriver = ++seq
+    o.driverOrderCount = counts.get(o.plateKey) || 1
+  })
+  return list
+})
+
+/** 订单视角：按司机（车辆）归堆后的分组（堆内已按任务段顺序排好），用于列表里的分组标题 */
+const linkOrderGroups = computed(() => {
+  type LinkOrder = (typeof linkOrders.value)[number]
+  const groups: { key: string; title: string; color: string; orders: LinkOrder[] }[] = []
+  linkOrders.value.forEach((o) => {
+    let g = groups.find((x) => x.key === o.plateKey)
+    if (!g) {
+      g = {
+        key: o.plateKey,
+        title: `${o.plateKey}${o.driverName && o.driverName !== o.plateKey ? ` · ${o.driverName}` : ''}`,
+        color: plateColorMap.value.get(o.plateKey) || '#909399',
+        orders: []
+      }
+      groups.push(g)
+    }
+    g.orders.push(o)
+  })
+  return groups
 })
 
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
@@ -691,16 +876,25 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     (o) => !orderIdFilter || (o.orderId != null && orderIdFilter.has(o.orderId))
   )
   if (!orders.length) return []
-  const groups = new Map<string, { leg: LinkLeg; orderId?: number; orderNo?: string }[]>()
+  // 分组口径：同一套方案（= 一个任务时间窗）+ 同一台车。
+  // 绝不把不同方案/不同时间窗的运输段并成一条线：否则同一天多套方案会被画成
+  // "一台车跑了一整天、做完一单瞬移到别处接单"，与"一车一时窗任务段"的真实口径不符。
+  const planIdOf = (orderId?: number) =>
+    plans.value.find((p) => (p.items ?? []).some((i) => i.orderId === orderId))?.id
+  const groups = new Map<string, { leg: LinkLeg; orderId?: number; orderNo?: string; planId?: number }[]>()
   orders.forEach((o) => {
+    const planId = planIdOf(o.orderId)
     o.legs.forEach((leg) => {
       const plate = leg.plateNo || leg.driverName || '未知车辆'
-      if (!groups.has(plate)) groups.set(plate, [])
-      groups.get(plate)!.push({ leg: leg as LinkLeg, orderId: o.orderId, orderNo: o.orderNo })
+      const groupKey = `${planId ?? 0}-${plate}`
+      if (!groups.has(groupKey)) groups.set(groupKey, [])
+      groups.get(groupKey)!.push({ leg: leg as LinkLeg, orderId: o.orderId, orderNo: o.orderNo, planId })
     })
   })
   const list: RouteView[] = []
-  groups.forEach((rows, plate) => {
+  groups.forEach((rows, groupKey) => {
+    const plate = rows[0]?.leg.plateNo || rows[0]?.leg.driverName || '未知车辆'
+    const planId = rows[0]?.planId
     const sorted = [...rows].sort((a, b) => {
       const ta = a.leg.estimatedArrival || ''
       const tb = b.leg.estimatedArrival || ''
@@ -711,6 +905,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     const legRows: VehicleLegRow[] = []
     const locatedStops: { stop: RouteStop; lng: number; lat: number }[] = []
     let realSegments = 0
+    let pendingCount = 0
     sorted.forEach((row, index) => {
       const leg = row.leg
       const key = legKey(leg)
@@ -723,21 +918,22 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       if (hasCoords) {
         ensureLegRoad(key, leg.fromLongitude!, leg.fromLatitude!, leg.toLongitude!, leg.toLatitude!)
       }
-      const fallback = hasCoords
-        ? [
-            { lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) },
-            { lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) }
-          ]
-        : []
       const real = stored.length >= 2 ? stored : (cached && cached.length >= 2 ? cached : null)
-      const road = real ?? fallback
       const estimated = !real
-      if (!estimated) realSegments++
-      road.forEach((p, i) => {
-        // 段与段的衔接点重合：跳过下一段的首点，避免重复点造成线头/播放抖动
-        if (i === 0 && index > 0) return
-        points.push(p)
-      })
+      if (real) {
+        realSegments++
+        real.forEach((p, i) => {
+          // 段与段衔接点重合时去重（避免线头/播放抖动）；不重合保留首点，让地图把连接段画出来
+          if (i === 0 && points.length) {
+            const prev = points[points.length - 1]
+            if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+          }
+          points.push(p)
+        })
+      } else if (hasCoords) {
+        // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：先只列出该段，取到真实轨迹后自动重绘
+        pendingCount++
+      }
       legRows.push({
         seq: index + 1,
         orderId: row.orderId,
@@ -749,6 +945,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
         estimated,
         handoverText: leg.handoverTarget ? `在 ${leg.toStationName || '本站'} 交给 ${leg.handoverTarget}` : '',
         timeText: timeText(leg.estimatedArrival),
+        timeRangeText: timeRangeText(leg.estimatedDeparture, leg.estimatedArrival),
         distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-'
       })
       // 地图经停点标记：每段的到达站（换乘段标「途经」，最后一段标「派送」）
@@ -770,9 +967,9 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     const distanceKm = sorted.reduce((sum, r) => sum + (Number(r.leg.distanceKm) || 0), 0)
     const driver = sorted.map((r) => r.leg).find((l) => l.driverName)?.driverName
     list.push({
-      key: `leg-${plate}`,
+      key: `leg-${groupKey}`,
       color: plateColorMap.value.get(plate) || '#909399',
-      title: `${plate}${driver ? ` · ${driver}` : ''}`,
+      title: `${planId ? `方案 #${planId} · ` : ''}${plate}${driver ? ` · ${driver}` : ''}`,
       orderNos,
       orderCount: orderNos.length,
       stops: [],
@@ -784,6 +981,9 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       realSegments,
       totalSegments: legRows.length,
       legs: legRows,
+      windowText: windowTextOf(sorted.map((r) => r.leg)),
+      pendingCount,
+      planId,
       plateNo: plate
     })
   })
@@ -819,6 +1019,7 @@ const buildRoutes = () => {
       const points: { lng: number; lat: number }[] = []
       let realSegments = 0
       let totalSegments = 0
+      let pendingCount = 0
       locatedStops.forEach((located, index) => {
         const current = { lng: located.lng, lat: located.lat }
         if (index === 0) {
@@ -828,15 +1029,21 @@ const buildRoutes = () => {
         totalSegments++
         const key = `${plan.id}:${vehicleId}:${located.stop.visitSequence ?? 0}`
         const real = roadmapSegments.value.get(key)
-        if (real) {
+        // 只有真实道路（provider=AMAP）才算画出来；provider=EUCLIDEAN 是后端的两点兜底，
+        // 演示口径里不再把它当线路画（否则又变成"两站直线相连"）。
+        const isRealRoad = !!real && real.provider !== 'EUCLIDEAN' && real.points.length >= 2
+        if (isRealRoad) {
           realSegments++
+          real!.points.forEach((p, i) => {
+            if (i === 0 && points.length) {
+              const prev = points[points.length - 1]
+              if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+            }
+            points.push(p)
+          })
+        } else {
+          pendingCount++
         }
-        const segmentPoints = real ? real.points : [points[points.length - 1], current]
-        segmentPoints.forEach((p, i) => {
-          // 拼接处去掉与上段末点重复的起点
-          if (i === 0) return
-          points.push(p)
-        })
       })
       list.push({
         key: `${plan.id}-${vehicleId}`,
@@ -852,7 +1059,8 @@ const buildRoutes = () => {
         distanceText: distanceKm ? distanceKm.toFixed(1) : '-',
         points,
         realSegments,
-        totalSegments
+        totalSegments,
+        pendingCount
       })
     })
   })
@@ -1293,7 +1501,9 @@ const load = async () => {
       })
     })
     roadmapSegments.value = segmentMap
-    activePlanId.value = 0
+    // 默认只看一套方案（= 一个任务时间窗）。多套方案一起展示时，同一台车不同窗口的运输段
+    // 会被误读成"这台车跑了一整天、做完一单瞬移到别处接单"；需要全局视角时手动点「全部方案」。
+    activePlanId.value = plans.value[0]?.id ?? 0
     buildRoutes()
   } finally {
     loading.value = false
@@ -1569,6 +1779,49 @@ onBeforeUnmount(stopPlay)
   align-items: baseline;
   gap: 8px;
   margin-bottom: 6px;
+}
+.order-group {
+  margin-bottom: 12px;
+}
+.route-pending-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #e6a23c;
+}
+.order-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 6px;
+  border-bottom: 1px dashed #c7d8ea;
+  margin-bottom: 8px;
+}
+.order-group-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.order-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #123f6e;
+}
+.order-group-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.order-seq {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: #123f6e;
+  border-radius: 999px;
+  padding: 1px 7px;
 }
 .order-no {
   font-size: 13px;
