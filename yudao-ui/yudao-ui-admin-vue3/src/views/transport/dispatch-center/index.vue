@@ -4,7 +4,12 @@
       <!-- ① 订单池 -->
       <el-col :span="6">
         <ContentWrap title="订单池">
-          <el-button size="small" @click="loadPool"><Icon icon="ep:refresh" />刷新</el-button>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <el-button size="small" @click="loadPool"><Icon icon="ep:refresh" />刷新</el-button>
+            <el-button size="small" type="primary" :loading="demoRunning" @click="runOneClickDemo">
+              <Icon icon="ep:video-play" />一键演示（归集→调度→审核）
+            </el-button>
+          </div>
           <el-table
             :data="pool"
             highlight-current-row
@@ -105,6 +110,7 @@
 import * as DispatchApi from '@/api/transport/dispatch'
 import * as TopologyApi from '@/api/transport/topology'
 import * as MonitoringApi from '@/api/transport/monitoring'
+import { ElLoading, ElMessageBox } from 'element-plus'
 import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
 
 defineOptions({ name: 'TransportDispatchCenter' })
@@ -126,6 +132,56 @@ const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS[s] || 
 const loadPool = async () => {
   const res = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 100 })
   pool.value = res.list || []
+}
+
+/**
+ * 一键演示：归集全部待入池 → 一键智能调度（按片区分批）→ 方案审核通过。
+ * 与「调度方案」页的一键演示同一套接口与流程，订单池页就地联动刷新，
+ * 演示完左侧订单池自动更新（已入池订单进入方案、待入池清空）。
+ */
+const demoRunning = ref(false)
+const runOneClickDemo = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将依次执行：① 归集全部「待入池」订单 ② 一键智能调度（自动选场站/车辆） ③ 方案审核通过。\n\n是否继续？',
+      '一键演示',
+      { type: 'warning', confirmButtonText: '开始演示', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return // 用户取消
+  }
+  demoRunning.value = true
+  const loading = ElLoading.service({ text: '① 归集订单入池…', background: 'rgba(0,0,0,0.15)' })
+  try {
+    const collected = await DispatchApi.collectOrders({ all: true })
+    loading.setText(`① 已归集 ${collected} 单，② 正在按片区智能调度…`)
+    const planIds: number[] = []
+    for (let round = 0; round < 4; round++) {
+      const remaining = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 1, status: 1 })
+      if (!(remaining.total || 0)) break
+      loading.setText(`② 第 ${planIds.length + 1} 套方案：正在调度 ${remaining.total} 单…`)
+      planIds.push(await DispatchApi.createSmartPlan({ auto: true }))
+    }
+    if (!planIds.length) {
+      throw new Error('智能调度失败：订单池为空或算法无可行解')
+    }
+    for (const planId of planIds) {
+      loading.setText(`③ 正在审核方案 #${planId}…`)
+      await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
+    }
+    loading.close()
+    await loadPool()
+    await ElMessageBox.alert(
+      `归集订单：${collected} 单\n生成方案：${planIds.map((id) => '#' + id).join('、')}（共 ${planIds.length} 套）\n\n请到「调度中心 → 调度方案」查看可视化，或点击左侧订单查看运输链。`,
+      '调度完成',
+      { type: 'success', confirmButtonText: '知道了' }
+    )
+  } catch (e) {
+    loading.close()
+    message.error('一键演示中断：请确认存在「待入池」订单且后台已配置可用车辆')
+  } finally {
+    demoRunning.value = false
+  }
 }
 
 /** 当前订单运输链的覆盖物：切换订单时逐条移除，避免新旧链路叠加 */
