@@ -3,8 +3,12 @@ package cn.iocoder.yudao.module.transport.service.transport.driver;
 import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
+import lombok.extern.slf4j.Slf4j;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
+import cn.iocoder.yudao.module.system.api.social.SocialClientApi;
+import cn.iocoder.yudao.module.system.api.social.dto.SocialWxaSubscribeMessageSendReqDTO;
+import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
@@ -65,7 +69,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.beans.factory.annotation.Value;
-
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -86,6 +89,7 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
  */
 @Service
 @Validated
+@Slf4j
 public class DriverAppServiceImpl implements DriverAppService {
 
     /** 班次状态：启用 */
@@ -144,6 +148,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private MultiLegService multiLegService;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
+    @Resource private SocialClientApi socialClientApi;
 
     /** P1-F/G：车辆接近目标站点触发的距离分级阈值(km)，可用 yudao.transport.approach.* 覆盖 */
     @Value("${yudao.transport.approach.dist-2km:2.0}")
@@ -1054,6 +1059,25 @@ public class DriverAppServiceImpl implements DriverAppService {
                             + (item.getDriverId() != null ? driverName(item.getDriverId()) + " " : "")
                             + "约 " + (km <= approachDistArriving ? 1 : (km <= approachDist1Km ? 2 : 5)) + " 分钟后到达",
                     eventId);
+            // P1-F：微信订阅消息（发送失败不影响位置上报主流程，站内通知已在上一步幂等落库）
+            try {
+                if (socialClientApi != null && order.getMemberUserId() != null) {
+                    MemberUserRespDTO member = memberUserApi.getUser(order.getMemberUserId());
+                    if (member != null) {
+                        socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
+                                .setUserId(member.getId())
+                                .setUserType(UserTypeEnum.MEMBER.getValue())
+                                .setTemplateTitle("派送提醒")
+                                .setPage("pages/goods/trace/trace?no=" + order.getOrderNo())
+                                .addMessage("thing1", "您的包裹即将送达「" + station.getStationName() + "」")
+                                .addMessage("thing2", "司机" + (item.getDriverId() != null ? driverName(item.getDriverId()) : "")
+                                        + "约 " + (km <= approachDistArriving ? 1 : (km <= approachDist1Km ? 2 : 5))
+                                        + " 分钟后到达"));
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("[reportLocation] 订单 {} 即将送达订阅消息发送失败：{}", orderId, ex.getMessage());
+            }
         }
     }
 
