@@ -89,6 +89,14 @@ public interface DispatchService {
                                                              Double toLongitude, Double toLatitude);
 
     /**
+     * 预热真实道路轨迹（高德配额恢复后跑一次）：订单池订单的取送站点对 + 今天方案里运输段的起终点对，
+     * 逐对调用高德并把取到的轨迹落库到对应运输段（transport_leg.navigation_polyline）。
+     *
+     * @return 本次成功取到并落库/预热的站点对数
+     */
+    int prefetchRoadGeometry();
+
+    /**
      * 获得调度方案分页
      */
     PageResult<DispatchPlanDO> getPlanPage(DispatchPlanPageReqVO reqVO);
