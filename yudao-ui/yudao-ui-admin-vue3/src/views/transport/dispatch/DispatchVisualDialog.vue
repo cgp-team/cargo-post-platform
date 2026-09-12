@@ -162,6 +162,7 @@
               <div class="route-sub">
                 <template v-if="route.legs">
                   {{ route.legs.length }} 段 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                  <template v-if="route.windowText"> · 任务窗口 {{ route.windowText }}</template>
                 </template>
                 <template v-else>
                   {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
@@ -178,7 +179,7 @@
                   </span>
                   <span class="stop-station">{{ lg.fromName }} → {{ lg.toName }}</span>
                   <span v-if="lg.orderNo" class="stop-order">{{ lg.orderNo }}</span>
-                  <span class="stop-time">{{ lg.timeText }}</span>
+                  <span class="stop-time">{{ lg.timeRangeText || lg.timeText }}</span>
                   <span v-if="lg.distanceText && lg.distanceText !== '-'" class="stop-time">{{ lg.distanceText }}km</span>
                   <div v-if="lg.handoverText" class="stop-handover">
                     <span class="stop-handover-icon">🔄</span>
@@ -296,6 +297,8 @@ interface VehicleLegRow {
   estimated: boolean
   handoverText: string
   timeText: string
+  /** 该段计划时间区间（离站–到达，写清"几点到几点"）；缺离站时间时退化为"到达 HH:mm" */
+  timeRangeText: string
   distanceText: string
 }
 interface RouteView {
@@ -319,6 +322,10 @@ interface RouteView {
   totalSegments: number
   /** 按车辆视角：该车真实执行的运输段（存在时优先按它展示，而不是算法单车经停明细） */
   legs?: VehicleLegRow[]
+  /** 任务时间窗（该方案内该车最早离站 ~ 最晚到达）：一套方案 = 一个任务时间窗 */
+  windowText?: string
+  /** 归属方案：分组时同一天的多套方案不合并，避免被当成"一台车跑了一整天" */
+  planId?: number
   /** 该车车牌（运输段分组口径） */
   plateNo?: string
 }
@@ -377,6 +384,29 @@ const actionClass = (action?: number) =>
           ? 'act-deliver'
           : 'act-seat'
 const timeText = (t?: string) => (t ? t.replace('T', ' ').slice(11, 16) : '')
+
+/** 一段运输的计划时间区间文案：09:12–09:35（缺离站时间时退化为"到达 09:35"） */
+const timeRangeText = (departure?: string, arrival?: string) => {
+  const d = timeText(departure)
+  const a = timeText(arrival)
+  if (d && a) return `${d}–${a}`
+  if (a) return `到达 ${a}`
+  return d ? `${d}–` : ''
+}
+
+/**
+ * 一套方案（一个任务时间窗）的时间范围：该车全部运输段最早离站 ~ 最晚到达。
+ * 演示口径：一个任务段时间内完成这批订单，卡片上要写清"这趟几点到几点"。
+ */
+const windowTextOf = (legs: TopologyApi.TopologyLeg[]) => {
+  const departures = legs.map((l) => l.estimatedDeparture).filter(Boolean) as string[]
+  const arrivals = legs.map((l) => l.estimatedArrival).filter(Boolean) as string[]
+  const start = departures.length ? timeText(departures.reduce((a, b) => (a < b ? a : b))) : ''
+  const end = arrivals.length ? timeText(arrivals.reduce((a, b) => (a > b ? a : b))) : ''
+  if (start && end) return `${start}–${end}`
+  if (end) return `～${end}`
+  return start ? `${start}–` : ''
+}
 
 /**
  * 本站操作数量文案：**只标货运件数**（揽收/派送 = 件）。
@@ -691,16 +721,25 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     (o) => !orderIdFilter || (o.orderId != null && orderIdFilter.has(o.orderId))
   )
   if (!orders.length) return []
-  const groups = new Map<string, { leg: LinkLeg; orderId?: number; orderNo?: string }[]>()
+  // 分组口径：同一套方案（= 一个任务时间窗）+ 同一台车。
+  // 绝不把不同方案/不同时间窗的运输段并成一条线：否则同一天多套方案会被画成
+  // "一台车跑了一整天、做完一单瞬移到别处接单"，与"一车一时窗任务段"的真实口径不符。
+  const planIdOf = (orderId?: number) =>
+    plans.value.find((p) => (p.items ?? []).some((i) => i.orderId === orderId))?.id
+  const groups = new Map<string, { leg: LinkLeg; orderId?: number; orderNo?: string; planId?: number }[]>()
   orders.forEach((o) => {
+    const planId = planIdOf(o.orderId)
     o.legs.forEach((leg) => {
       const plate = leg.plateNo || leg.driverName || '未知车辆'
-      if (!groups.has(plate)) groups.set(plate, [])
-      groups.get(plate)!.push({ leg: leg as LinkLeg, orderId: o.orderId, orderNo: o.orderNo })
+      const groupKey = `${planId ?? 0}-${plate}`
+      if (!groups.has(groupKey)) groups.set(groupKey, [])
+      groups.get(groupKey)!.push({ leg: leg as LinkLeg, orderId: o.orderId, orderNo: o.orderNo, planId })
     })
   })
   const list: RouteView[] = []
-  groups.forEach((rows, plate) => {
+  groups.forEach((rows, groupKey) => {
+    const plate = rows[0]?.leg.plateNo || rows[0]?.leg.driverName || '未知车辆'
+    const planId = rows[0]?.planId
     const sorted = [...rows].sort((a, b) => {
       const ta = a.leg.estimatedArrival || ''
       const tb = b.leg.estimatedArrival || ''
@@ -749,6 +788,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
         estimated,
         handoverText: leg.handoverTarget ? `在 ${leg.toStationName || '本站'} 交给 ${leg.handoverTarget}` : '',
         timeText: timeText(leg.estimatedArrival),
+        timeRangeText: timeRangeText(leg.estimatedDeparture, leg.estimatedArrival),
         distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-'
       })
       // 地图经停点标记：每段的到达站（换乘段标「途经」，最后一段标「派送」）
@@ -770,9 +810,9 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     const distanceKm = sorted.reduce((sum, r) => sum + (Number(r.leg.distanceKm) || 0), 0)
     const driver = sorted.map((r) => r.leg).find((l) => l.driverName)?.driverName
     list.push({
-      key: `leg-${plate}`,
+      key: `leg-${groupKey}`,
       color: plateColorMap.value.get(plate) || '#909399',
-      title: `${plate}${driver ? ` · ${driver}` : ''}`,
+      title: `${planId ? `方案 #${planId} · ` : ''}${plate}${driver ? ` · ${driver}` : ''}`,
       orderNos,
       orderCount: orderNos.length,
       stops: [],
@@ -784,6 +824,8 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       realSegments,
       totalSegments: legRows.length,
       legs: legRows,
+      windowText: windowTextOf(sorted.map((r) => r.leg)),
+      planId,
       plateNo: plate
     })
   })
@@ -1293,7 +1335,9 @@ const load = async () => {
       })
     })
     roadmapSegments.value = segmentMap
-    activePlanId.value = 0
+    // 默认只看一套方案（= 一个任务时间窗）。多套方案一起展示时，同一台车不同窗口的运输段
+    // 会被误读成"这台车跑了一整天、做完一单瞬移到别处接单"；需要全局视角时手动点「全部方案」。
+    activePlanId.value = plans.value[0]?.id ?? 0
     buildRoutes()
   } finally {
     loading.value = false
