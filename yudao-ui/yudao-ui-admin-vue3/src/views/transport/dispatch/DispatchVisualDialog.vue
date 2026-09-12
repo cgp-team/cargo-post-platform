@@ -690,6 +690,8 @@ const buildDriverSegmentRoute = (
       })
     } else if (hasCoords) {
       // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：只记该段待取，取到真实轨迹后自动重绘
+      points.push({ lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) })
+      points.push({ lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) })
       pendingCount++
     }
     distanceKm += Number(leg.distanceKm || 0)
@@ -932,6 +934,8 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
         })
       } else if (hasCoords) {
         // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：先只列出该段，取到真实轨迹后自动重绘
+        points.push({ lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) })
+        points.push({ lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) })
         pendingCount++
       }
       legRows.push({
@@ -1042,6 +1046,8 @@ const buildRoutes = () => {
             points.push(p)
           })
         } else {
+          // 取不到真实轨迹：虚线示意（与实线区分），取到后自动重绘为实线
+          points.push(current)
           pendingCount++
         }
       })
