@@ -80,6 +80,8 @@ class SolveOutcome:
     parameter_version: str = PARAMETER_VERSION
     warnings: list[str] = field(default_factory=list)
     iteration_stats: list[dict] = field(default_factory=list)
+    # 绕行硬约束/覆盖不足时未分配的订单编号（后端交给多段联运 MultiLegPlanner）
+    unassigned_order_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -504,6 +506,7 @@ def solve(
             f"LOCAL_SEARCH_MS={round(sum(s.get('local_search_ms', 0) for s in iteration_stats), 1)}"
         )
 
+    missing_tasks = _missing_tasks(best_routes, tasks)
     return SolveOutcome(
         status="feasible",
         vehicle_plans=vehicle_plans,
@@ -514,6 +517,7 @@ def solve(
         parameter_version=PARAMETER_VERSION,
         warnings=warnings,
         iteration_stats=iteration_stats,
+        unassigned_order_ids=[oid for t in missing_tasks for oid in t.order_ids],
     )
 
 

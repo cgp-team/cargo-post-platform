@@ -191,6 +191,8 @@ class PlanResult(BaseModel):
     distanceUnit: str = "degree"
     totalDistance: float = 0.0
     vehiclePlans: list[VehiclePlan] = Field(default_factory=list)
+    # 绕行硬约束/覆盖不足时未分配的订单编号（后端交给多段联运 MultiLegPlanner）
+    unassignedOrderIds: list[str] = Field(default_factory=list)
     computedAt: datetime
 
 
