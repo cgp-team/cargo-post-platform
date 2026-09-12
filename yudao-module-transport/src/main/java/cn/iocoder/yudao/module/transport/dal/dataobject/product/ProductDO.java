@@ -23,6 +23,8 @@ public class ProductDO extends TenantBaseDO {
     private BigDecimal price;
     private String unit;
     private String image;
+    /** 商品图片 URL（后台表单上传）；为空时前端回落到 image(emoji)/本地图 */
+    private String imageUrl;
     private String badge;
     private String description;
     private Integer stock;

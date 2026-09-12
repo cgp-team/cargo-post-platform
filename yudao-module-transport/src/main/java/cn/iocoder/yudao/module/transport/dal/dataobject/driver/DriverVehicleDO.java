@@ -22,6 +22,9 @@ public class DriverVehicleDO extends TenantBaseDO {
 
     private Long vehicleId;
 
+    /** 运营线路编号（运营范围）：联运分段时优先选"本段起终点都在该线路覆盖内"的车；NULL=不限范围 */
+    private Long routeId;
+
     private LocalDateTime bindTime;
 
     private LocalDateTime unbindTime;

@@ -57,6 +57,15 @@ public class MultiLegPlanner {
     static final double THREE_LEG_DETOUR_RATIO = 1.6;
     static final double THREE_LEG_MIN_DETOUR_KM = 8.0;
     /**
+     * 放宽档（仅在两段/三段候选全都为空时启用）：本地线网只有"绕一点"的联运方案时，
+     * 仍然选它，而不是绕开本地线网去走高德兜底或直送。
+     * 语义：宁可让车在自己运营范围内多绕几公里、在交汇站交接，也不要让一辆车跨片区直送。
+     */
+    static final double RELAXED_TWO_LEG_DETOUR_RATIO = 3.0;
+    static final double RELAXED_TWO_LEG_MIN_DETOUR_KM = 15.0;
+    static final double RELAXED_THREE_LEG_DETOUR_RATIO = 4.0;
+    static final double RELAXED_THREE_LEG_MIN_DETOUR_KM = 25.0;
+    /**
      * 换乘枢纽候选数上限：真实公交线网里换乘点往往不在"最近几个站"里（如 邮电大学→磁器街 需经
      * 南坪站、五公里），上限过小会漏掉可行链路。170 站量级下 O(n²) 组合仅 3 万次，开销可忽略。
      */
@@ -115,13 +124,21 @@ public class MultiLegPlanner {
         }
 
         // 2) 两段联运：换乘站须"取货线路能到 + 送达线路能走"
-        Candidate twoLeg = bestTwoLeg(pickup, delivery, stations, index, directKm);
+        Candidate twoLeg = bestTwoLeg(pickup, delivery, stations, index, directKm, false);
+        if (twoLeg == null) {
+            // 本地线网只有绕行方案 → 放宽档再试一次（保证"在自己运营范围内交接"优先于兜底）
+            twoLeg = bestTwoLeg(pickup, delivery, stations, index, directKm, true);
+        }
         if (twoLeg != null) {
             candidates.add(twoLeg);
         }
         // 3) 三段联运：两跳枢纽链（起点→换乘1→换乘2→终点）
         Candidate threeLeg = bestThreeLeg(pickup, delivery, stations, index, directKm,
-                twoLeg == null ? null : twoLeg.transferStationId());
+                twoLeg == null ? null : twoLeg.transferStationId(), false);
+        if (threeLeg == null) {
+            threeLeg = bestThreeLeg(pickup, delivery, stations, index, directKm,
+                    twoLeg == null ? null : twoLeg.transferStationId(), true);
+        }
         if (threeLeg != null) {
             candidates.add(threeLeg);
         }
@@ -215,8 +232,10 @@ public class MultiLegPlanner {
     }
 
     private Candidate bestTwoLeg(StationDO pickup, StationDO delivery, List<StationDO> stations,
-                                 RouteIndex index, double directKm) {
-        double tolerance = Math.max(directKm * TWO_LEG_DETOUR_RATIO, TWO_LEG_MIN_DETOUR_KM);
+                                 RouteIndex index, double directKm, boolean relaxed) {
+        double tolerance = relaxed
+                ? Math.max(directKm * RELAXED_TWO_LEG_DETOUR_RATIO, RELAXED_TWO_LEG_MIN_DETOUR_KM)
+                : Math.max(directKm * TWO_LEG_DETOUR_RATIO, TWO_LEG_MIN_DETOUR_KM);
         Candidate best = null;
         for (StationDO hub : hubs(pickup, delivery, stations)) {
             if (!index.sameRoute(pickup.getId(), hub.getId())
@@ -246,8 +265,10 @@ public class MultiLegPlanner {
     }
 
     private Candidate bestThreeLeg(StationDO pickup, StationDO delivery, List<StationDO> stations,
-                                   RouteIndex index, double directKm, Long preferredHub) {
-        double tolerance = Math.max(directKm * THREE_LEG_DETOUR_RATIO, THREE_LEG_MIN_DETOUR_KM);
+                                   RouteIndex index, double directKm, Long preferredHub, boolean relaxed) {
+        double tolerance = relaxed
+                ? Math.max(directKm * RELAXED_THREE_LEG_DETOUR_RATIO, RELAXED_THREE_LEG_MIN_DETOUR_KM)
+                : Math.max(directKm * THREE_LEG_DETOUR_RATIO, THREE_LEG_MIN_DETOUR_KM);
         List<StationDO> hubs = hubs(pickup, delivery, stations).stream()
                 .sorted(Comparator.comparingDouble((StationDO s) ->
                         distance(pickup, s) + distance(s, delivery)).thenComparing(StationDO::getId))

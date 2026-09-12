@@ -69,6 +69,10 @@ _EVENT_TO_ACTION = {
 # 乘客/配对任务（两段式：pickup+delivery 两个事件）
 _TWO_BLOCK = (TaskType.PASSENGER, TaskType.SHIPMENT)
 
+# 输出阶段的补全预算（秒）：搜索硬截止到期后，仍允许把遗漏任务补插回去。
+# 这是"输出收尾"而不是"继续搜索"，只做有限次贪心插桩，不违反搜索硬时限的初衷。
+OUTPUT_COMPLETION_BUDGET_SECONDS = 2.0
+
 
 @dataclass
 class SolveOutcome:
@@ -218,6 +222,10 @@ def solve(
     best_routes, best_obj = min(
         feasible_initials, key=lambda x: x[1]
     )
+    # 最后一个「完整且经过 FeasibilityEngine 验证」的解：搜索预算耗尽后，
+    # 局部搜索/ALNS 可能只留下部分解，输出阶段用它兜底，绝不返回半成品方案。
+    best_complete_routes = [r.copy() for r in best_routes]
+    best_complete_obj = best_obj
 
     # ── 信息素初始化（MMAS）────────────────────────────────
     task_ids = [t.task_id for t in tasks] + ["DEPOT"]
@@ -301,7 +309,6 @@ def solve(
                     passenger_capacities, cargo_capacities,
                     initial_passenger_loads, initial_cargo_loads,
                     station_map, matrix, deadline,
-                    max_detour_km=config.max_detour_km,
                 )
                 if ant_routes is None:
                     continue
@@ -377,6 +384,8 @@ def solve(
             if iteration_best_obj < best_obj:
                 best_routes = [r.copy() for r in iteration_best]
                 best_obj = iteration_best_obj
+                best_complete_routes = [r.copy() for r in best_routes]
+                best_complete_obj = best_obj
                 no_improve_count = 0
                 if cost > 0:
                     pheromone.deposit_multi_vehicle(
@@ -443,17 +452,38 @@ def solve(
             ) and refined_obj < best_obj:
                 best_routes = refined
                 best_obj = refined_obj
-        best_routes, best_obj = local_search_improve(
+        # 收尾 LS 也必须先验证「完整 + 可行」才允许替换最优解：
+        # LS 的移动可能丢任务，直接采纳会把完整解换成部分解。
+        ls_routes, ls_obj = local_search_improve(
             best_routes, tasks_by_id, station_map, matrix, engine,
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             rounds=config.local_search_rounds + 1,
             deadline=deadline,
         )
+        if _routes_feasible(
+            ls_routes, tasks_by_id, engine,
+            passenger_capacities, cargo_capacities,
+            initial_passenger_loads, initial_cargo_loads,
+            station_map, matrix,
+        ):
+            best_routes, best_obj = ls_routes, ls_obj
+            if ls_obj < best_complete_obj:
+                best_complete_routes = [r.copy() for r in ls_routes]
+                best_complete_obj = ls_obj
 
     # 存档里若有更优（且可行）精英则采纳
     best_entry = archive.get_best()
-    if best_entry is not None and best_entry.objective < best_obj:
+    if (
+        best_entry is not None
+        and best_entry.objective < best_obj
+        and _routes_feasible(
+            best_entry.routes, tasks_by_id, engine,
+            passenger_capacities, cargo_capacities,
+            initial_passenger_loads, initial_cargo_loads,
+            station_map, matrix,
+        )
+    ):
         best_routes = best_entry.routes
         best_obj = best_entry.objective
 
@@ -473,17 +503,32 @@ def solve(
         )
 
     # ── 输出（兜底：输出前强制解覆盖全部任务）──────────────
-    best_routes = _ensure_complete(
+    # 输出补全用独立小预算：搜索硬截止到时点后仍允许一次有限补插，
+    # 否则"已经搜到完整解、只是收尾时丢了几个任务"的批次会被误报成 INCOMPLETE_SOLUTION。
+    output_deadline = SearchDeadline.from_seconds(OUTPUT_COMPLETION_BUDGET_SECONDS)
+    completed = _ensure_complete(
         best_routes, tasks, tasks_by_id, engine,
         passenger_capacities, cargo_capacities,
         initial_passenger_loads, initial_cargo_loads,
-        station_map, matrix, deadline,
+        station_map, matrix, output_deadline,
     )
-    if best_routes is None:
+    if completed is not None:
+        best_routes = completed
+    elif best_complete_routes is not None:
+        # 兜底：回退到搜索过程中最后一个「完整 + 可行」的解，绝不输出半成品方案
+        best_routes = best_complete_routes
+        best_obj = best_complete_obj
+        warnings.append("OUTPUT_FALLBACK_TO_LAST_COMPLETE_SOLUTION")
+    else:
+        missing_tasks = _missing_tasks(best_routes, tasks)
         return SolveOutcome(
             status="infeasible",
             reason_code="INCOMPLETE_SOLUTION",
-            warnings=["NO_COMPLETE_V14_SOLUTION"],
+            warnings=[
+                "NO_COMPLETE_V14_SOLUTION",
+                "UNASSIGNED_TASKS=" + ",".join(sorted(t.task_id for t in missing_tasks)),
+            ],
+            unassigned_order_ids=sorted({oid for t in missing_tasks for oid in t.order_ids}),
         )
 
     vehicle_plans = _routes_to_vehicle_plans(
@@ -506,7 +551,6 @@ def solve(
             f"LOCAL_SEARCH_MS={round(sum(s.get('local_search_ms', 0) for s in iteration_stats), 1)}"
         )
 
-    missing_tasks = _missing_tasks(best_routes, tasks)
     return SolveOutcome(
         status="feasible",
         vehicle_plans=vehicle_plans,
@@ -517,7 +561,6 @@ def solve(
         parameter_version=PARAMETER_VERSION,
         warnings=warnings,
         iteration_stats=iteration_stats,
-        unassigned_order_ids=[oid for t in missing_tasks for oid in t.order_ids],
     )
 
 
@@ -587,7 +630,6 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
-            max_detour_km=config.max_detour_km,
         )
         if repaired is not None and _routes_feasible(
             repaired, tasks_by_id, engine,
@@ -634,7 +676,6 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
-            max_detour_km=config.max_detour_km,
         )
         if routes is None:
             continue
@@ -730,13 +771,8 @@ def _repair_unassigned(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
     deadline: SearchDeadline | None = None,
-    max_detour_km: float | None = None,
 ) -> list[RouteGenome] | None:
-    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。
-
-    绕行硬约束（max_detour_km）下，偏离运营路线过远的订单补插失败是预期行为——
-    这些订单留给多段联运，不强行塞给某条线路绕远。
-    """
+    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。"""
     placed = {
         tid for r in routes for tid in r.placements
     }
@@ -760,13 +796,8 @@ def _repair_unassigned(
             initial_passenger_loads,
             initial_cargo_loads,
             candidate_size=1,
-            max_detour_km=max_detour_km,
         )
         if not candidates:
-            # 货运订单（DELIVERY/PICKUP/SHIPMENT）绕行超限 → 跳过，留给多段联运；
-            # 乘客订单必须完整覆盖（无联运概念）→ 插不进即该解不可用，交由上层归类无解原因。
-            if task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT):
-                continue
             return None
         cand = candidates[0]
         routes[cand.vehicle_index].insert_task(
@@ -784,7 +815,14 @@ def _routes_feasible(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
 ) -> bool:
-    """全部车辆 RouteGenome 同时可行。"""
+    """全部车辆 RouteGenome 同时可行，且必须覆盖全部任务（部分解不算可行）。
+
+    早期版本只校验单车约束，未校验"任务是否被落下"：局部搜索/ALNS 丢任务后的
+    部分解会被当成"可行更优解"采纳，最后 _ensure_complete 又因搜索预算耗尽补不回来，
+    于是整批返回 INCOMPLETE_SOLUTION（一键演示现场表现就是"算法判定无可行解"）。
+    """
+    if not _is_complete(routes, list(tasks_by_id.values())):
+        return False
     for route in routes:
         if route.task_count() == 0:
             continue

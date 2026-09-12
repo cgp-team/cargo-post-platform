@@ -811,6 +811,11 @@ const runOneClickDemo = async () => {
       loading.setText(`③ 正在审核方案 #${planId}…`)
       await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
     }
+    // ④ 演示态：把这一批订单放回「待入池」，方便反复演示同一批订单
+    //   （生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后此处为空操作：
+    //    调度后的订单不再出现在订单池，除非显式打回重新派送）
+    loading.setText('④ 演示态：订单放回待入池（方便重复演示）…')
+    await DispatchApi.recycleDemoPool(planIds).catch(() => 0)
     const plan = await DispatchApi.getDispatchPlan(planIds[0])
     loading.close()
     await ElMessageBox.alert(

@@ -12,6 +12,8 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSen
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendReachabilityRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendRoutePreviewReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendQuoteReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendQuoteRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendLegRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.RoutePreviewRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
@@ -37,6 +39,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
+import cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService;
 import cn.iocoder.yudao.module.transport.service.dispatch.TransportTopologyService;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.topology.vo.OrderTopologyRespVO;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
@@ -56,7 +59,6 @@ import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -94,6 +96,7 @@ public class AppSendController {
     @Resource private StationMapper stationMapper;
     @Resource private MultiLegService multiLegService;
     @Resource private TransportTopologyService transportTopologyService;
+    @Resource private CargoPricingService cargoPricingService;
     /** 统一车辆位置（REAL > 模拟引擎 > 确定性班次模拟）：演示无司机上报时也能出"车快到了" */
     @Resource private VehicleLocationProvider vehicleLocationProvider;
 
@@ -106,13 +109,6 @@ public class AppSendController {
     private static final int CARRIER_FRESH_MINUTES = 5;
     /** "即将到站"阈值（分钟）：距目标站点 <= 该值 → carrierApproaching=true，前端高亮并提示 */
     private static final int CARRIER_APPROACH_MINUTES = 10;
-    /** P1-G：接近目标站点的距离分级阈值(km)，可用 yudao.transport.approach.* 覆盖 */
-    @Value("${yudao.transport.approach.dist-2km:2.0}")
-    private double approachDist2Km;
-    @Value("${yudao.transport.approach.dist-1km:1.0}")
-    private double approachDist1Km;
-    @Value("${yudao.transport.approach.dist-arriving:0.5}")
-    private double approachDistArriving;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -244,10 +240,6 @@ public class AppSendController {
         LocalDateTime eta = item.getEstimatedArrivalTime();
         if (eta != null && eta.isAfter(LocalDateTime.now())) {
             vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
-            // P2-M：计划经停时间是 ETA 的兜底口径（实时/模拟位置会在 fillCarrierLiveInfo 里覆盖）
-            if (vo.getEtaSource() == null) {
-                vo.setEtaSource("PLANNED");
-            }
         }
         // 司机到站/作业进度：与车辆位置无关，直接按经停明细状态给（用户端"司机已到达"提醒）
         fillCarrierArrival(vo, item, driverById(item.getDriverId()));
@@ -287,15 +279,30 @@ public class AppSendController {
         return etaMinutes != null && etaMinutes > 0 && etaMinutes <= CARRIER_APPROACH_MINUTES;
     }
 
-    /** P1-G：按距离分级返回接近阶段（NEAR_2KM / NEAR_1KM / ARRIVING）；超过 2km 返回 null */
-    static String approachStage(double distanceKm, double dist2km, double dist1km, double distArriving) {
-        if (distanceKm <= distArriving) {
+    /**
+     * P1-G：按距离分级返回接近阶段，超过最大阈值返回 null（不提醒）。
+     *
+     * <p>阈值语义：arrivingKm <= near1Km <= near2Km，边界闭合（<=）。
+     * 与司机端 {@code DriverAppServiceImpl#approachStage(double)} 同一套档位，
+     * 阈值可由 {@code yudao.transport.approach.*} 配置后传入，保证两端文案/图标一致。
+     *
+     * @param distanceKm   车辆到目标站点的距离（km），非法值（NaN/负数）返回 null
+     * @param near2Km      2km 档位阈值
+     * @param near1Km      1km 档位阈值
+     * @param arrivingKm   "即将到达"档位阈值
+     * @return ARRIVING / NEAR_1KM / NEAR_2KM，超出最大阈值返回 null
+     */
+    public static String approachStage(double distanceKm, double near2Km, double near1Km, double arrivingKm) {
+        if (Double.isNaN(distanceKm) || distanceKm < 0) {
+            return null;
+        }
+        if (distanceKm <= arrivingKm) {
             return "ARRIVING";
         }
-        if (distanceKm <= dist1km) {
+        if (distanceKm <= near1Km) {
             return "NEAR_1KM";
         }
-        if (distanceKm <= dist2km) {
+        if (distanceKm <= near2Km) {
             return "NEAR_2KM";
         }
         return null;
@@ -464,12 +471,7 @@ public class AppSendController {
         vo.setCarrierLatitude(loc.getLatitude().doubleValue());
         vo.setCarrierDistanceKm(BigDecimal.valueOf(Math.round(distanceEta.distKm() * 100) / 100.0));
         vo.setCarrierEtaMinutes(distanceEta.etaMinutes());
-        // P1-G：距离分级（NEAR_2KM / NEAR_1KM / ARRIVING），命中即视为"车快到了"（分钟阈值作兜底）
-        String stage = approachStage(distanceEta.distKm(), approachDist2Km, approachDist1Km, approachDistArriving);
-        vo.setCarrierApproachStage(stage);
-        vo.setCarrierApproaching(stage != null || carrierApproaching(distanceEta.etaMinutes()));
-        // P2-M：实时位置是最高优先级的 ETA 来源；模拟位置次之
-        vo.setEtaSource("SIMULATED".equals(source) ? "SIMULATED" : "REALTIME");
+        vo.setCarrierApproaching(carrierApproaching(distanceEta.etaMinutes()));
     }
 
     @GetMapping("/stations")
@@ -484,6 +486,23 @@ public class AppSendController {
     @PermitAll
     public CommonResult<RoutePreviewRespVO> routePreview(@Valid @RequestBody AppSendRoutePreviewReqVO reqVO) {
         return success(sendRouteInfoService.routePreview(reqVO.getPickupStationId(), reqVO.getDeliveryStationId()));
+    }
+
+    @PostMapping("/quote")
+    @Operation(summary = "寄货试算：件单价×件数 + 里程费（寄货页填完取货/送达地址即显示金额）")
+    @PermitAll
+    public CommonResult<AppSendQuoteRespVO> quote(@Valid @RequestBody AppSendQuoteReqVO reqVO) {
+        CargoPricingService.CargoQuote quote = cargoPricingService.quote(
+                reqVO.getPickupStationId(), reqVO.getDeliveryStationId(), reqVO.getItemCount());
+        AppSendQuoteRespVO vo = new AppSendQuoteRespVO();
+        vo.setAmount(quote.amount());
+        vo.setItemFee(quote.itemFee());
+        vo.setDistanceFee(quote.distanceFee());
+        vo.setDistanceKm(quote.distanceKm());
+        vo.setItemCount(quote.itemCount());
+        vo.setPricePerItem(quote.pricePerItem());
+        vo.setPricePerKm(quote.pricePerKm());
+        return success(vo);
     }
 
     @PostMapping("/reachability")
