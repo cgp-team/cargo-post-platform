@@ -6,6 +6,7 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusL
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusNearbyRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
@@ -49,6 +50,7 @@ public class AppBusServiceImpl implements AppBusService {
     @Resource private MonitoringService monitoringService;
     @Resource private ShiftMapper shiftMapper;
     @Resource private StationMapper stationMapper;
+    @Resource private cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper routeMapper;
     @Resource private AlgorithmClient algorithmClient;
     /** 真实道路几何（高德 Web key 直连，带缓存）：线路道路轨迹的首选来源 */
     @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
@@ -428,6 +430,9 @@ public class AppBusServiceImpl implements AppBusService {
             } else {
                 hasSimulated = true;
             }
+            // 用户体验口径：卡片要回答"我最方便的那站，这车还有几分钟到"，
+            // 而不是"这车离它的下一站还有几分钟"（下一站可能根本不在用户附近）。
+            this.fillNearestStationEta(bus, route, nearbyStations);
             buses.add(bus);
         }
         buses.sort(Comparator.comparing(AppBusNearbyRespVO.NearbyBus::getDistanceKm,
@@ -633,6 +638,80 @@ public class AppBusServiceImpl implements AppBusService {
     }
 
     /**
+     * 填充「用户最近站点」与「预计到达该站分钟」。
+     *
+     * <p>口径：在用户的附近站点（按距离升序）里取第一个"本车还会经过"的站点；
+     * 到站分钟 = 车辆到下一站分钟（fillEta 已算）+ 线路计划分钟（下一站 → 目标站的累计差值）。
+     * 本趟已过该站时不回填 ETA（前端据此提示"本车已过此站，等下一班"），不臆造到站时间。</p>
+     */
+    private void fillNearestStationEta(AppBusNearbyRespVO.NearbyBus bus,
+                                       MonitoringMapDataRespVO.Route route,
+                                       List<AppBusNearbyRespVO.NearbyStation> nearestStations) {
+        if (route == null || route.getPoints() == null || route.getPoints().isEmpty()
+                || nearestStations == null || nearestStations.isEmpty()) {
+            return;
+        }
+        List<MonitoringMapDataRespVO.Point> points = route.getPoints();
+        int nextIndex = indexOfStation(points, bus.getNextStation(), null);
+        boolean running = AppBusNearbyRespVO.STATUS_RUNNING.equals(bus.getStatus());
+        for (AppBusNearbyRespVO.NearbyStation station : nearestStations) {
+            if (station == null || (station.getName() == null && station.getId() == null)) {
+                continue;
+            }
+            int index = indexOfStation(points, station.getName(), station.getId());
+            if (index < 0) {
+                continue;
+            }
+            if (running && nextIndex >= 0 && index < nextIndex) {
+                continue; // 本趟已过此站：看下一个候选（更远的站可能还在前方）
+            }
+            bus.setNearestStationName(station.getName());
+            bus.setNearestStationDistanceKm(station.getDistanceKm());
+            if (nextIndex < 0) {
+                return; // 下一站未知：只给站点名，不臆造到站分钟
+            }
+            bus.setStopsToNearestStation(Math.max(0, index - nextIndex));
+            Integer plannedNext = points.get(nextIndex).getPlannedMinutes();
+            Integer plannedTarget = points.get(index).getPlannedMinutes();
+            // 在途：到下一站分钟（fillEta） + 线路计划分钟差；
+            // 待发车：发车等待分钟 + 线路计划分钟差（用户最关心的还是"还要等多久这车才到我那站"）。
+            int eta = running
+                    ? (bus.getEtaMinutes() != null ? bus.getEtaMinutes() : 0)
+                    : (bus.getWaitDepartureMinutes() != null ? bus.getWaitDepartureMinutes() : -1);
+            if (eta < 0) {
+                return; // 待发车但没有发车时间（如已收车）：不臆造
+            }
+            if (plannedNext != null && plannedTarget != null) {
+                eta += Math.max(0, plannedTarget - plannedNext);
+            }
+            bus.setNearestStationEtaMinutes(eta);
+            return;
+        }
+    }
+
+    /** 线路点位里按站点编号优先、站点名兜底找下标；找不到返回 -1 */
+    private static int indexOfStation(List<MonitoringMapDataRespVO.Point> points, String name, Long stationId) {
+        if (points == null || points.isEmpty()) {
+            return -1;
+        }
+        if (stationId != null) {
+            for (int i = 0; i < points.size(); i++) {
+                if (stationId.equals(points.get(i).getStationId())) {
+                    return i;
+                }
+            }
+        }
+        if (name != null && !name.isBlank()) {
+            for (int i = 0; i < points.size(); i++) {
+                if (name.equals(points.get(i).getStationName())) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
      * 车辆位置 → 下一站 → 高德真实道路距离/ETA。
      * 无下一站/无车辆位置/下一站无坐标：不调高德（bus 保持 null）。
      * 缓存：key = rounded(车辆坐标,4位):下一站id，TTL 60s——微小 GPS 位移共享同路线，节流高德调用。
@@ -721,13 +800,71 @@ public class AppBusServiceImpl implements AppBusService {
      * 缓存 5 分钟（路网几何稳定）；某段失败/不可用时该段回退为直线（起终点两点），不伪装真实道路。
      * 返回 null 表示整条线路无法绘制（少于 2 个有效坐标点）。
      */
+    /** 读取落库的真实道路几何（"lng,lat;lng,lat;..."）；未取到/解析失败返回 null（前端直线暂替） */
+    private List<AppBusLineRespVO.RoadPoint> loadStoredPolyline(Long routeId) {
+        if (routeMapper == null) {
+            return null;
+        }
+        RouteDO route = routeMapper.selectById(routeId);
+        if (route == null || route.getNavigationPolyline() == null || route.getNavigationPolyline().isBlank()
+                || !"AMAP".equals(route.getNavigationSource())) {
+            return null;
+        }
+        List<AppBusLineRespVO.RoadPoint> list = new ArrayList<>();
+        for (String seg : route.getNavigationPolyline().split(";")) {
+            String[] parts = seg.split(",");
+            if (parts.length != 2) {
+                continue;
+            }
+            try {
+                list.add(toRoadPoint(Double.parseDouble(parts[0]), Double.parseDouble(parts[1])));
+            } catch (NumberFormatException ignore) {
+                // 单点脏数据跳过，不因一条坏点丢掉整条轨迹
+            }
+        }
+        return list.size() >= 2 ? list : null;
+    }
+
+    /** 真实道路几何落库：配额恢复后预取一次即长期复用（失败只记日志，不影响本次返回） */
+    private void persistPolyline(Long routeId, List<AppBusLineRespVO.RoadPoint> polyline) {
+        if (routeMapper == null || polyline == null || polyline.size() < 2) {
+            return;
+        }
+        try {
+            StringBuilder sb = new StringBuilder(polyline.size() * 16);
+            for (AppBusLineRespVO.RoadPoint p : polyline) {
+                if (p.getLongitude() == null || p.getLatitude() == null) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append(';');
+                }
+                sb.append(p.getLongitude()).append(',').append(p.getLatitude());
+            }
+            RouteDO upd = new RouteDO();
+            upd.setId(routeId);
+            upd.setNavigationPolyline(sb.toString());
+            upd.setNavigationSource("AMAP");
+            routeMapper.updateById(upd);
+        } catch (Exception e) {
+            log.warn("[bus-lines] 线路{}轨迹落库失败：{}", routeId, e.getMessage());
+        }
+    }
+
     private List<AppBusLineRespVO.RoadPoint> fetchRoutePolyline(Long routeId, List<AppBusLineRespVO.Point> points) {
+        // 注：下面是 0/1/2 三级取轨迹策略，真实道路几何取到即落库（见 persistPolyline）。
         if (routeId == null || points == null || points.size() < 2) {
             return null;
         }
         RoutePolylineCache cached = routePolylineCache.get(routeId);
         if (cached != null && cached.expireAt() > System.currentTimeMillis()) {
             return cached.polyline();
+        }
+        // 0) 落库的真实道路几何（配额耗尽/重启后仍然可用；自建线路接上同一框架后同样受益）
+        List<AppBusLineRespVO.RoadPoint> stored = loadStoredPolyline(routeId);
+        if (stored != null && stored.size() >= 2) {
+            routePolylineCache.put(routeId, new RoutePolylineCache(stored, System.currentTimeMillis() + 300_000));
+            return stored;
         }
         List<AppBusLineRespVO.RoadPoint> fullPolyline = new ArrayList<>();
         // 0) 整条线路一次（或多个途经点分组）取真实道路：几十个站逐段请求会拖到几秒~几十秒，
@@ -747,6 +884,7 @@ public class AppBusServiceImpl implements AppBusService {
             direct = dedupePolyline(direct);
             routePolylineCache.put(routeId, new RoutePolylineCache(direct,
                     System.currentTimeMillis() + 300_000));
+            persistPolyline(routeId, direct);
             return direct;
         }
         for (int i = 0; i < points.size() - 1; i++) {

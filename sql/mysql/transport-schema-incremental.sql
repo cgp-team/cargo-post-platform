@@ -1168,3 +1168,105 @@ ALTER TABLE `transport_product` MODIFY COLUMN `image` varchar(255) NOT NULL DEFA
 -- 不会修改已存在的表，所以必须在本增量文件里把列改宽（MODIFY 幂等，可重复执行）。
 ALTER TABLE `transport_dispatch_plan`
   MODIFY COLUMN `plan_reason` varchar(2000) NOT NULL DEFAULT '' COMMENT '方案解释（为什么直达/为什么联运）';
+-- ---------- V021：人车绑定的「运营线路」（运营范围）----------
+-- 背景：过去 driver_vehicle 只表达"谁开哪台车"，没有"哪条线/哪片区域"。
+-- 于是联运换乘只按"谁离换乘站近"改派，车辆可能被派到完全不属于自己的片区。
+-- 加 route_id 后：绑定了线路的人车 = 其运营范围（该线路覆盖的站点集合）；
+-- 联运分段时优先选"运营线路同时覆盖本段起点与终点"的车，跨片区在交汇站交给下一段的车。
+-- NULL = 不限范围（历史数据/机动运力），保持向后兼容。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_driver_vehicle'
+    AND COLUMN_NAME = 'route_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_driver_vehicle` ADD COLUMN `route_id` bigint NULL COMMENT ''运营线路编号(运营范围); NULL=不限范围'' AFTER `vehicle_id`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- V022：商品图片 URL（后台可上传，小程序优先用它）----------
+-- 背景：transport_product.image 历史上存 emoji 字符，小程序只能按商品名猜本地图，常出现"图文不符"。
+-- 新增 image_url 存后台上传的图片地址；image（emoji）保留兼容，二者都为空时前端显示占位图。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_product'
+    AND COLUMN_NAME = 'image_url'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_product` ADD COLUMN `image_url` varchar(512) NOT NULL DEFAULT '''' COMMENT ''商品图片URL(后台上传)'' AFTER `image`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 演示商品补图：把有本地实拍图的商品直接指向包内图片（后台仍可随时改）
+-- ---------- V023：线路真实道路轨迹落库（预留真实路线框架）----------
+-- ---------- V024：运输段唯一键改为「方案 + 订单 + 段序」----------
+-- 背景（实测缺陷）：transport_leg 的唯一键是 (order_id, leg_sequence, tenant_id)，
+-- 而段规划的幂等维度早已改成「方案」（同一订单换方案要重新拆段）。
+-- 结果是：订单重调度时，旧段即使已软删除（deleted=1）仍占着唯一键，
+-- 新方案的 leg_sequence=1 插入直接冲突 → 段规划事务回滚 → 方案里出现 0 段
+-- （单一直送/联运都生成不出来）。唯一键必须带上 plan_id。
+SET @idx_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_leg' AND INDEX_NAME = 'uk_leg_order_sequence'
+);
+SET @ddl := IF(@idx_exists > 0, 'ALTER TABLE `transport_leg` DROP INDEX `uk_leg_order_sequence`', 'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_leg' AND INDEX_NAME = 'uk_leg_plan_order_sequence'
+);
+SET @ddl := IF(@idx_exists = 0,
+  'ALTER TABLE `transport_leg` ADD UNIQUE KEY `uk_leg_plan_order_sequence` (`plan_id`,`order_id`,`leg_sequence`,`tenant_id`)',
+  'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 背景：线路轨迹此前只有内存缓存（5~10 分钟），高德配额耗尽或服务重启就退回两点直线。
+-- 落库后：取到一次真实道路几何就长期复用；配额恢复后跑一次预取脚本即可全量补齐
+-- （自建线路同样适用：接上框架后，自建线也能从"直线暂替"平滑切换到真实道路）。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_route' AND COLUMN_NAME = 'navigation_polyline'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_route` ADD COLUMN `navigation_polyline` mediumtext NULL COMMENT ''真实道路轨迹"lng,lat;lng,lat;..."（高德取到后落库，长期复用）''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_route' AND COLUMN_NAME = 'navigation_source'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_route` ADD COLUMN `navigation_source` varchar(20) NULL COMMENT ''轨迹来源：AMAP=真实道路 / NULL=未取到（前端直线暂替）''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+UPDATE transport_product SET image_url = '/images/products/hotpot-base.jpg' WHERE name LIKE '%火锅%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/xiaomian.jpg' WHERE (name LIKE '%小面%' OR name LIKE '%面%') AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/zhacai.jpg' WHERE name LIKE '%榨菜%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/taopian.jpg' WHERE name LIKE '%桃片%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/mihuatang.jpg' WHERE name LIKE '%米花糖%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/larou.jpg' WHERE (name LIKE '%腊肉%' OR name LIKE '%香肠%') AND image_url = '';

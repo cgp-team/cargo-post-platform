@@ -21,6 +21,7 @@ import cn.iocoder.yudao.module.transport.service.order.CargoReviewResult;
 import cn.iocoder.yudao.module.transport.service.order.CargoReviewService;
 import cn.iocoder.yudao.module.transport.service.order.CargoReviewServiceImpl;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
+import cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
 import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import jakarta.annotation.Resource;
@@ -60,6 +61,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     @Resource private CargoReviewService cargoReviewService;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
+    @Resource private CargoPricingService cargoPricingService;
 
     @Override
     @Transactional
@@ -130,6 +132,11 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         }
         // 二次校验站点（不信任小程序前端）：非空 / 不相同 / 存在 / 未删除 / 已启用
         validateSendStations(reqVO.getPickupStationId(), reqVO.getDeliveryStationId());
+        // 计价前置：寄货页已按同口径显示金额，这里落库保证「小程序看到多少，后台订单就是多少」。
+        // 件单价×件数 + 里程费（与方案预计收入同源，见 CargoPricingService）。
+        int itemCount = reqVO.getItemCount() != null && reqVO.getItemCount() > 0 ? reqVO.getItemCount() : 1;
+        CargoPricingService.CargoQuote quote = cargoPricingService.quote(
+                reqVO.getPickupStationId(), reqVO.getDeliveryStationId(), itemCount);
         // 主表：货运订单，先置已创建，随后的自动承运审核立即流转（审核通过才可入池）
         TransportOrderDO order = TransportOrderDO.builder()
                 .orderNo(generateOrderNo())
@@ -139,6 +146,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .earliestPickupTime(reqVO.getEarliestPickupTime())
                 .status(TransportOrderStatusEnum.CREATED.getStatus())
                 .memberUserId(userId)
+                .totalAmount(quote.amount())
                 .build();
         orderMapper.insert(order);
         // 货运子表：寄货货物信息
@@ -148,7 +156,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
                 .orderId(order.getId())
                 .cargoCategory(StrUtil.blankToDefault(reqVO.getCargoCategory(), "农产品"))
                 .freshFlag(Boolean.TRUE.equals(reqVO.getFreshFlag()))
-                .itemCount(reqVO.getItemCount() != null && reqVO.getItemCount() > 0 ? reqVO.getItemCount() : 1)
+                .itemCount(itemCount)
                 .weightKg(reqVO.getGoodsWeight())
                 .volumeM3(reqVO.getVolumeM3() != null ? reqVO.getVolumeM3() : BigDecimal.ZERO)
                 .goodsName(reqVO.getGoodsName())

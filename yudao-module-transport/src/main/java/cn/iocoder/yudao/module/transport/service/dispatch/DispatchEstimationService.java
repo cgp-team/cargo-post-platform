@@ -228,7 +228,8 @@ public class DispatchEstimationService {
     /** 货运分摊的骨架里程比例（其余由客运/财政补贴承担） */
     private static final double CARGO_COST_SHARE = 0.35;
     /** 直线距离 → 路网里程折算系数（计价用，避免为计价再调一次高德） */
-    private static final double ROAD_FACTOR_FOR_PRICE = 1.3;
+    /** 路网系数：直线距离 → 计费里程（寄货页试算 CargoPricingService 复用同一系数，避免两处口径漂移） */
+    public static final double ROAD_FACTOR_FOR_PRICE = 1.3;
 
     /** 明细数量：BOARD/ALIGHT=客运人数，PICKUP/DELIVERY=货运/邮快件件数（子表缺失按 1 兜底） */
     private Integer quantityOf(DispatchPlanItemDO item, Map<Long, PassengerOrderDO> passengerMap,

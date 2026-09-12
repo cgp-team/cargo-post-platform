@@ -5,6 +5,8 @@ import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 
+import java.util.List;
+
 /**
  * 调度闭环 Service 接口：订单归集入池、手工/智能派单、方案审核下发、发车核验。
  */
@@ -40,6 +42,18 @@ public interface DispatchService {
      * 方案审核：通过则下发，驳回则作废且订单回到订单池
      */
     void reviewPlan(DispatchPlanReviewReqVO reqVO);
+
+    /**
+     * 演示态：把指定方案里的订单放回「待入池」，方便反复点「一键演示」。
+     *
+     * <p>仅在演示开关打开时生效（yudao.dispatch.demo-recycle-pool，默认 true）。
+     * 生产上线请把它设为 false：调度后的订单不再出现在订单池，
+     * 除非走"驳回/打回重新派送"的显式操作。</p>
+     *
+     * @param planIds 方案编号；为空时取"今天创建的全部方案"
+     * @return 实际放回订单池的订单数
+     */
+    int recyclePlanOrdersToPool(List<Long> planIds);
 
     /**
      * 发车核验：通过则方案进入执行中，对应车辆订单置为已发车
