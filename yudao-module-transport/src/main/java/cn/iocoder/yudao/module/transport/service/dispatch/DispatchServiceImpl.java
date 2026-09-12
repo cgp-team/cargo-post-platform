@@ -186,6 +186,10 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
 
+    /** 运输段（P0-1 失败兜底清理半成品方案时需要按 planId 删除本方案已生成的段） */
+
+    @Resource private TransportLegMapper legMapper;
+
     @Resource private DepartureCheckMapper departureCheckMapper;
 
     @Resource private AlgorithmAdapter algorithmAdapter;
@@ -679,7 +683,21 @@ public class DispatchServiceImpl implements DispatchService {
 
                 .build();
 
-        dispatchTaskMapper.insert(task);
+        // P0-1：抢占成功之后，任何落库动作失败都必须把订单释放回池子（本方法不回滚，见方法头注释）
+
+        try {
+
+            dispatchTaskMapper.insert(task);
+
+        } catch (RuntimeException ex) {
+
+            // 任务落库失败同样要释放：否则订单会停在「已分配」且订单池被清空，无法重跑
+
+            releaseClaimedOrders(pooledIds);
+
+            throw ex;
+
+        }
 
 
 
@@ -691,7 +709,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             result = algorithmAdapter.plan(algorithmReq);
 
-        } catch (ServiceException ex) {
+        } catch (RuntimeException ex) {
 
             task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
 
@@ -727,11 +745,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         dispatchTaskMapper.updateById(task);
 
+        // P0-1：以下进入「方案落库阶段」。本方法所在事务 noRollbackFor=ServiceException，异常不会自动
+        // 回滚，因此这里显式兜底：任何异常 → 清理半成品方案 + 抢占订单回池，保证「要么成方案、要么回池」。
+
+        DispatchPlanDO plan = null;
+
+        try {
+
         // 总里程：按算法返回的里程单位处理——degree 时按经停站点坐标 Haversine 换算真实公里，km 时直接使用
 
         BigDecimal totalDistanceKm = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
 
-        DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
+        plan = createPlan(task, DispatchPlanModeEnum.SMART,
 
                 totalDistanceKm, result.getAlgorithmVersion(), result.getParameterVersion());
 
@@ -893,6 +918,21 @@ public class DispatchServiceImpl implements DispatchService {
 
         return plan.getId();
 
+        } catch (RuntimeException ex) {
+
+            // P0-1 兜底：清理半成品方案 + 抢占订单回池，绝不留下「已分配但无方案」的脏订单。
+            // 顺序说明：先清方案（此时订单仍为已分配，删除不会误伤在途数据），再放订单回池。
+
+            failDispatchTask(task, ex);
+
+            cleanupPartialPlan(plan);
+
+            releaseClaimedOrders(pooledIds);
+
+            throw ex;
+
+        }
+
     }
 
 
@@ -902,6 +942,94 @@ public class DispatchServiceImpl implements DispatchService {
     private void releaseClaimedOrders(List<Long> orderIds) {
 
         updateOrdersStatus(orderIds, TransportOrderStatusEnum.POOLED, TransportOrderStatusEnum.ASSIGNED);
+
+    }
+
+
+
+    /**
+     * P0-1：清理「半成品方案」。方案落库阶段（createPlan 之后）任一异常都要把已落库的方案、
+     * 经停明细、本方案的运输段、状态日志一起删掉，避免留下「方案存在但订单已回池」的孤儿数据
+     * ——孤儿段会在下一次一键演示时被复用（P0-A），订单视角与方案视角因而错位。
+     *
+     * 清理本身是最佳努力：失败只记日志，绝不掩盖原始异常。
+     */
+
+    private void cleanupPartialPlan(DispatchPlanDO plan) {
+
+        if (plan == null || plan.getId() == null) {
+
+            return;
+
+        }
+
+        Long planId = plan.getId();
+
+        try {
+
+            if (legMapper != null) {
+
+                legMapper.delete(new LambdaQueryWrapperX<TransportLegDO>()
+
+                        .eq(TransportLegDO::getPlanId, planId));
+
+            }
+
+            dispatchPlanItemMapper.delete(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+
+                    .eq(DispatchPlanItemDO::getPlanId, planId));
+
+            dispatchPlanLogMapper.delete(new LambdaQueryWrapperX<DispatchPlanLogDO>()
+
+                    .eq(DispatchPlanLogDO::getPlanId, planId));
+
+            dispatchPlanMapper.deleteById(planId);
+
+            log.warn("[createSmartPlan] 方案 {} 落库阶段失败，已清理半成品方案并释放抢占订单", planId);
+
+        } catch (Exception ex) {
+
+            log.warn("[createSmartPlan] 清理半成品方案 {} 失败：{}", planId, ex.getMessage());
+
+        }
+
+    }
+
+
+
+    /** P0-1：技术异常时把调度任务置为失败并记录根因（事务不回滚，任务终态需要落库供后台排查） */
+
+    private void failDispatchTask(DispatchTaskDO task, Exception ex) {
+
+        if (task == null || task.getId() == null) {
+
+            return;
+
+        }
+
+        try {
+
+            Throwable root = ex;
+
+            while (root.getCause() != null && root.getCause() != root) {
+
+                root = root.getCause();
+
+            }
+
+            String detail = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
+
+            task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
+
+            task.setErrorMessage(StrUtil.sub(detail, 0, 500));
+
+            dispatchTaskMapper.updateById(task);
+
+        } catch (Exception e) {
+
+            log.warn("[createSmartPlan] 回写调度任务失败状态出错：{}", e.getMessage());
+
+        }
 
     }
 

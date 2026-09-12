@@ -71,6 +71,7 @@ class DispatchServiceImplTest {
     @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
+    @Mock private TransportLegMapper transportLegMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
     @Mock private ShiftMapper shiftMapper;
     @Mock private RouteStationMapper routeStationMapper;
@@ -94,6 +95,7 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
+        ReflectionTestUtils.setField(dispatchService, "legMapper", transportLegMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "shiftMapper", shiftMapper);
         ReflectionTestUtils.setField(dispatchService, "routeStationMapper", routeStationMapper);
@@ -351,6 +353,109 @@ class DispatchServiceImplTest {
         assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
                 updates.get(updates.size() - 1).getStatus());
         verify(dispatchPlanMapper, never()).insert(any(DispatchPlanDO.class));
+    }
+
+    @Test
+    void createSmartPlan_plan_persist_failure_releases_claimed_orders() {
+        // P0-1 回归：方案落库阶段抛异常（实测为 plan_reason 列宽不足的 Data too long）时，
+        // 已 CAS 抢占的订单必须释放回订单池——否则订单停在「已分配但无方案」，池子被清空无法重跑。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        when(dispatchPlanMapper.insert(any(DispatchPlanDO.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "Data too long for column 'plan_reason' at row 1"));
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+
+        // 技术异常转成可读业务错误（前端能看到根因）
+        assertEquals(ALGORITHM_RESULT_INVALID.getCode(), ex.getCode());
+        assertTrue(ex.getMessage().contains("plan_reason"));
+        // 订单状态更新序列：CAS 抢占(已分配) → 失败释放(已入池)，最后一次必须是回池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
+        List<TransportOrderDO> updates = orderCaptor.getAllValues();
+        assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), updates.get(0).getStatus());
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
+                updates.get(updates.size() - 1).getStatus());
+        // 方案未落库 → 无经停明细、无半成品方案需要清理
+        verify(dispatchPlanItemMapper, never()).insert(any(DispatchPlanItemDO.class));
+        verify(dispatchPlanMapper, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void createSmartPlan_estimation_failure_cleans_partial_plan_and_releases_orders() {
+        // P0-1 回归：方案与经停明细已落库、随后估算 ETA 失败 → 半成品方案（明细/段/日志/方案）必须清掉，
+        // 订单回池，不能留下「方案存在但订单已回池」的孤儿数据（孤儿段会被下次调度复用，见 P0-A）。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        // 任务落库后由 MyBatis-Plus 回填主键（mock 里手工回填，failDispatchTask 依赖任务主键回写失败态）
+        doAnswer(invocation -> {
+            DispatchTaskDO task = invocation.getArgument(0);
+            task.setId(900L);
+            return 1;
+        }).when(dispatchTaskMapper).insert(any(DispatchTaskDO.class));
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        doThrow(new IllegalStateException("估算服务不可用"))
+                .when(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class), anyMap());
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        assertTrue(ex.getMessage().contains("估算服务不可用"));
+
+        // 清理顺序：本方案的运输段 → 经停明细 → 状态日志 → 方案本体
+        verify(transportLegMapper).delete(any());
+        verify(dispatchPlanItemMapper).delete(any());
+        verify(dispatchPlanLogMapper).delete(any());
+        verify(dispatchPlanMapper).deleteById(100L);
+        // 订单最后一次更新为回池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
+        List<TransportOrderDO> updates = orderCaptor.getAllValues();
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
+                updates.get(updates.size() - 1).getStatus());
+        // 调度任务被置为失败，便于后台排查（事务不回滚，任务终态需要落库）
+        ArgumentCaptor<DispatchTaskDO> taskCaptor = ArgumentCaptor.forClass(DispatchTaskDO.class);
+        verify(dispatchTaskMapper, atLeast(2)).updateById(taskCaptor.capture());
+        DispatchTaskDO lastTask = taskCaptor.getAllValues().get(taskCaptor.getAllValues().size() - 1);
+        assertEquals(DispatchTaskStatusEnum.FAILED.getStatus(), lastTask.getStatus());
+    }
+
+    @Test
+    void createSmartPlan_keeps_plan_reason_longer_than_500_chars() {
+        // P0-2 回归：plan_reason 列宽已由 varchar(500) 扩到 varchar(2000)（见
+        // sql/mysql/transport-schema-incremental.sql 的幂等 MODIFY）。这里断言 681 字符的解释
+        // 原样落库（不截断到 500），避免以后又被列宽卡住导致一键演示中断。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any())).thenReturn(List.of(
+                TransportLegDO.builder().orderId(1L).planId(100L).legSequence(1)
+                        .fromStationId(11L).toStationId(12L).distanceKm(new BigDecimal("5.0"))
+                        .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0))
+                        .estimatedArrival(LocalDateTime.of(2026, 9, 12, 10, 30)).build()));
+        String longReason = "多段联运".repeat(170) + "x"; // 681 字符（实测方案 32 的解释长度）
+        when(multiLegService.preview(1L)).thenReturn(new MultiLegPlanner.PlanResult(
+                DispatchPlanningModeEnum.MULTI_LEG.getMode(), 3, 2, 18.0, 60, 1.0,
+                List.of(), List.of(), null, longReason));
+
+        Long planId = dispatchService.createSmartPlan(smartReqVO());
+
+        assertEquals(100L, planId);
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        String persisted = planCaptor.getValue().getPlanReason();
+        assertEquals(681, persisted.length());
+        assertTrue(persisted.length() > 500, "超过 500 字符的解释必须原样落库（列宽已扩到 2000）");
+        assertEquals(longReason, persisted);
     }
 
     @Test
