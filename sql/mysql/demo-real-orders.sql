@@ -68,6 +68,8 @@ VALUES
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
     status = 8, deleted = b'0';
 
 INSERT INTO transport_cargo_order
@@ -96,6 +98,8 @@ VALUES
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
     status = 8, deleted = b'0';
 
 INSERT INTO transport_cargo_order
@@ -138,6 +142,8 @@ ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
     status = 8, deleted = b'0';
 
 INSERT INTO transport_cargo_order
@@ -185,6 +191,8 @@ ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
     status = 8, deleted = b'0';
 
 INSERT INTO transport_cargo_order
@@ -267,6 +275,8 @@ ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
+    earliest_pickup_time = VALUES(earliest_pickup_time),
+    latest_delivery_time = VALUES(latest_delivery_time),
     status = 8, deleted = b'0';
 
 INSERT INTO transport_cargo_order

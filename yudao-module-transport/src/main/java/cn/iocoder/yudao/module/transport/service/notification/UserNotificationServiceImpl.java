@@ -106,6 +106,12 @@ public class UserNotificationServiceImpl implements UserNotificationService {
     @Override
     public Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
                                 boolean actionRequired, String title, String content) {
+        return sendToOrderUser(orderId, eventType, level, actionRequired, title, content, null);
+    }
+
+    @Override
+    public Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
+                                boolean actionRequired, String title, String content, String eventId) {
         if (orderId == null) {
             return null;
         }
@@ -123,6 +129,7 @@ public class UserNotificationServiceImpl implements UserNotificationService {
                 .title(title)
                 .content(content)
                 .orderId(orderId)
+                .eventId(eventId)
                 .build());
     }
 
@@ -161,12 +168,17 @@ public class UserNotificationServiceImpl implements UserNotificationService {
     }
 
     @Override
-    public void markAsRead(Long notificationId, Long userId) {
+    public void markAsRead(Long notificationId, NotificationRecipientTypeEnum recipientType, Long recipientId) {
         TransportUserNotificationDO notification = notificationMapper.selectById(notificationId);
         if (notification == null) {
             throw exception(NOTIFICATION_NOT_EXISTS);
         }
-        if (userId != null && !userId.equals(notification.getUserId())) {
+        // P2-L：归属校验同时比对接收方类型与编号。司机 id 与会员 id 共用同一编号空间，
+        // 只比 user_id 会让司机把用户的单条通知标成已读（或反之）。
+        if (recipientType != null && !recipientType.name().equals(notification.getRecipientType())) {
+            throw exception(NOTIFICATION_NOT_YOURS);
+        }
+        if (recipientId != null && !recipientId.equals(notification.getUserId())) {
             throw exception(NOTIFICATION_NOT_YOURS);
         }
         if (READ_STATUS_READ.equals(notification.getReadStatus())) {
