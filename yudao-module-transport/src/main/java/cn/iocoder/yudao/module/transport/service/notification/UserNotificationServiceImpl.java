@@ -106,6 +106,12 @@ public class UserNotificationServiceImpl implements UserNotificationService {
     @Override
     public Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
                                 boolean actionRequired, String title, String content) {
+        return sendToOrderUser(orderId, eventType, level, actionRequired, title, content, null);
+    }
+
+    @Override
+    public Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
+                                boolean actionRequired, String title, String content, String eventId) {
         if (orderId == null) {
             return null;
         }
@@ -123,6 +129,7 @@ public class UserNotificationServiceImpl implements UserNotificationService {
                 .title(title)
                 .content(content)
                 .orderId(orderId)
+                .eventId(eventId)
                 .build());
     }
 

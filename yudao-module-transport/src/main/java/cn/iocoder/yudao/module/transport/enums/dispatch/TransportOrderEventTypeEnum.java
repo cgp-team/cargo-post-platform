@@ -36,6 +36,7 @@ public enum TransportOrderEventTypeEnum {
     LEG_STARTED("LEG_STARTED", "运输段已开始"),
     LEG_COMPLETED("LEG_COMPLETED", "运输段已完成"),
     DRIVER_ARRIVED("DRIVER_ARRIVED", "司机已到达站点"),
+    CARRIER_APPROACHING("CARRIER_APPROACHING", "车辆即将送达"),
     HANDOVER_REQUIRED("HANDOVER_REQUIRED", "需要换乘交接"),
     HANDOVER_STARTED("HANDOVER_STARTED", "开始交接货物"),
     ORDER_ARRIVED("ORDER_ARRIVED", "货物到达目的站"),
