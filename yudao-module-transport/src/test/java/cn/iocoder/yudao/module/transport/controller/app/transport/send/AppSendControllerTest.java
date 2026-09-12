@@ -12,6 +12,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.service.transport.station.StationService;
+import cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,10 +24,12 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,6 +43,9 @@ class AppSendControllerTest {
     @Mock private VehicleLocationMapper vehicleLocationMapper;
     @Mock private VehicleMapper vehicleMapper;
     @Mock private StationService stationService;
+    @Mock private cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider vehicleLocationProvider;
+    @Mock private cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper stationMapper;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService multiLegService;
 
     private AppSendController controller;
 
@@ -50,6 +56,28 @@ class AppSendControllerTest {
         ReflectionTestUtils.setField(controller, "vehicleLocationMapper", vehicleLocationMapper);
         ReflectionTestUtils.setField(controller, "vehicleMapper", vehicleMapper);
         ReflectionTestUtils.setField(controller, "stationService", stationService);
+        ReflectionTestUtils.setField(controller, "vehicleLocationProvider", vehicleLocationProvider);
+    }
+
+    // ==================== 车来取货/送货提醒（演示可见性）====================
+
+    @Test
+    void carrierApproaching_withinThreshold_only() {
+        // 距目标站点 <= 10 分钟 → 前端高亮"车快到了"；0/负数（已到站/异常）与超阈值都不提醒
+        assertTrue(AppSendController.carrierApproaching(1));
+        assertTrue(AppSendController.carrierApproaching(10));
+        assertFalse(AppSendController.carrierApproaching(11));
+        assertFalse(AppSendController.carrierApproaching(0));
+        assertFalse(AppSendController.carrierApproaching(null));
+    }
+
+    @Test
+    void isRealLocationSource_distinguishesSimulated() {
+        // 模拟位置（班次插值/模拟引擎）是当次生成的，不走"真实上报过期"判定；前端会标注"模拟演示"
+        assertTrue(AppSendController.isRealLocationSource("REAL"));
+        assertTrue(AppSendController.isRealLocationSource("REAL_STALE"));
+        assertFalse(AppSendController.isRealLocationSource("SIMULATED"));
+        assertFalse(AppSendController.isRealLocationSource(null));
     }
 
     @Test
@@ -101,8 +129,9 @@ class AppSendControllerTest {
         List<TransportOrderDO> orders = List.of(inTransit);
         List<AppSendOrderRespVO> list = List.of(new AppSendOrderRespVO());
         mockCarrierFixture();
-        VehicleLocationDO stale = location(LocalDateTime.now().minusMinutes(60));
-        when(vehicleLocationMapper.selectList(any(LambdaQueryWrapperX.class))).thenReturn(List.of(stale));
+        // 真实上报是 60 分钟前的残留位置（班次已结束）→ 不提醒；注意模拟位置不走过期判定
+        when(vehicleLocationProvider.getLocations(any(), eq(true)))
+                .thenReturn(Map.of(7L, snapshot("REAL", LocalDateTime.now().minusMinutes(60))));
 
         invokeFillCarrierBatch(list, orders);
 
@@ -145,16 +174,16 @@ class AppSendControllerTest {
                 .longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build()));
     }
 
-    /** 车辆最新位置为新鲜上报（2 分钟前） */
+    /** 车辆最新位置为新鲜的真实上报（2 分钟前，统一位置模型给出的 REAL 快照） */
     private void mockFreshLocation() {
-        when(vehicleLocationMapper.selectList(any(LambdaQueryWrapperX.class)))
-                .thenReturn(List.of(location(LocalDateTime.now().minusMinutes(2))));
+        when(vehicleLocationProvider.getLocations(any(), eq(true)))
+                .thenReturn(Map.of(7L, snapshot("REAL", LocalDateTime.now().minusMinutes(2))));
     }
 
-    private VehicleLocationDO location(LocalDateTime reportTime) {
-        return VehicleLocationDO.builder().vehicleId(7L)
-                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000"))
-                .reportTime(reportTime).build();
+    /** 统一位置模型快照（source: REAL / SIMULATED；坐标为 104.0000,30.0000 → 距中心站约 0.96km） */
+    private VehicleLocationSnapshot snapshot(String source, LocalDateTime updatedAt) {
+        return VehicleLocationSnapshot.builder().vehicleId(7L).source(source)
+                .longitude(104.0000).latitude(30.0000).updatedAt(updatedAt).build();
     }
 
     @SuppressWarnings("unchecked")

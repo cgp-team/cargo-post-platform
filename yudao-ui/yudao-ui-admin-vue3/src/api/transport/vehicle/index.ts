@@ -3,12 +3,17 @@ import request from '@/config/axios'
 export interface VehicleVO {
   id?: number
   plateNo: string
+  /** 当前绑定司机（simple-list 返回）：选车就能看到"这车谁开" */
+  driverName?: string
+  driverMobile?: string
   vehicleType?: number
   passengerCapacity?: number
   cargoCapacityKg?: number
   cargoCapacity?: number
   insuranceExpireDate?: string
   status?: number
+  /** 实时运营状态：0 空闲 1 在途 2 故障 3 离线（随运输段开始/完成同步） */
+  realtimeStatus?: number
   createTime?: string
 }
 

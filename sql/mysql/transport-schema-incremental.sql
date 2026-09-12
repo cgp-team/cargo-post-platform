@@ -384,6 +384,45 @@ SET @ddl := IF(@col_exists = 0,
   'ALTER TABLE `transport_product_order` ADD COLUMN `shift_id` bigint DEFAULT NULL COMMENT ''承运班次编号(发货时关联,溯源用)'' AFTER `vehicle_id`', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- ---------- 商城订单司机执行闭环 ----------
+-- 司机端"待装车/妥投"需要知道归属司机与交付站点；装车/妥投照片是核验凭证（后台/用户端可见）
+-- 不加 AFTER 子句，直接追加到表末尾（幂等安全，防旧表列漂移导致 ALTER 失败）
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='driver_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `driver_id` bigint DEFAULT NULL COMMENT ''承运司机编号(发货时按车辆绑定推导)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_station_id');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_station_id` bigint DEFAULT NULL COMMENT ''交付/自提站点编号(发货时=班次线路终点站,司机到站提醒用)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='load_photo_url');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `load_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机装车照片URL(装车核验凭证)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='load_time');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `load_time` datetime DEFAULT NULL COMMENT ''司机装车确认时间''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_photo_url');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_photo_url` varchar(255) NOT NULL DEFAULT '''' COMMENT ''司机妥投照片URL(交付凭证)''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product_order' AND COLUMN_NAME='deliver_time');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE `transport_product_order` ADD COLUMN `deliver_time` datetime DEFAULT NULL COMMENT ''司机妥投完成时间''', 'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ---------- 调度明细乘客影响：transport_dispatch_plan_item.passenger_impact_seconds ----------
 -- 绕行对车上乘客的额外乘车时长（passenger-level，空车绕行为 NULL）
 -- 注意：不加 AFTER 子句（依赖 detour_duration_seconds 等前置列存在，旧表列漂移时 ALTER 会失败），
@@ -440,6 +479,75 @@ WHERE driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 --   SELECT COUNT(*) AS bad_count FROM transport_cargo_order
 --   WHERE photo_url LIKE 'http://127.0.0.1:48080/%' OR driver_photo_url LIKE 'http://127.0.0.1:48080/%';
 -- 预期结果：两个查询均返回 0
+
+-- ---------- V018：文件 URL 必须带 /api 前缀（否则 nginx 不转发，图片打不开） ----------
+-- 问题：V007 把 domain 修成 http://1.15.29.107（缺 /api），生成的文件 URL 形如
+--       http://1.15.29.107/admin-api/infra/file/4/get/xxx.jpg；
+--       而 nginx 只把 /api/ 转发到后端（见 deploy/nginx/nginx.conf：location /api/ → business_backend，
+--       转发时剥掉 /api 前缀），其余路径落到前端 SPA，浏览器拿到的是 index.html
+--       → 后台订单列表/审核弹窗里的寄货照片显示为裂图（实测返回 text/html）。
+-- 修复：domain 与历史 URL 统一改成带前缀的 http://1.15.29.107/api。
+-- 幂等：WHERE 只匹配缺前缀的旧值。
+
+UPDATE infra_file_config
+SET
+    config = JSON_SET(config, '$.domain', 'http://1.15.29.107/api'),
+    updater = 'admin',
+    update_time = NOW()
+WHERE JSON_EXTRACT(config, '$.domain') IN ('http://1.15.29.107', 'http://127.0.0.1:48080');
+-- 说明：不限 id——只改"指向本机服务器但缺 /api 前缀"的配置行；
+--      上游自带的 5 条示例存储配置（七牛/腾讯/阿里/火山/华为，domain 为 test.yudao.iocoder.cn / null / 空）不受影响。
+
+-- 历史 URL 补齐 /api 前缀（仅改缺前缀的，已带 /api 的保持不变）
+UPDATE infra_file
+SET url = REPLACE(url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE url LIKE 'http://1.15.29.107/%' AND url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE transport_cargo_order
+SET photo_url = REPLACE(photo_url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE transport_cargo_order
+SET driver_photo_url = REPLACE(driver_photo_url, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%';
+
+UPDATE system_users
+SET avatar = REPLACE(avatar, 'http://1.15.29.107/', 'http://1.15.29.107/api/')
+WHERE avatar LIKE 'http://1.15.29.107/%' AND avatar NOT LIKE 'http://1.15.29.107/api/%';
+
+-- 验证（预期均为 0）：
+--   SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'$.domain') NOT LIKE '%/api';
+--   SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NOT LIKE 'http://1.15.29.107/api/%';
+--   SELECT COUNT(*) FROM transport_cargo_order
+--     WHERE (photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%')
+--        OR (driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%');
+
+-- ---------- V019：寄货订单保存"用户原始地址/坐标"（位置 ≠ 车辆能到的地方） ----------
+-- 背景：用户在小程序用「当前位置」寄货时，后端先做可达性评估；不可达则推荐最近可服务站点，
+--       订单同时保存 用户原始地址/坐标 与 实际服务站（transport_order.pickup_station_id），二者不互相覆盖。
+-- 幂等：仅当列不存在时才 ALTER。
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_address') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_address` varchar(255) NOT NULL DEFAULT '''' COMMENT ''用户原始寄货地址'' AFTER `receiver_address`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_latitude') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_latitude` decimal(12,7) DEFAULT NULL COMMENT ''用户原始纬度(GCJ-02)'' AFTER `original_address`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order' AND COLUMN_NAME='original_longitude') = 0,
+  'ALTER TABLE `transport_cargo_order` ADD COLUMN `original_longitude` decimal(12,7) DEFAULT NULL COMMENT ''用户原始经度(GCJ-02)'' AFTER `original_latitude`',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 校验（预期 3 行）
+-- SELECT COLUMN_NAME FROM information_schema.COLUMNS
+--   WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_cargo_order'
+--     AND COLUMN_NAME IN ('original_address','original_latitude','original_longitude');
 
 -- ---------- V009：开发者模式 + 模拟运营权限体系 ----------
 -- 新增开发者中心菜单与独立模拟权限，解除对 transport:dispatch:smart-plan 的复用。
@@ -1047,3 +1155,118 @@ INSERT IGNORE INTO `simulation_scenario` (`id`, `tenant_id`, `name`, `descriptio
 (7, 0, '临时订单增加', '模拟运行中新增临时订单', 'ORDER_SURGE', 0, b'1', b'1', '{"orderCount":5,"triggerAtPercent":25}', '1', NOW(), '1', NOW(), b'0'),
 (8, 0, '临时订单取消', '模拟运行中取消部分订单', 'ORDER_CANCEL', 0, b'1', b'1', '{"cancelCount":3,"triggerAtPercent":60}', '1', NOW(), '1', NOW(), b'0'),
 (9, 0, '道路异常', '模拟道路施工或事故导致路线变更', 'ROAD_BLOCK', 2, b'1', b'1', '{"triggerAtPercent":45,"durationPercent":10}', '1', NOW(), '1', NOW(), b'0');
+
+-- ---------- V020：商品图片升级为真实图片 URL（本地路径/外链） ----------
+-- 原先 image 为 varchar(32)，只能存 emoji 占位；换成真实商品照片后（外链/本地路径）长度不够。
+-- MODIFY 是幂等的，重复执行安全。
+ALTER TABLE `transport_product` MODIFY COLUMN `image` varchar(255) NOT NULL DEFAULT '' COMMENT '商品图片（本地路径或图片 URL，空=前端占位图）';
+
+-- ---------- V020（补）：调度方案 plan_reason 扩容 varchar(500) -> varchar(2000) ----------
+-- 背景：算法解释（为什么直达/为什么联运）合并多条原因后会超过 500 字符，落库时报
+--       Data too long for column 'plan_reason'，一键演示/智能调度因此中断（前端只看到失败提示）。
+-- 代码侧已按 2000 字符截断，但历史库的列宽仍是 500；transport-schema.sql 用 CREATE TABLE IF NOT EXISTS，
+-- 不会修改已存在的表，所以必须在本增量文件里把列改宽（MODIFY 幂等，可重复执行）。
+ALTER TABLE `transport_dispatch_plan`
+  MODIFY COLUMN `plan_reason` varchar(2000) NOT NULL DEFAULT '' COMMENT '方案解释（为什么直达/为什么联运）';
+-- ---------- V021：人车绑定的「运营线路」（运营范围）----------
+-- 背景：过去 driver_vehicle 只表达"谁开哪台车"，没有"哪条线/哪片区域"。
+-- 于是联运换乘只按"谁离换乘站近"改派，车辆可能被派到完全不属于自己的片区。
+-- 加 route_id 后：绑定了线路的人车 = 其运营范围（该线路覆盖的站点集合）；
+-- 联运分段时优先选"运营线路同时覆盖本段起点与终点"的车，跨片区在交汇站交给下一段的车。
+-- NULL = 不限范围（历史数据/机动运力），保持向后兼容。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_driver_vehicle'
+    AND COLUMN_NAME = 'route_id'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_driver_vehicle` ADD COLUMN `route_id` bigint NULL COMMENT ''运营线路编号(运营范围); NULL=不限范围'' AFTER `vehicle_id`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- ---------- V022：商品图片 URL（后台可上传，小程序优先用它）----------
+-- 背景：transport_product.image 历史上存 emoji 字符，小程序只能按商品名猜本地图，常出现"图文不符"。
+-- 新增 image_url 存后台上传的图片地址；image（emoji）保留兼容，二者都为空时前端显示占位图。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'transport_product'
+    AND COLUMN_NAME = 'image_url'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_product` ADD COLUMN `image_url` varchar(512) NOT NULL DEFAULT '''' COMMENT ''商品图片URL(后台上传)'' AFTER `image`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 演示商品补图：把有本地实拍图的商品直接指向包内图片（后台仍可随时改）
+-- ---------- V023：线路真实道路轨迹落库（预留真实路线框架）----------
+-- ---------- V024：运输段唯一键改为「方案 + 订单 + 段序」----------
+-- 背景（实测缺陷）：transport_leg 的唯一键是 (order_id, leg_sequence, tenant_id)，
+-- 而段规划的幂等维度早已改成「方案」（同一订单换方案要重新拆段）。
+-- 结果是：订单重调度时，旧段即使已软删除（deleted=1）仍占着唯一键，
+-- 新方案的 leg_sequence=1 插入直接冲突 → 段规划事务回滚 → 方案里出现 0 段
+-- （单一直送/联运都生成不出来）。唯一键必须带上 plan_id。
+SET @idx_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_leg' AND INDEX_NAME = 'uk_leg_order_sequence'
+);
+SET @ddl := IF(@idx_exists > 0, 'ALTER TABLE `transport_leg` DROP INDEX `uk_leg_order_sequence`', 'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @idx_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_leg' AND INDEX_NAME = 'uk_leg_plan_order_sequence'
+);
+SET @ddl := IF(@idx_exists = 0,
+  'ALTER TABLE `transport_leg` ADD UNIQUE KEY `uk_leg_plan_order_sequence` (`plan_id`,`order_id`,`leg_sequence`,`tenant_id`)',
+  'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 背景：线路轨迹此前只有内存缓存（5~10 分钟），高德配额耗尽或服务重启就退回两点直线。
+-- 落库后：取到一次真实道路几何就长期复用；配额恢复后跑一次预取脚本即可全量补齐
+-- （自建线路同样适用：接上框架后，自建线也能从"直线暂替"平滑切换到真实道路）。
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_route' AND COLUMN_NAME = 'navigation_polyline'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_route` ADD COLUMN `navigation_polyline` mediumtext NULL COMMENT ''真实道路轨迹"lng,lat;lng,lat;..."（高德取到后落库，长期复用）''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transport_route' AND COLUMN_NAME = 'navigation_source'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `transport_route` ADD COLUMN `navigation_source` varchar(20) NULL COMMENT ''轨迹来源：AMAP=真实道路 / NULL=未取到（前端直线暂替）''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+UPDATE transport_product SET image_url = '/images/products/hotpot-base.jpg' WHERE name LIKE '%火锅%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/xiaomian.jpg' WHERE (name LIKE '%小面%' OR name LIKE '%面%') AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/zhacai.jpg' WHERE name LIKE '%榨菜%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/taopian.jpg' WHERE name LIKE '%桃片%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/mihuatang.jpg' WHERE name LIKE '%米花糖%' AND image_url = '';
+UPDATE transport_product SET image_url = '/images/products/larou.jpg' WHERE (name LIKE '%腊肉%' OR name LIKE '%香肠%') AND image_url = '';

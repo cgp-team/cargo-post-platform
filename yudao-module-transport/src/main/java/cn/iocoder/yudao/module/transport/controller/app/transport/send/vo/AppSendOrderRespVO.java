@@ -42,10 +42,28 @@ public class AppSendOrderRespVO {
     private Long servicePointStationId;
     @Schema(description = "建议服务站点名")
     private String servicePointStationName;
+    @Schema(description = "建议服务站点经度（客户送站导航用）")
+    private Double servicePointLongitude;
+    @Schema(description = "建议服务站点纬度")
+    private Double servicePointLatitude;
+    @Schema(description = "取货站点到建议服务站点的直线距离(km)：前端提示\"就近前往\"")
+    private Double servicePointDistanceKm;
     @Schema(description = "货物名称")
     private String goodsName;
     @Schema(description = "货物重量(kg)")
     private BigDecimal goodsWeight;
+    @Schema(description = "货物类型（农产品/生鲜果蔬/日用品/文件票据/其他）")
+    private String cargoCategory;
+    @Schema(description = "货物件数")
+    private Integer itemCount;
+    @Schema(description = "货物体积(m³)")
+    private BigDecimal volumeM3;
+
+    @Schema(description = "订单金额(元)：寄货页试算口径（件单价×件数 + 里程费）")
+    private BigDecimal totalAmount;
+
+    @Schema(description = "是否生鲜/需冷链")
+    private Boolean freshFlag;
     @Schema(description = "货物备注")
     private String goodsNote;
     @Schema(description = "货物照片")
@@ -56,6 +74,12 @@ public class AppSendOrderRespVO {
     private String receiverMobile;
     @Schema(description = "收货地址")
     private String receiverAddress;
+    @Schema(description = "用户原始寄货地址（如 重庆邮电大学）")
+    private String originalAddress;
+    @Schema(description = "用户原始纬度(GCJ-02)")
+    private BigDecimal originalLatitude;
+    @Schema(description = "用户原始经度(GCJ-02)")
+    private BigDecimal originalLongitude;
     @Schema(description = "下单时间")
     private LocalDateTime createTime;
 
@@ -80,4 +104,26 @@ public class AppSendOrderRespVO {
     private BigDecimal carrierDistanceKm;
     @Schema(description = "承运车辆预计到达目标站点分钟数（实时位置估算）")
     private Integer carrierEtaMinutes;
+    @Schema(description = "承运车辆位置来源：REAL_FRESH 真实上报 / REAL_STALE 位置可能过期 / SIMULATED 模拟演示（班次插值或模拟引擎）")
+    private String carrierLocationSource;
+    @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟）：前端据此高亮并提示\"车快到了\"")
+    private Boolean carrierApproaching;
+
+    // ========== 司机到站/作业进度（后端为源：派单经停明细状态；未派单时为 null） ==========
+    @Schema(description = "司机是否已到达本单交接站点（已到达/已完成作业），前端提示\"司机已到达\"")
+    private Boolean carrierArrived;
+    @Schema(description = "司机到达（或完成交接作业）的站点名")
+    private String carrierArrivedStation;
+    @Schema(description = "司机作业状态名：待执行/行驶中/已到站/揽收中/派送中/已完成")
+    private String carrierTaskStatus;
+    @Schema(description = "到达/作业状态更新时间（经停明细 update_time，近似现场时间）")
+    private LocalDateTime carrierArrivedTime;
+    @Schema(description = "司机已装车（揽收完成）")
+    private Boolean carrierLoaded;
+    @Schema(description = "司机已妥投（派送完成）")
+    private Boolean carrierDelivered;
+    @Schema(description = "承运司机姓名")
+    private String driverName;
+    @Schema(description = "承运司机电话（现场联系用）")
+    private String driverMobile;
 }

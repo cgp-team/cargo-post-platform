@@ -30,6 +30,40 @@
         </el-table-column>
         <el-table-column label="收货人" prop="receiverName" align="center" width="100" />
         <el-table-column label="收货电话" prop="receiverMobile" align="center" width="130" />
+        <!-- 司机执行闭环：承运司机 / 交付站点 / 装车核验凭证 / 妥投凭证 -->
+        <el-table-column label="承运车辆/司机" align="center" min-width="150">
+          <template #default="scope">
+            <div>{{ scope.row.vehiclePlate || '-' }}</div>
+            <div class="text-gray-400 text-xs">{{ scope.row.driverName || '未派司机' }}{{ scope.row.driverMobile ? ' · ' + scope.row.driverMobile : '' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="交付站点" align="center" min-width="130">
+          <template #default="scope">{{ scope.row.deliverStationName || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="装车核验" align="center" width="100">
+          <template #default="scope">
+            <el-image
+              v-if="scope.row.loadPhotoUrl"
+              :src="scope.row.loadPhotoUrl"
+              :preview-src-list="[scope.row.loadPhotoUrl]"
+              fit="cover"
+              style="width:44px;height:44px;border-radius:6px"
+            />
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="妥投凭证" align="center" width="100">
+          <template #default="scope">
+            <el-image
+              v-if="scope.row.deliverPhotoUrl"
+              :src="scope.row.deliverPhotoUrl"
+              :preview-src-list="[scope.row.deliverPhotoUrl]"
+              fit="cover"
+              style="width:44px;height:44px;border-radius:6px"
+            />
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="下单时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="180">
           <template #default="scope">

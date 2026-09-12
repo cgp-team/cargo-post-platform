@@ -1,0 +1,26 @@
+文件配置修改前备份
+==================
+时间: 2026-09-02 23:00
+
+数据库: infra_file_config
+记录 ID: 4
+
+查询SQL:
+SELECT id, name, storage, master, config, updater, update_time
+FROM infra_file_config
+WHERE id = 4;
+
+预期结果:
+id: 4
+name: 数据库（示例）
+storage: 1 (DB存储)
+master: true
+config:
+{
+  "@class": "cn.iocoder.yudao.module.infra.framework.file.core.client.db.DBFileClientConfig",
+  "domain": "http://127.0.0.1:48080"
+}
+
+问题:
+domain = http://127.0.0.1:48080 (本地开发地址)
+导致浏览器请求 http://127.0.0.1:48080/admin-api/infra/file/4/get/... 失败

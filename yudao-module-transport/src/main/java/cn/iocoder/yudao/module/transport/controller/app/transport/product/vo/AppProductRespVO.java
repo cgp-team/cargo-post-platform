@@ -20,6 +20,8 @@ public class AppProductRespVO {
     private String unit;
     @Schema(description = "商品图(emoji)")
     private String image;
+    @Schema(description = "商品图片 URL（后台上传，优先使用；为空时前端回落 emoji/本地图）")
+    private String imageUrl;
     @Schema(description = "角标文案")
     private String badge;
     @Schema(description = "商品描述")

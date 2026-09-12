@@ -16,6 +16,18 @@ public class RoutePageReqVO extends PageParam {
     @Schema(description="route name")
     private String routeName;
 
+    @Schema(description="数据来源：REAL/PROJECT")
+    private String sourceType;
+
+    @Schema(description="服务类型：PASSENGER/CARGO/MIXED")
+    private String serviceType;
+
+    @Schema(description="线路状态：0=启用 1=停用")
+    private Integer status;
+
+    @Schema(description="是否可用于调度")
+    private Boolean dispatchEnabled;
+
     @DateTimeFormat(pattern=FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @Schema(description="createTime")
     private LocalDateTime[] createTime;

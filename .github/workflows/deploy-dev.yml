@@ -3,8 +3,8 @@ name: Deploy to dev server
 on:
   workflow_dispatch:
   push:
-    # 目前仓库只有 master；启用 develop 分支后在此追加
-    branches: [master]
+    # master 为正式部署分支；多段联运/真实公交线网开发分支也允许触发（便于演示前自动部署）
+    branches: [master, fix/haco-deadline-greedy-seed]
     # 纯文档/小程序/CI/mock 算法的改动不部署任何内容，直接跳过整条流水线
     paths-ignore:
       - 'docs/**'
@@ -208,6 +208,27 @@ jobs:
               echo "${f}.sql done."
             fi
           done
+
+          # 多段联运框架（V018）+ 站点可达性/方案/段/交接/通知扩展列（V019）
+          # 注意顺序：必须在 transport-schema 之后（新表、补列），在演示数据之前
+          for f in sql/incremental/V018__multi_leg_framework.sql sql/incremental/V019__station_access_and_plan_leg.sql; do
+            if [ -f "${f}" ]; then
+              echo "Applying ${f}..."
+              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+              echo "${f} done."
+            fi
+          done
+
+          # 重庆片区真实演示数据：重邮站点/车辆/司机 → 多段联运场景 → 真实公交线网 → 真实可行订单；
+          # 顺序不可调换（后面的脚本按站名解析站点 id）
+          for f in demo-cqupt-stations demo-cqupt-vehicles demo-multi-leg \
+                   demo-real-bus-network demo-real-bus-shifts demo-real-orders transport-multi-leg-menu; do
+            if [ -f "sql/mysql/${f}.sql" ]; then
+              echo "Applying ${f}.sql..."
+              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+              echo "${f}.sql done."
+            fi
+          done
           echo "All migrations applied."
 
       - name: Validate schema drift columns
@@ -261,13 +282,40 @@ jobs:
           # transport_vehicle (1)
           CHECK_COL transport_vehicle insurance_expire_date
 
+          # ===== 多段联运 / 站点可达性 / 通知（V018 + V019）=====
+          # transport_station (3)：用户可达 / 车辆可达 / 可调度
+          CHECK_COL transport_station user_access
+          CHECK_COL transport_station vehicle_access
+          CHECK_COL transport_station dispatch_enabled
+          # transport_vehicle (1)：实时运营状态
+          CHECK_COL transport_vehicle realtime_status
+          # transport_dispatch_plan (4)：方案组织方式/段数/换乘数/方案解释
+          CHECK_COL transport_dispatch_plan planning_mode
+          CHECK_COL transport_dispatch_plan total_leg_count
+          CHECK_COL transport_dispatch_plan transfer_count
+          CHECK_COL transport_dispatch_plan plan_reason
+          # transport_leg (5)：方案归属 / 线路 / 里程时长 / 导航来源与轨迹 / 换乘标记
+          CHECK_COL transport_leg plan_id
+          CHECK_COL transport_leg navigation_source
+          CHECK_COL transport_leg navigation_polyline
+          CHECK_COL transport_leg handover_required
+          CHECK_COL transport_leg distance_km
+          # transport_handover (3)：双方车辆 / 状态机时间点
+          CHECK_COL transport_handover plan_id
+          CHECK_COL transport_handover from_vehicle_id
+          CHECK_COL transport_handover handover_completed_at
+          # transport_user_notification (3)：幂等 eventId / 接收方类型 / 级别
+          CHECK_COL transport_user_notification event_id
+          CHECK_COL transport_user_notification recipient_type
+          CHECK_COL transport_user_notification level
+
           if [ -n "${MISSING}" ]; then
             echo "===== SCHEMA DRIFT DETECTED — missing columns ====="
             echo -e "${MISSING}"
             echo "Fix: ensure transport-schema-incremental.sql has ADD COLUMN for these."
             exit 1
           fi
-          echo "Schema drift validation PASS: all22 columns present."
+          echo "Schema drift validation PASS: 上游 22 列 + 多段联运/可达性/通知 18 列 全部存在。"
 
       - name: Validate historical URL repair
         run: |
@@ -310,11 +358,34 @@ jobs:
             FAIL=1
           fi
 
+          # 3. 本机部署使用的文件配置必须带 /api 前缀：nginx 只把 /api/ 转发到后端（转发时剥前缀），
+          #    缺前缀的 URL 会落到前端 SPA，浏览器拿到 index.html → 后台照片显示裂图。
+          #    注意：只校验"指向本机服务器"的配置行；infra_file_config 里还有 5 条上游示例配置
+          #    （七牛/腾讯/阿里/火山/华为，domain 为 test.yudao.iocoder.cn / null / 空），与本部署无关，不能一并判失败。
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') LIKE 'http://1.15.29.107%' AND JSON_EXTRACT(config,'\$.domain') NOT LIKE '%/api'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: 本机文件配置 domain 未带 /api 前缀（${CNT} 条）——图片 URL 会被 nginx 转发到前端"
+            FAIL=1
+          fi
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM infra_file_config WHERE JSON_EXTRACT(config,'\$.domain') LIKE 'http://127.0.0.1%'")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: 仍有 ${CNT} 条文件配置指向 127.0.0.1，浏览器不可达"
+            FAIL=1
+          fi
+          CNT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -e \
+            "SELECT COUNT(*) FROM transport_cargo_order WHERE (photo_url LIKE 'http://1.15.29.107/%' AND photo_url NOT LIKE 'http://1.15.29.107/api/%') OR (driver_photo_url LIKE 'http://1.15.29.107/%' AND driver_photo_url NOT LIKE 'http://1.15.29.107/api/%')")
+          if [ "${CNT}" != "0" ]; then
+            echo "FAIL: transport_cargo_order 仍有 ${CNT} 条缺 /api 前缀的照片 URL"
+            FAIL=1
+          fi
+
           if [ "${FAIL}" = "1" ]; then
             echo "Historical URL validation FAILED."
             exit 1
           fi
-          echo "Historical URL validation PASS: no legacy/test URLs found."
+          echo "Historical URL validation PASS: no legacy/test URLs found, file URLs carry /api prefix."
 
       # 自研算法服务（algorithm/，HACO-CPS）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
@@ -424,6 +495,115 @@ jobs:
           HEALTH=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>/dev/null || echo "unreachable")
           echo "algorithm health: ${HEALTH}"
           echo "algorithm 部署完成"
+
+      # 后端 Redis 自愈：jar 内 application-dev.yaml 默认指向 yudao 公共演示 Redis，
+      # 该类共享实例写命令被拒时（读命令正常，健康检查/监控看不出来），
+      # 登录、短信验证码、商城下单、寄货提交等写 Redis 的链路会统一 500「系统异常」。
+      # 本步骤先探测"当前后端能否写 Redis"，只有确认写失败、且服务器本机 Redis 容器读写自检通过时，
+      # 才把 Redis 指向本机容器（幂等写 /opt/cargo-post/app.env）；任何一步不满足都只告警、不动配置。
+      - name: Ensure backend has a writable Redis
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+
+          probe=$(curl -s --max-time 10 -X POST -H 'Content-Type: application/json' \
+            -d '{"mobile":"13800000000","scene":1}' \
+            http://127.0.0.1:48080/app-api/member/auth/send-sms-code || true)
+          echo "current backend send-sms-code: ${probe}"
+          if ! printf '%s' "${probe}" | grep -q '"code":500'; then
+            echo "后端 Redis 写链路自检通过（非 500），保持现有 Redis 配置不变。"
+            exit 0
+          fi
+          echo "检测到后端写 Redis 失败（send-sms-code 返回 500 系统异常），准备切到本机 Redis 容器。"
+
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "WARN: ${ENV_FILE} 不存在，无法确认本机 Redis 口令，跳过（配置未改动）"; exit 0
+          fi
+          set -a; source "${ENV_FILE}"; set +a
+          if [ -z "${REDIS_PASSWORD:-}" ]; then
+            echo "WARN: .env 缺少 REDIS_PASSWORD，跳过（配置未改动）"; exit 0
+          fi
+          if [ ! -w "${APP_ENV}" ] && [ ! -w "$(dirname "${APP_ENV}")" ]; then
+            echo "WARN: ${APP_ENV} 不可写（非 deploy 属主），跳过（配置未改动）；请手工追加 SPRING_DATA_REDIS_* 后重启服务"; exit 0
+          fi
+
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          if ! "${COMPOSE[@]}" ps redis 2>/dev/null | grep -q redis; then
+            echo "WARN: 本机 redis 容器未运行，跳过（配置未改动）"; exit 0
+          fi
+          if ! "${COMPOSE[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning set cargo-post:redis-probe ok | grep -q OK; then
+            echo "WARN: 本机 Redis 写入自检失败，跳过（配置未改动）"; exit 0
+          fi
+          if ! "${COMPOSE[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning get cargo-post:redis-probe | grep -q ok; then
+            echo "WARN: 本机 Redis 读回自检失败，跳过（配置未改动）"; exit 0
+          fi
+
+          APP_ENV_BAK="${APP_ENV}.before-redis-switch"
+          touch "${APP_ENV}"
+          cp -a "${APP_ENV}" "${APP_ENV_BAK}"
+          for kv in "SPRING_DATA_REDIS_HOST=127.0.0.1" "SPRING_DATA_REDIS_PORT=${REDIS_PORT:-6379}" \
+                    "SPRING_DATA_REDIS_DATABASE=1" "SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD}"; do
+            key="${kv%%=*}"
+            sed -i "/^${key}=/d" "${APP_ENV}"
+            echo "${kv}" >> "${APP_ENV}"
+          done
+          chmod 600 "${APP_ENV}" 2>/dev/null || true
+          echo "已把后端 Redis 指向本机容器 127.0.0.1:${REDIS_PORT:-6379}（app.env 幂等更新，重启服务后生效）。"
+
+          # 切换后立即重启并验证；起不来就回滚 app.env 再重启，避免把服务留在坏配置上。
+          sudo /usr/bin/systemctl restart cargo-post
+          REDIS_SWITCH_OK=0
+          for i in $(seq 1 30); do
+            sleep 3
+            if curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
+              REDIS_SWITCH_OK=1; echo "Redis 切换后后端已恢复（第 ${i} 次探测）"; break
+            fi
+          done
+          if [ "${REDIS_SWITCH_OK}" != "1" ]; then
+            echo "ERROR: 切换本机 Redis 后后端未恢复，回滚 app.env 并重启。" >&2
+            cp -a "${APP_ENV_BAK}" "${APP_ENV}"
+            sudo /usr/bin/systemctl restart cargo-post
+            systemctl status cargo-post -n 30 --no-pager >&2 || true
+            exit 1
+          fi
+
+      # 高德 Web 服务 key 透传：仓库 .env 的 AMAP_KEY（算法容器同一把，用于路网距离）
+      # 幂等写入后端 systemd env，让"附近公交现实站点层"与"算法路网距离/ETA"共用同一把 key。
+      # 注意：必须是「Web 服务」类型 key；小程序类型 key 放后端会被高德拒绝（USERKEY_PLAT_NOMATCH）。
+      - name: Sync AMAP_KEY to backend env
+        run: |
+          set -Eeuo pipefail
+          ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "skip: ${ENV_FILE} 不存在"; exit 0
+          fi
+          set -a; source "${ENV_FILE}"; set +a
+          if [ -z "${AMAP_KEY:-}" ]; then
+            echo "AMAP_KEY 未配置：现实公交层走项目线路+模拟车辆，路网距离走直线估算（正常降级）"; exit 0
+          fi
+          if [ ! -w "${APP_ENV}" ] && [ ! -w "$(dirname "${APP_ENV}")" ]; then
+            echo "WARN: ${APP_ENV} 不可写，跳过（可手工追加 AMAP_KEY=... 后重启服务）"; exit 0
+          fi
+          touch "${APP_ENV}"
+          sed -i "/^AMAP_KEY=/d" "${APP_ENV}"
+          echo "AMAP_KEY=${AMAP_KEY}" >> "${APP_ENV}"
+          chmod 600 "${APP_ENV}" 2>/dev/null || true
+          echo "已同步 AMAP_KEY 到后端 env（下次后端重启生效；若本次有后端变更会紧随其后重启）"
+
+      # 两把高德 key 严格隔离：小程序 key（AMAP_MINI_KEY）只能在小程序端，
+      # 后端只允许 Web 服务 key（AMAP_KEY）。若误把小程序 key 写进后端 env，后端调用高德会全量失败。
+      - name: "Guard - 小程序 key 不得进入后端 env"
+        run: |
+          set -Eeuo pipefail
+          APP_ENV="${APP_ENV:-/opt/cargo-post/app.env}"
+          MINI_KEY_IN_MINI="$(grep -hoE "AMAP_MINI_KEY *= *'[^']+'" /opt/cargo-post-platform/miniprogram/utils/config.js 2>/dev/null | head -1 || true)"
+          if [ -n "${MINI_KEY_IN_MINI}" ] && grep -qF "${MINI_KEY_IN_MINI}" "${APP_ENV}" 2>/dev/null; then
+            echo "FAIL: 检测到小程序 key 被写进后端 env（${APP_ENV}）——两把 key 必须严格隔离" >&2
+            exit 1
+          fi
+          echo "key 隔离校验通过：小程序 key 仅存在于 miniprogram/utils/config.js"
 
       - name: Deploy backend and restart
         if: steps.changes.outputs.backend == 'true'

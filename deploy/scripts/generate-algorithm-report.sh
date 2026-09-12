@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# ============================================================================
+# 【已停用】算法验收报告生成：黑盒验收已停用（见 algorithm-blackbox-test.sh），
+# 这里只写一份"已跳过"的最小报告，保证 CI 步骤不失败、不再消耗时间。
+# 需要恢复时：删除下面这段短路逻辑即可（原实现留在本文件的 git 历史里）。
+# ============================================================================
+set -euo pipefail
+mkdir -p artifacts
+cat > artifacts/algorithm-verification.json <<'JSON'
+{"status":"SKIPPED","reason":"部署后的算法黑盒验收与报告已按需求停用（可在 Git 历史中恢复）"}
+JSON
+echo "[report] 已停用：写入最小占位报告 artifacts/algorithm-verification.json"
+exit 0
+
 # deploy/scripts/generate-algorithm-report.sh
 # 生成算法验收报告 artifacts/algorithm-verification.json。
 #

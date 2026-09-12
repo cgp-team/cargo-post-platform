@@ -16,6 +16,9 @@ public class VehiclePageReqVO extends PageParam {
     @Schema(description="vehicle status: 0 available, 1 disabled")
     private Integer status;
 
+    @Schema(description="实时运营状态：0 空闲 1 在途 2 故障 3 离线")
+    private Integer realtimeStatus;
+
     @DateTimeFormat(pattern=FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @Schema(description="createTime")
     private LocalDateTime[] createTime;

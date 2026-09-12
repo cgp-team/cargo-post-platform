@@ -38,6 +38,14 @@ public class AlgorithmClient {
     private final RestTemplate restTemplate;
     private final AlgorithmProperties properties;
 
+    /**
+     * route（轻量单路线查询）失败冷却截止时间：算法服务不可用时避免在循环里串行重试（12 段 × 每次重试）
+     * 把接口拖到超时。冷却期内直接快速失败，调用方按"估算直线兜底"降级（需求 §141）。
+     */
+    private final java.util.concurrent.atomic.AtomicLong routeUnavailableUntil = new java.util.concurrent.atomic.AtomicLong(0);
+    /** 冷却时长：30 秒（足够跨过前端 15s 轮询的一次刷新） */
+    private static final long ROUTE_COOLDOWN_MS = 30_000;
+
     public AlgorithmClient(@Qualifier(AlgorithmAdapterConfiguration.ALGORITHM_REST_TEMPLATE) RestTemplate restTemplate,
                            AlgorithmProperties properties) {
         this.restTemplate = restTemplate;
@@ -126,13 +134,20 @@ public class AlgorithmClient {
      * 失败抛 {@link ServiceException}，调用方按"本次不返回 ETA"降级（不疯狂重试）。
      */
     public AlgorithmRouteRespDTO route(AlgorithmRouteReqDTO request) {
-        for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
+        if (System.currentTimeMillis() < routeUnavailableUntil.get()) {
+            // 冷却期：快速失败，不占用请求线程（调用方回退直线，不伪装真实道路）
+            throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+        }
+        // route 是循环调用的轻量查询：重试次数上限收紧为 1，避免单次失败放大成整页超时
+        int maxAttempts = Math.min(properties.getMaxRetries(), 1);
+        for (int attempt = 0; attempt <= maxAttempts; attempt++) {
             if (attempt > 0) {
                 sleep(properties.getRetryBackoff().toMillis());
             }
             try {
                 ResponseEntity<AlgorithmRouteRespDTO> response =
                         restTemplate.postForEntity("/api/v1/route", request, AlgorithmRouteRespDTO.class);
+                routeUnavailableUntil.set(0); // 成功：清除冷却
                 return response.getBody();
             } catch (HttpStatusCodeException ex) {
                 int status = ex.getStatusCode().value();
@@ -143,11 +158,16 @@ public class AlgorithmClient {
                     log.warn("[route][第 {} 次请求返回可重试状态 {}]", attempt + 1, status);
                     continue;
                 }
+                // 422 等不可重试错误必须留痕（否则前端只看到"回退直线"，排查不到根因）
+                log.warn("[route][第 {} 次请求被拒绝 status={} origin={} destination={} 响应={}]",
+                        attempt + 1, status, describe(request.getOrigin()), describe(request.getDestination()),
+                        ex.getResponseBodyAsString());
                 throw exception(ALGORITHM_CALL_FAILED, status, errorMessage(ex));
             } catch (ResourceAccessException ex) {
                 log.warn("[route][第 {} 次请求网络错误：{}]", attempt + 1, ex.getMessage());
             }
         }
+        routeUnavailableUntil.set(System.currentTimeMillis() + ROUTE_COOLDOWN_MS);
         throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
     }
 
@@ -215,6 +235,11 @@ public class AlgorithmClient {
     private String errorMessage(HttpStatusCodeException ex) {
         AlgorithmErrorRespDTO error = parseError(ex);
         return error != null && error.getMessage() != null ? error.getMessage() : ex.getStatusText();
+    }
+
+    /** 日志用：坐标点可读化（排查 422 参数错误） */
+    private static String describe(AlgorithmRouteReqDTO.RoutePoint point) {
+        return point == null ? "null" : "(" + point.getLongitude() + "," + point.getLatitude() + ")";
     }
 
     private boolean isRetryable(int status) {

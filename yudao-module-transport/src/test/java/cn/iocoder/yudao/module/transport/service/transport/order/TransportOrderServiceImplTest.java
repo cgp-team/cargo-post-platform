@@ -54,6 +54,9 @@ class TransportOrderServiceImplTest {
     @Mock private MemberUserApi memberUserApi;
     @Mock private StationMapper stationMapper;
     @Mock private CargoReviewService cargoReviewService;
+    @Mock private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
+    @Mock private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService cargoPricingService;
 
     private TransportOrderServiceImpl orderService;
 
@@ -67,6 +70,15 @@ class TransportOrderServiceImplTest {
         ReflectionTestUtils.setField(orderService, "memberUserApi", memberUserApi);
         ReflectionTestUtils.setField(orderService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(orderService, "cargoReviewService", cargoReviewService);
+        ReflectionTestUtils.setField(orderService, "orderEventService", orderEventService);
+        ReflectionTestUtils.setField(orderService, "userNotificationService", userNotificationService);
+        // 寄货计价：金额由 CargoPricingService 统一试算（件单价×件数 + 里程费），测试里给固定值
+        ReflectionTestUtils.setField(orderService, "cargoPricingService", cargoPricingService);
+        // lenient：不是每个用例都会走到计价（严格 stub 会因"未使用"报 UnnecessaryStubbing）
+        org.mockito.Mockito.lenient().when(cargoPricingService.quote(any(), any(), any())).thenReturn(
+                new cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService.CargoQuote(
+                        new BigDecimal("28.21"), new BigDecimal("10.00"), new BigDecimal("18.21"),
+                        new BigDecimal("18.21"), 2, new BigDecimal("5.00"), new BigDecimal("1.00")));
     }
 
     private AppSendOrderCreateReqVO sendReqVO(Long pickup, Long delivery) {
@@ -179,6 +191,48 @@ class TransportOrderServiceImplTest {
 
         assertEquals(CARGO_AUDIT_STATUS_ILLEGAL.getCode(), ex.getCode());
         verify(cargoOrderMapper, never()).updateById(any(CargoOrderDO.class));
+    }
+
+    @Test
+    void audit_autoPassed_order_isIdempotentConfirm() {
+        // 村民提交后自动审核通过 → 订单直接是「待入池(8)」；管理员在订单管理里点「审核通过」
+        // 属于复核确认：只记录审核结论，必须成功且**不改变生命周期**（不能把订单打回/报错中断演示）
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build());
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(0)
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
+
+        OrderAuditReqVO reqVO = new OrderAuditReqVO();
+        reqVO.setOrderId(1L);
+        reqVO.setPass(true);
+        orderService.audit(reqVO);
+
+        ArgumentCaptor<CargoOrderDO> captor = ArgumentCaptor.forClass(CargoOrderDO.class);
+        verify(cargoOrderMapper).updateById(captor.capture());
+        assertEquals(1, captor.getValue().getAuditStatus());
+        assertNull(captor.getValue().getReviewStatus()); // 只写审核结论，不动审核结果
+        verify(orderMapper, never()).updateById(any(TransportOrderDO.class)); // 生命周期不变
+    }
+
+    @Test
+    void audit_autoPassed_order_rejectCancelsOrder() {
+        // 复核不通过（如现场发现违禁品）：必须能把订单取消，不能因为"自动审核已通过"就锁死
+        when(orderMapper.selectById(1L)).thenReturn(TransportOrderDO.builder()
+                .id(1L).orderType(2).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build());
+        when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
+                .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(0)
+                        .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
+
+        OrderAuditReqVO reqVO = new OrderAuditReqVO();
+        reqVO.setOrderId(1L);
+        reqVO.setPass(false);
+        reqVO.setRejectReason("现场复核发现违禁品");
+        orderService.audit(reqVO);
+
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).updateById(orderCaptor.capture());
+        assertEquals(TransportOrderStatusEnum.CANCELLED.getStatus(), orderCaptor.getValue().getStatus());
     }
 
     @Test

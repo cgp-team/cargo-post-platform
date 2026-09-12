@@ -68,6 +68,11 @@ class HacoConfig:
     w_skeleton_penalty: float = 0.1
     w_capacity_risk: float = 0.1
 
+    # 货运绕行硬约束（km）：车辆为送/取一单偏离运营路线的距离上限。
+    # 超出该值的插入直接判不可行，订单留给多段联运（换乘站接力）而非让单条线路绕远。
+    # 默认 2km；车辆闲置运力充足时可放宽到 3km（后端按车辆闲置运力传 max_detour_km 覆盖）。
+    max_detour_km: float = 2.0
+
     # 自适应参数
     alpha_min: float = 0.5
     alpha_max: float = 3.0
@@ -128,4 +133,5 @@ class HacoConfig:
             penalty_skeleton=_get(config, "penalty_skeleton", cls.penalty_skeleton),
             target_feasible_ratio=_get(config, "target_feasible_ratio", cls.target_feasible_ratio),
             restart_ratio=_get(config, "restart_ratio", cls.restart_ratio),
+            max_detour_km=_get(config, "max_detour_km", cls.max_detour_km),
         )

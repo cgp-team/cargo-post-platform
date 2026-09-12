@@ -1,11 +1,17 @@
 package cn.iocoder.yudao.module.transport.service.transport.order;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
+import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.ProductOrderPageReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderTraceRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderItemRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.product.ProductDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
@@ -16,6 +22,9 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationD
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.product.ProductMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
@@ -36,6 +45,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Comparator;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -56,6 +67,9 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     @Resource private StationMapper stationMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
+    @Resource private DriverVehicleMapper driverVehicleMapper;
+    @Resource private DriverMapper driverMapper;
+    @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Override
     @Transactional
@@ -148,7 +162,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
 
     @Override
     @Transactional
-    public void ship(Long id, Long vehicleId, Long shiftId) {
+    public void ship(Long id, Long vehicleId, Long shiftId, Long deliverStationId) {
         ProductOrderDO order = validateExists(id);
         if (!ProductOrderStatusEnum.PENDING_DELIVERY.getStatus().equals(order.getStatus())) {
             throw exception(PRODUCT_ORDER_STATUS_ILLEGAL);
@@ -158,7 +172,120 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         update.setStatus(ProductOrderStatusEnum.DELIVERED.getStatus());
         update.setVehicleId(vehicleId);
         update.setShiftId(shiftId);
+        // 司机端任务归属 + 交付站点：发货即派单给"该车绑定的司机"，交付点=班次线路终点站
+        update.setDriverId(resolveDriverId(vehicleId));
+        // 交付站点：优先取管理员指定的网点（集散中心/村级站），否则回退班次线路终点站
+        update.setDeliverStationId(deliverStationId != null ? deliverStationId : resolveDeliverStationId(shiftId));
         orderMapper.updateById(update);
+    }
+
+    /** 承运司机：按人车绑定取在职司机（无绑定时为 null，司机端看不到该单，管理员可代发） */
+    private Long resolveDriverId(Long vehicleId) {
+        if (vehicleId == null || driverVehicleMapper == null) {
+            return null;
+        }
+        return driverVehicleMapper.selectActiveBindings().stream()
+                .filter(b -> Objects.equals(b.getVehicleId(), vehicleId))
+                .map(DriverVehicleDO::getDriverId)
+                .findFirst().orElse(null);
+    }
+
+    /** 交付站点：班次线路的终点站（sequence_no 最大），小程序"司机已到达"据此判定 */
+    private Long resolveDeliverStationId(Long shiftId) {
+        if (shiftId == null) {
+            return null;
+        }
+        ShiftDO shift = shiftMapper.selectById(shiftId);
+        if (shift == null || shift.getRouteId() == null) {
+            return null;
+        }
+        return routeStationMapper.selectListByRouteId(shift.getRouteId()).stream()
+                .max(Comparator.comparing(rs -> rs.getSequenceNo() == null ? 0 : rs.getSequenceNo()))
+                .map(RouteStationDO::getStationId)
+                .orElse(null);
+    }
+
+    @Override
+    public List<ProductOrderDO> getDriverDeliveryTasks(Long vehicleId) {
+        if (vehicleId == null) {
+            return List.of();
+        }
+        // 已发货且尚未妥投的商城单：司机端"待装车/待妥投"任务
+        return orderMapper.selectList(new LambdaQueryWrapperX<ProductOrderDO>()
+                .eq(ProductOrderDO::getVehicleId, vehicleId)
+                .eq(ProductOrderDO::getStatus, ProductOrderStatusEnum.DELIVERED.getStatus())
+                .isNull(ProductOrderDO::getDeliverTime)
+                .orderByDesc(ProductOrderDO::getId));
+    }
+
+    @Override
+    @Transactional
+    public void driverLoad(Long driverId, Long vehicleId, Long orderId, String photoUrl) {
+        ProductOrderDO order = validateDriverTask(driverId, vehicleId, orderId);
+        ProductOrderDO update = new ProductOrderDO();
+        update.setId(order.getId());
+        update.setLoadPhotoUrl(StrUtil.blankToDefault(photoUrl, ""));
+        update.setLoadTime(LocalDateTime.now());
+        orderMapper.updateById(update);
+    }
+
+    @Override
+    @Transactional
+    public void driverDeliver(Long driverId, Long vehicleId, Long orderId, String photoUrl) {
+        ProductOrderDO order = validateDriverTask(driverId, vehicleId, orderId);
+        ProductOrderDO update = new ProductOrderDO();
+        update.setId(order.getId());
+        update.setStatus(ProductOrderStatusEnum.COMPLETED.getStatus());
+        update.setDeliverPhotoUrl(StrUtil.blankToDefault(photoUrl, ""));
+        update.setDeliverTime(LocalDateTime.now());
+        orderMapper.updateById(update);
+    }
+
+    /** 司机端动作前置校验：订单存在 + 承运车辆=司机绑定车辆 + 已发货 + 未妥投 */
+    private ProductOrderDO validateDriverTask(Long driverId, Long vehicleId, Long orderId) {
+        ProductOrderDO order = validateExists(orderId);
+        if (vehicleId == null || !Objects.equals(order.getVehicleId(), vehicleId)) {
+            throw exception(DRIVER_ORDER_NOT_ASSIGNED);
+        }
+        if (driverId != null && order.getDriverId() != null && !Objects.equals(order.getDriverId(), driverId)) {
+            throw exception(DRIVER_ORDER_NOT_ASSIGNED);
+        }
+        if (!ProductOrderStatusEnum.DELIVERED.getStatus().equals(order.getStatus()) || order.getDeliverTime() != null) {
+            throw exception(PRODUCT_ORDER_STATUS_ILLEGAL);
+        }
+        return order;
+    }
+
+    // ==================== 用户端展示辅助（司机信息 / 是否已到达交付站点） ====================
+
+    private String driverNameOf(Long driverId) {
+        DriverDO driver = driverId == null ? null : driverMapper.selectById(driverId);
+        return driver != null ? driver.getName() : null;
+    }
+
+    private String driverMobileOf(Long driverId) {
+        DriverDO driver = driverId == null ? null : driverMapper.selectById(driverId);
+        return driver != null ? driver.getMobile() : null;
+    }
+
+    /**
+     * 司机是否已到达交付站点：当班次执行记录（该班次+司机+今天）的当前站点 == 交付站点，
+     * 或执行记录已完成。数据源是司机端"确认到达"写入的真实状态（后端为源），未发车时为 false。
+     */
+    private Boolean resolveDriverArrived(ProductOrderDO order) {
+        if (order.getShiftId() == null || order.getDriverId() == null) {
+            return Boolean.FALSE;
+        }
+        ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                order.getShiftId(), order.getDriverId(), LocalDate.now());
+        if (execution == null) {
+            return Boolean.FALSE;
+        }
+        if (execution.getStatus() != null && execution.getStatus() == 1) {
+            return Boolean.TRUE; // 执行记录已完成 = 跑完整条线路
+        }
+        return order.getDeliverStationId() != null
+                && Objects.equals(execution.getCurrentStationId(), order.getDeliverStationId());
     }
 
     @Override
@@ -183,12 +310,32 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         }
         AppProductOrderTraceRespVO vo = new AppProductOrderTraceRespVO();
         vo.setOrderId(order.getId());
+        vo.setOrderNo(order.getOrderNo());
+        vo.setStatus(order.getStatus());
+        vo.setStatusName(ProductOrderStatusEnum.nameOf(order.getStatus()));
+        vo.setReceiverName(order.getReceiverName());
+        vo.setReceiverMobile(order.getReceiverMobile());
+        vo.setReceiverAddress(order.getReceiverAddress());
+        // 订单详情页要用的订单级字段（商品清单/金额/备注/下单时间）：与"我的订单"列表同一份口径
+        vo.setTotalAmount(order.getTotalAmount());
+        vo.setRemark(order.getRemark());
+        vo.setCreateTime(order.getCreateTime());
+        // 司机作业凭证（装车拍照 / 妥投凭证）：用户端"司机已到达 + 已装车/已送达"直接展示
+        vo.setDriverName(driverNameOf(order.getDriverId()));
+        vo.setDriverMobile(driverMobileOf(order.getDriverId()));
+        vo.setLoadTime(order.getLoadTime());
+        vo.setLoadPhotoUrl(order.getLoadPhotoUrl());
+        vo.setDeliverTime(order.getDeliverTime());
+        vo.setDeliverPhotoUrl(order.getDeliverPhotoUrl());
+        vo.setDriverArrived(resolveDriverArrived(order));
         vo.setPoints(List.of());
         vo.setTrack(List.of());
         List<ProductOrderItemDO> items = itemMapper.selectListByOrderId(id);
         if (!items.isEmpty()) {
             vo.setProductName(items.get(0).getProductName());
         }
+        vo.setItems(cn.iocoder.yudao.framework.common.util.object.BeanUtils.toBean(
+                items, AppProductOrderItemRespVO.class));
         // 未关联承运车辆（未发货/发货未填承运）：返回空语义，小程序据此显示「商品还未发车」
         if (order.getVehicleId() == null) {
             return vo;

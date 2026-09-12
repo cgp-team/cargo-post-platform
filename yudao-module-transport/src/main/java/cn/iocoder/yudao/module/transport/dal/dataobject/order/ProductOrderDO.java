@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @TableName("transport_product_order")
 @KeySequence("transport_product_order_seq")
@@ -32,6 +33,18 @@ public class ProductOrderDO extends TenantBaseDO {
     private Long vehicleId;
     /** 承运班次编号(发货时关联,溯源用) */
     private Long shiftId;
+    /** 承运司机编号(发货时按车辆绑定推导,司机端任务归属) */
+    private Long driverId;
+    /** 交付/自提站点编号(发货时=班次线路终点站,司机到站提醒用) */
+    private Long deliverStationId;
+    /** 司机装车照片URL(装车核验凭证) */
+    private String loadPhotoUrl;
+    /** 司机装车确认时间 */
+    private LocalDateTime loadTime;
+    /** 司机妥投照片URL(交付凭证) */
+    private String deliverPhotoUrl;
+    /** 司机妥投完成时间 */
+    private LocalDateTime deliverTime;
     /** 收货人 */
     private String receiverName;
     /** 收货电话 */
