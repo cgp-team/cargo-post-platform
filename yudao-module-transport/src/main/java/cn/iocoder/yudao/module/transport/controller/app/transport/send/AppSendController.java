@@ -279,6 +279,35 @@ public class AppSendController {
         return etaMinutes != null && etaMinutes > 0 && etaMinutes <= CARRIER_APPROACH_MINUTES;
     }
 
+    /**
+     * P1-G：按距离分级返回接近阶段，超过最大阈值返回 null（不提醒）。
+     *
+     * <p>阈值语义：arrivingKm <= near1Km <= near2Km，边界闭合（<=）。
+     * 与司机端 {@code DriverAppServiceImpl#approachStage(double)} 同一套档位，
+     * 阈值可由 {@code yudao.transport.approach.*} 配置后传入，保证两端文案/图标一致。
+     *
+     * @param distanceKm   车辆到目标站点的距离（km），非法值（NaN/负数）返回 null
+     * @param near2Km      2km 档位阈值
+     * @param near1Km      1km 档位阈值
+     * @param arrivingKm   "即将到达"档位阈值
+     * @return ARRIVING / NEAR_1KM / NEAR_2KM，超出最大阈值返回 null
+     */
+    public static String approachStage(double distanceKm, double near2Km, double near1Km, double arrivingKm) {
+        if (Double.isNaN(distanceKm) || distanceKm < 0) {
+            return null;
+        }
+        if (distanceKm <= arrivingKm) {
+            return "ARRIVING";
+        }
+        if (distanceKm <= near1Km) {
+            return "NEAR_1KM";
+        }
+        if (distanceKm <= near2Km) {
+            return "NEAR_2KM";
+        }
+        return null;
+    }
+
     /** 我的寄货列表批量填充承运车辆实时位置（在途订单"车来取货/送货"提醒），一次加载避免逐单 N+1 */
     private void fillCarrierBatch(List<AppSendOrderRespVO> list, List<TransportOrderDO> orders) {
         if (list.isEmpty()) {

@@ -49,6 +49,9 @@
         style="width: 260px; margin-left: 8px; vertical-align: middle"
       />
       <span class="task-window-tip">任务窗口（留空=当前时段）</span>
+      <el-button v-hasPermi="['transport:dispatch:query']" :loading="prefetchLoading" @click="handlePrefetchRoad">
+        <Icon icon="ep:guide" />预热真实路线
+      </el-button>
       <el-table
         ref="poolTableRef"
         v-loading="poolLoading"
@@ -836,6 +839,10 @@ const runOneClickDemo = async () => {
       loading.setText(`③ 正在审核方案 #${planId}…`)
       await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
     }
+    // ③.5 预热真实道路轨迹：把本批订单/方案涉及的站间路线取回并落库，
+    //      可视化里就不会出现「两站直线相连」（配额未恢复时返回 0，如实提示，不影响后续步骤）
+    loading.setText('③.5 正在预热真实道路轨迹（站间路线取回并落库）…')
+    const prefetched = await DispatchApi.prefetchRoadGeometry().catch(() => 0)
     // ④ 演示态：把这一批订单放回「待入池」，方便反复演示同一批订单
     //   （生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后此处为空操作：
     //    调度后的订单不再出现在订单池，除非显式打回重新派送）
@@ -844,7 +851,7 @@ const runOneClickDemo = async () => {
     const plan = await DispatchApi.getDispatchPlan(planIds[0])
     loading.close()
     await ElMessageBox.alert(
-      `归集订单：${collected} 单\n生成方案：${planIds.map((id) => '#' + id).join('、')}（共 ${planIds.length} 套，按片区分别成方案）\n首套方案：订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}\n\n接下来：关闭本弹窗可看「调度结果可视化」（任务段时间线 + 地图路线 + ▶播放）。\n司机端工作台：扫码装车 → 发车 → 到站妥投；用户端「快递」页可看到车辆动态与「车快到了」提醒。`,
+      `归集订单：${collected} 单\n生成方案：${planIds.map((id) => '#' + id).join('、')}（共 ${planIds.length} 套，按片区分别成方案）\n首套方案：订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}\n真实道路轨迹：本次取回并落库 ${prefetched} 段（未取到的段在可视化里显示「真实路线获取中」，会自动重试）\n\n接下来：关闭本弹窗可看「调度结果可视化」（任务段时间线 + 地图路线 + ▶播放）。\n司机端工作台：扫码装车 → 发车 → 到站妥投；用户端「快递」页可看到车辆动态与「车快到了」提醒。`,
       '调度完成（发车留给司机端）',
       { type: 'success', confirmButtonText: '知道了' }
     )
@@ -856,6 +863,34 @@ const runOneClickDemo = async () => {
     message.error('一键演示中断：请确认存在「待入池」订单且后台已配置可用车辆（详见列表与上一条错误提示）')
   } finally {
     demoRunning.value = false
+  }
+}
+
+/**
+ * 预热真实道路轨迹（高德配额恢复后点一次）：
+ * 把订单池订单的取送站点对 + 今日方案运输段的起终点对逐段取回并落库，
+ * 之后打开「可视化」即为真实路线，不再出现两点直线。
+ */
+const prefetchLoading = ref(false)
+const handlePrefetchRoad = async () => {
+  prefetchLoading.value = true
+  const loading = ElLoading.service({
+    text: '正在预热真实道路轨迹（逐段取回并落库，受高德 QPS 节流）…',
+    background: 'rgba(0,0,0,0.15)'
+  })
+  try {
+    const count = await DispatchApi.prefetchRoadGeometry()
+    loading.close()
+    if (count > 0) {
+      message.success(`已取回并落库 ${count} 段真实路线；重新打开「调度结果可视化」即为真实轨迹`)
+    } else {
+      message.warning('未取到真实路线（高德配额/网络受限）：可视化里对应段显示「真实路线获取中」，稍后自动重试')
+    }
+  } catch (e) {
+    loading.close()
+    message.error('预热真实道路轨迹失败，请稍后重试')
+  } finally {
+    prefetchLoading.value = false
   }
 }
 

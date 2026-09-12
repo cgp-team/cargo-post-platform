@@ -7,6 +7,7 @@ import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.app.transport.notification.vo.AppNotificationRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportUserNotificationDO;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
+import cn.iocoder.yudao.module.transport.enums.notification.NotificationRecipientTypeEnum;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -50,7 +51,7 @@ public class AppNotificationController {
     @Operation(summary = "标记单条消息已读")
     @Parameter(name = "id", description = "通知编号", required = true)
     public CommonResult<Boolean> read(@RequestParam("id") Long id) {
-        userNotificationService.markAsRead(id, getLoginUserId());
+        userNotificationService.markAsRead(id, NotificationRecipientTypeEnum.USER, getLoginUserId());
         return success(true);
     }
 

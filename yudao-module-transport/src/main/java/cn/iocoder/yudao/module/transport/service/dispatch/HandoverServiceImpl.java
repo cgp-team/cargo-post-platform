@@ -5,10 +5,16 @@ import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.handover.vo.HandoverPageReqVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportHandoverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportHandoverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportHandoverStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
@@ -50,6 +56,9 @@ public class HandoverServiceImpl implements HandoverService {
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
     @Resource private MultiLegService multiLegService;
+    @Resource private DriverMapper driverMapper;
+    @Resource private VehicleMapper vehicleMapper;
+    @Resource private StationMapper stationMapper;
 
     @Override
     @Transactional
@@ -210,9 +219,11 @@ public class HandoverServiceImpl implements HandoverService {
 
         orderEventService.record(handover.getOrderId(), TransportOrderEventTypeEnum.HANDOVER_CONFIRMED,
                 "换乘站货物交接已确认完成");
+        // P2-K：换乘完成给用户发「已由 A（车牌A）在 XX 站交给 B（车牌B），继续派送」，
+        // 带上真实司机/车牌/站点名，替代原来含糊的「下一辆运输车辆」。
         userNotificationService.sendToOrderUser(handover.getOrderId(),
                 TransportOrderEventTypeEnum.HANDOVER_CONFIRMED, NotificationLevelEnum.SUCCESS, false,
-                "换乘完成", "您的货物已由下一辆运输车辆接收，正在继续运输");
+                "换乘完成", buildHandoverContent(handover));
         if (handover.getToDriverId() != null) {
             userNotificationService.sendToDriver(handover.getToDriverId(),
                     TransportOrderEventTypeEnum.LEG_STARTED, NotificationLevelEnum.INFO, false,
@@ -314,6 +325,53 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     // ==================== 内部 ====================
+
+    /** P2-K：换乘完成通知文案——「已由 A（车牌A）在 XX 站交给 B（车牌B），继续派送」 */
+    private String buildHandoverContent(TransportHandoverDO handover) {
+        String from = partyLabel(handover.getFromDriverId(), handover.getFromVehicleId());
+        String to = partyLabel(handover.getToDriverId(), handover.getToVehicleId());
+        String station = stationName(handover.getStationId());
+        StringBuilder sb = new StringBuilder("您的货物");
+        if (from != null) {
+            sb.append("已由 ").append(from);
+        }
+        if (station != null) {
+            sb.append("在「").append(station).append("」");
+        }
+        if (to != null) {
+            sb.append("交给 ").append(to);
+        } else {
+            sb.append("交给下一段司机");
+        }
+        sb.append("，正在继续派送");
+        return sb.toString();
+    }
+
+    /** 司机 + 车牌（如「王守义（渝A·B5203）」；司机/车辆缺失时退化为仅有的一项或 null） */
+    private String partyLabel(Long driverId, Long vehicleId) {
+        String name = null;
+        if (driverId != null && driverMapper != null) {
+            DriverDO driver = driverMapper.selectById(driverId);
+            name = driver != null ? driver.getName() : null;
+        }
+        String plate = null;
+        if (vehicleId != null && vehicleMapper != null) {
+            VehicleDO vehicle = vehicleMapper.selectById(vehicleId);
+            plate = vehicle != null ? vehicle.getPlateNo() : null;
+        }
+        if (name == null && plate == null) {
+            return null;
+        }
+        return (name != null ? name : "") + (plate != null ? "（" + plate + "）" : "");
+    }
+
+    private String stationName(Long stationId) {
+        if (stationId == null || stationMapper == null) {
+            return null;
+        }
+        StationDO station = stationMapper.selectById(stationId);
+        return station != null ? station.getStationName() : null;
+    }
 
     private TransportLegDO nextLeg(Long orderId, Integer sequence) {
         if (sequence == null) {

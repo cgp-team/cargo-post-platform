@@ -1875,8 +1875,130 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
+    /**
+     * 预热真实道路轨迹（高德配额恢复后跑一次即可）。
+     *
+     * <p>口径 = 演示会看到的那批路线：订单池（待入池/已入池）的取送站点对 + 今天方案里运输段的起终点对。
+     * 逐对调高德，取到就<b>落库</b>到运输段（transport_leg.navigation_polyline，幂等），
+     * 之后打开「调度结果可视化」直接就是真实道路轨迹，不用再等临时缓存，也不会出现两点直线。</p>
+     *
+     * @return 本次成功取到并落库/预热的站点对数（高德不可用时返回 0，如实反映，不伪造）
+     */
+    @Override
+    public int prefetchRoadGeometry() {
+        if (roadPolylineService == null || !roadPolylineService.available() || stationMapper == null) {
+            return 0;
+        }
+        List<TransportOrderDO> poolOrders = orderMapper == null ? List.of()
+                : orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus(),
+                        TransportOrderStatusEnum.POOLED.getStatus()));
+        List<TransportLegDO> todayLegs = legMapper == null ? List.of()
+                : legMapper.selectList(new LambdaQueryWrapperX<TransportLegDO>()
+                .ge(TransportLegDO::getCreateTime, java.time.LocalDate.now().atStartOfDay()));
 
+        Set<Long> stationIds = new LinkedHashSet<>();
+        poolOrders.forEach(order -> {
+            if (order.getPickupStationId() != null) {
+                stationIds.add(order.getPickupStationId());
+            }
+            if (order.getDeliveryStationId() != null) {
+                stationIds.add(order.getDeliveryStationId());
+            }
+        });
+        todayLegs.forEach(leg -> {
+            if (leg.getFromStationId() != null) {
+                stationIds.add(leg.getFromStationId());
+            }
+            if (leg.getToStationId() != null) {
+                stationIds.add(leg.getToStationId());
+            }
+        });
+        if (stationIds.isEmpty()) {
+            return 0;
+        }
+        Map<Long, StationDO> stationMap = stationMapper.selectBatchIds(stationIds).stream()
+                .filter(station -> station.getLongitude() != null && station.getLatitude() != null)
+                .collect(Collectors.toMap(StationDO::getId, station -> station, (a, b) -> a));
+
+        int fetched = 0;
+        // 1) 今天的运输段：逐段取真实轨迹并落库（与可视化同一口径；取到即持久化，重启/缓存过期后无需重取）
+        for (TransportLegDO leg : todayLegs) {
+            StationDO from = stationMap.get(leg.getFromStationId());
+            StationDO to = stationMap.get(leg.getToStationId());
+            if (from == null || to == null) {
+                continue;
+            }
+            List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
+            if (road == null) {
+                road = roadPolylineService.route(from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                        to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+            }
+            if (road != null && road.size() >= 2) {
+                persistLegPolyline(leg, road);
+                fetched++;
+            }
+        }
+        // 2) 订单池里还没成段的订单：按「取 → 送」站点对预热（服务内缓存 10 分钟，调度后打开可视化即可直接画真实路线）
+        Set<String> warmed = new HashSet<>();
+        for (TransportOrderDO order : poolOrders) {
+            StationDO from = stationMap.get(order.getPickupStationId());
+            StationDO to = stationMap.get(order.getDeliveryStationId());
+            if (from == null || to == null || !warmed.add(from.getId() + "->" + to.getId())) {
+                continue;
+            }
+            List<double[]> road = roadPolylineService.route(from.getLongitude().doubleValue(),
+                    from.getLatitude().doubleValue(), to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+            if (road != null && road.size() >= 2) {
+                fetched++;
+            }
+        }
+        return fetched;
+    }
+
+    /**
+     * 真实道路轨迹落库到运输段（幂等，失败只记日志）：
+     * 高德配额有限，取到一次就持久化，可视化不再依赖"临时缓存 + 直线兜底"。
+     */
+    private void persistLegPolyline(TransportLegDO leg, List<double[]> road) {
+        if (legMapper == null || leg == null || leg.getId() == null || road == null || road.size() < 2) {
+            return;
+        }
+        try {
+            String polyline = serializeNavigationPolyline(road);
+            if (StrUtil.isBlank(polyline)) {
+                return;
+            }
+            TransportLegDO update = new TransportLegDO();
+            update.setId(leg.getId());
+            update.setNavigationPolyline(polyline);
+            update.setNavigationSource("AMAP");
+            legMapper.updateById(update);
+            leg.setNavigationPolyline(polyline);
+            leg.setNavigationSource("AMAP");
+        } catch (Exception ex) {
+            log.warn("[roadmap] 运输段 {} 真实轨迹落库失败：{}", leg.getId(), ex.getMessage());
+        }
+    }
+
+    /** 轨迹序列化：与 {@link #parseNavigationPolyline(String)} 对称的 "lon,lat;lon,lat;..." */
+    private static String serializeNavigationPolyline(List<double[]> points) {
+        StringBuilder sb = new StringBuilder(points.size() * 16);
+        for (double[] p : points) {
+            if (p == null || p.length < 2) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(String.format(java.util.Locale.ROOT, "%.6f", p[0]))
+                    .append(',')
+                    .append(String.format(java.util.Locale.ROOT, "%.6f", p[1]));
+        }
+        return sb.toString();
+    }
+
+    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
     private static List<double[]> parseNavigationPolyline(String polyline) {
 
         if (StrUtil.isBlank(polyline)) {
