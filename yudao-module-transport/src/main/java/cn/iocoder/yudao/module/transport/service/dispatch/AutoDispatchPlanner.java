@@ -1,5 +1,6 @@
 package cn.iocoder.yudao.module.transport.service.dispatch;
 
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
@@ -10,9 +11,12 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 一键智能调度的"自动选择"规则（纯函数，可单测）。
@@ -143,6 +147,108 @@ public class AutoDispatchPlanner {
             });
         }
         return merged;
+    }
+
+    /**
+     * 按「运营线路覆盖」挑候选车辆（业务默认：**一条真实线路只跑一辆公交车**）。
+     *
+     * <p>为什么不用"运力排序"挑车：一键调度要的是"这批订单落在哪几条线路上，就让那几条线路的车来跑"。
+     * 按运力挑车会把 347 路的车派去送 320 路的货，司机端任务串线、可视化也乱。
+     * 这里先用订单站点和每条线路的站点求交集（覆盖分），再按覆盖分挑车；</p>
+     *
+     * <p>一条线路只出一辆车（同线路多台绑定取 ID 最小者，保证结果确定）；已开过的站不在
+     * 「剩余行程」里的车会被 {@link #selectVehiclesByLineCoverage} 的调用方另行过滤（不折返）。</p>
+     *
+     * @param orders            本批订单（取送站用于算覆盖分）
+     * @param vehicles          可用车辆（已按状态过滤）
+     * @param bindings          有效人车绑定（含运营线路 routeId）
+     * @param routeStationIds   运营线路编号 → 该线路站点编号列表
+     * @param max               最多返回几台
+     * @param excludedVehicleIds 需要避让的车辆（已在途方案占用的车）
+     * @return 覆盖分 > 0 的候选车（按覆盖分降序、运力降序、ID 升序）；没有覆盖本批站点的线路时返回空
+     */
+    public static List<VehicleDO> selectVehiclesByLineCoverage(
+            List<TransportOrderDO> orders,
+            List<VehicleDO> vehicles,
+            List<DriverVehicleDO> bindings,
+            Map<Long, List<Long>> routeStationIds,
+            int max,
+            Set<Long> excludedVehicleIds) {
+        if (vehicles == null || vehicles.isEmpty() || max <= 0 || bindings == null || bindings.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, VehicleDO> vehicleMap = vehicles.stream()
+                .filter(v -> v.getId() != null)
+                .filter(v -> v.getStatus() == null || v.getStatus() == STATUS_ENABLED)
+                .collect(Collectors.toMap(VehicleDO::getId, v -> v, (a, b) -> a));
+        if (vehicleMap.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> wantedStations = new HashSet<>();
+        if (orders != null) {
+            orders.forEach(order -> {
+                if (order != null && order.getPickupStationId() != null) {
+                    wantedStations.add(order.getPickupStationId());
+                }
+                if (order != null && order.getDeliveryStationId() != null) {
+                    wantedStations.add(order.getDeliveryStationId());
+                }
+            });
+        }
+        if (wantedStations.isEmpty()) {
+            return List.of();
+        }
+
+        // 一条线路一辆车：同一 routeId 只保留车辆 ID 最小的那台
+        Map<Long, DriverVehicleDO> oneVehiclePerRoute = new LinkedHashMap<>();
+        for (DriverVehicleDO binding : bindings) {
+            if (binding == null || binding.getRouteId() == null || binding.getVehicleId() == null) {
+                continue;
+            }
+            if (!vehicleMap.containsKey(binding.getVehicleId())) {
+                continue;
+            }
+            oneVehiclePerRoute.merge(binding.getRouteId(), binding,
+                    (a, b) -> a.getVehicleId() <= b.getVehicleId() ? a : b);
+        }
+
+        List<VehicleLineScore> scored = new ArrayList<>();
+        oneVehiclePerRoute.forEach((routeId, binding) -> {
+            Set<Long> lineStations = new HashSet<>(routeStationIds.getOrDefault(routeId, List.of()));
+            int covered = 0;
+            for (Long stationId : wantedStations) {
+                if (lineStations.contains(stationId)) {
+                    covered++;
+                }
+            }
+            scored.add(new VehicleLineScore(vehicleMap.get(binding.getVehicleId()), binding.getRouteId(), covered));
+        });
+
+        Set<Long> excluded = excludedVehicleIds == null ? Set.of() : excludedVehicleIds;
+        List<VehicleDO> picked = new ArrayList<>();
+        scored.sort(Comparator.comparingInt(VehicleLineScore::coveredStations).reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (VehicleLineScore s) -> s.vehicle().getCargoCapacity() == null ? 0 : s.vehicle().getCargoCapacity()).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (VehicleLineScore s) -> s.vehicle().getPassengerCapacity() == null ? 0 : s.vehicle().getPassengerCapacity()).reversed())
+                .thenComparing(s -> s.vehicle().getId()));
+        for (VehicleLineScore score : scored) {
+            if (picked.size() >= max) {
+                break;
+            }
+            if (score.coveredStations() <= 0) {
+                break; // 不覆盖本批站点的线路不参与（宁可退回运力兜底，也不乱派）
+            }
+            if (excluded.contains(score.vehicle().getId())) {
+                continue;
+            }
+            picked.add(score.vehicle());
+        }
+        return picked;
+    }
+
+    /** 候选车与线路的覆盖分（内部排序用） */
+    private record VehicleLineScore(VehicleDO vehicle, Long routeId, int coveredStations) {
     }
 
     /** 同一批次的地理聚合半径(km)：超过该距离视为"另一个片区"，不混进同一次派单 */

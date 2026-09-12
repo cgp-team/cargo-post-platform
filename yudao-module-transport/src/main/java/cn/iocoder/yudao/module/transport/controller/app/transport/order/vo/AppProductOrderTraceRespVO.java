@@ -26,6 +26,14 @@ public class AppProductOrderTraceRespVO {
     private String receiverMobile;
     @Schema(description = "收货地址（自由文本，非站点）")
     private String receiverAddress;
+    @Schema(description = "订单总额")
+    private BigDecimal totalAmount;
+    @Schema(description = "订单备注")
+    private String remark;
+    @Schema(description = "下单时间")
+    private LocalDateTime createTime;
+    @Schema(description = "订单明细（商品/单价/数量/小计）：订单详情页直接展示商品清单")
+    private List<AppProductOrderItemRespVO> items;
     @Schema(description = "承运车牌号")
     private String vehiclePlate;
     @Schema(description = "承运司机姓名")

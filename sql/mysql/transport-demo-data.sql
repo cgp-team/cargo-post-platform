@@ -136,8 +136,16 @@ INSERT IGNORE INTO transport_postal_order (id, order_id, mail_no, carrier_code, 
 -- ---------- 商城商品 ----------
 -- 排序：农产品在前（首页推荐只取前 4 个 → 首页展示农产品），重庆特产在后（id 7~12，商城列表可见）。
 -- 特产照片：随小程序包发布的实拍图（miniprogram/images/products/*.jpg）+ 后端图片 URL，见 utils/product-img.js。
-DELETE FROM transport_product WHERE id BETWEEN 1 AND 12;
-INSERT INTO transport_product (id, name, from_village, price, unit, image, badge, description, stock, status, sort, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+-- 农产品商品（演示种子数据）
+--
+-- ⚠️ 这里必须用 INSERT IGNORE，**不能** DELETE 后再 INSERT：
+--    本文件会随部署/演示流程反复执行（deploy-dev.yml 的迁移步骤里就有它），
+--    以前是 `DELETE FROM transport_product WHERE id BETWEEN 1 AND 12` + 重新插入，
+--    结果"后台改过的商品名称/价格/描述/状态、以及上传的商品图片(image_url)"每次都会被打回演示初值
+--    —— 用户看到的就是"后台改完商品，一刷新就没了"。
+--    INSERT IGNORE：只在缺行时补种子数据，**已存在的商品一律不动**（运营改动优先）。
+--    注意：不要往下面的列里补 image_url——种子数据不该覆盖后台配置的图片。
+INSERT IGNORE INTO transport_product (id, name, from_village, price, unit, image, badge, description, stock, status, sort, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
 -- 农产品（优先展示）
 (1, '高山脆李', '云山村', 68.00, '斤', '🍑', '大巴直通车', '高山生态种植，皮薄肉厚，清甜多汁', 200, 0, 1, 0, '1', NOW(), '1', NOW(), b'0'),
 (2, '土鸡蛋30枚装', '大湾村', 45.00, '箱', '🥚', '大巴直通车', '农家散养土鸡蛋，30枚装', 150, 0, 2, 0, '1', NOW(), '1', NOW(), b'0'),
@@ -202,13 +210,18 @@ ON DUPLICATE KEY UPDATE
     deleted = b'0';
 
 -- 3) 经停站序（顺序即线路走向；planned_minutes 为从起点累计分钟）
-DELETE FROM transport_route_station WHERE route_id = 545;
+-- 同样不做"先删再插"：这条示例线路的站序被后台编辑过时也要保留（ON DUPLICATE KEY UPDATE 幂等）
 INSERT INTO transport_route_station
     (id, route_id, station_id, sequence_no, planned_minutes, tenant_id, creator, updater, deleted)
 VALUES
     (905451, 545, 1146, 1, 0, 0, '1', '1', b'0'),
     (905452, 545, 107, 2, 1, 0, '1', '1', b'0'),
-    (905453, 545, 104, 3, 9, 0, '1', '1', b'0');
+    (905453, 545, 104, 3, 9, 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    station_id = VALUES(station_id),
+    sequence_no = VALUES(sequence_no),
+    planned_minutes = VALUES(planned_minutes),
+    deleted = b'0';
 
 -- 4) 给自建线路排两班车（否则线路只出现在"附近线路"里、没有在途车辆）
 INSERT INTO transport_shift

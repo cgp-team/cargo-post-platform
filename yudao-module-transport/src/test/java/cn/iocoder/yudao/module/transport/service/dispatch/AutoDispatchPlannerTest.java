@@ -3,11 +3,13 @@ package cn.iocoder.yudao.module.transport.service.dispatch;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -110,6 +112,81 @@ class AutoDispatchPlannerTest {
         Map<String, Object> merged = AutoDispatchPlanner.mergeAlgorithmConfig(Map.of("max_iterations", 500));
         assertEquals(500, merged.get("max_iterations")); // 高级设置覆盖
         assertEquals(30, merged.get("ant_count"));       // 其余仍走默认
+    }
+
+    // ==================== 候选车辆：一条线路一辆车 + 线路覆盖优先 ====================
+
+    private static VehicleDO vehicle(long id, int cargo, int passenger) {
+        return VehicleDO.builder().id(id).plateNo("渝A" + id).status(0)
+                .cargoCapacity(cargo).passengerCapacity(passenger).build();
+    }
+
+    private static DriverVehicleDO binding(long id, long driverId, long vehicleId, Long routeId) {
+        return DriverVehicleDO.builder().id(id).driverId(driverId).vehicleId(vehicleId)
+                .routeId(routeId).status(1).build();
+    }
+
+    /** 347 路区间（10/11/12 站）、320 路（20/21/22 站） */
+    private static final Map<Long, List<Long>> LINE_STATIONS = Map.of(
+            401L, List.of(10L, 11L, 12L),
+            403L, List.of(20L, 21L, 22L));
+
+    @Test
+    void selectVehiclesByLineCoverage_picksCarsOfCoveringLines() {
+        // 订单落在 347 路区间（10→11）与 320 路（20→21）→ 只挑这两条线的车
+        List<TransportOrderDO> orders = List.of(order(1L, 10L, 11L), order(2L, 20L, 21L));
+        List<VehicleDO> vehicles = List.of(vehicle(1L, 24, 30), vehicle(2L, 24, 25), vehicle(3L, 24, 20));
+        List<DriverVehicleDO> bindings = List.of(
+                binding(1L, 1L, 1L, 401L), binding(2L, 2L, 2L, 403L), binding(3L, 3L, 3L, 401L));
+
+        List<VehicleDO> picked = AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                orders, vehicles, bindings, LINE_STATIONS, 3, Set.of());
+
+        // 一条线路只出一辆车（401 线路保留 ID 更小的 1 号车），另一辆是 320 路的 2 号车
+        assertEquals(List.of(1L, 2L), picked.stream().map(VehicleDO::getId).toList());
+    }
+
+    @Test
+    void selectVehiclesByLineCoverage_skipsBusyVehicles() {
+        List<TransportOrderDO> orders = List.of(order(1L, 10L, 11L), order(2L, 20L, 21L));
+        List<VehicleDO> vehicles = List.of(vehicle(1L, 24, 30), vehicle(2L, 24, 25));
+        List<DriverVehicleDO> bindings = List.of(binding(1L, 1L, 1L, 401L), binding(2L, 2L, 2L, 403L));
+
+        // 1 号车已在途（被别的方案占用）→ 只派 320 路的 2 号车
+        List<VehicleDO> picked = AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                orders, vehicles, bindings, LINE_STATIONS, 3, Set.of(1L));
+        assertEquals(List.of(2L), picked.stream().map(VehicleDO::getId).toList());
+
+        // 两条线路的车都在途 → 空（调用方回退"不避让"）
+        assertTrue(AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                orders, vehicles, bindings, LINE_STATIONS, 3, Set.of(1L, 2L)).isEmpty());
+    }
+
+    @Test
+    void selectVehiclesByLineCoverage_returnsEmptyWhenNoLineCoversBatch() {
+        // 订单站点不在任何绑定线路上 → 返回空，调用方退回"运力兜底"（不硬塞一台不相干的车）
+        List<TransportOrderDO> orders = List.of(order(1L, 99L, 98L));
+        List<VehicleDO> vehicles = List.of(vehicle(1L, 24, 30));
+        List<DriverVehicleDO> bindings = List.of(binding(1L, 1L, 1L, 401L));
+
+        assertTrue(AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                orders, vehicles, bindings, LINE_STATIONS, 3, Set.of()).isEmpty());
+    }
+
+    @Test
+    void selectVehiclesByLineCoverage_skipsDisabledVehiclesAndUnboundRoutes() {
+        List<TransportOrderDO> orders = List.of(order(1L, 10L, 11L));
+        VehicleDO disabled = vehicle(1L, 24, 30);
+        disabled.setStatus(1);
+        List<VehicleDO> vehicles = List.of(disabled, vehicle(2L, 24, 20));
+        List<DriverVehicleDO> bindings = List.of(
+                binding(1L, 1L, 1L, 401L),        // 停用车
+                binding(2L, 2L, 2L, null),        // 未绑运营线路
+                binding(3L, 3L, 2L, 401L));       // 同一台车绑了线路 → 可用
+
+        List<VehicleDO> picked = AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                orders, vehicles, bindings, LINE_STATIONS, 3, Set.of());
+        assertEquals(List.of(2L), picked.stream().map(VehicleDO::getId).toList());
     }
 
     // ==================== 一键调度"订单批次选择"（片区分批） ====================

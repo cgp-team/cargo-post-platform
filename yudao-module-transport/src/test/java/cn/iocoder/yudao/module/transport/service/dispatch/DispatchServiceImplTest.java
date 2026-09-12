@@ -298,6 +298,47 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_pairs_cargo_pickup_and_delivery_as_shipment() {
+        // PDPTW 口径回归（Li & Lim 2001）：取货站 → 送达站（两端都不是场站）的货运单，
+        // 必须作为「配对货运单」下发给算法（展开成同一辆车的 PICKUP + DELIVERY，先取后送）；
+        // 历史实现只发一个 DELIVERY 节点并丢掉取货站 = 货凭空出现在送达站，站点清单里看不到揽收点。
+        TransportOrderDO cargoOrder = TransportOrderDO.builder().id(1L).orderType(2)
+                .pickupStationId(11L).deliveryStationId(12L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cargoOrder));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L)
+                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000")).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(10).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(11L).longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build(),
+                StationDO.builder().id(12L).longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
+        when(cargoOrderMapper.selectList(any())).thenReturn(List.of(
+                CargoOrderDO.builder().id(1L).orderId(1L).itemCount(3)
+                        .weightKg(new BigDecimal("5.5")).volumeM3(new BigDecimal("0.0200")).build()));
+        lenient().when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        AlgorithmPlanReqDTO req = reqCaptor.getValue();
+        assertEquals(1, req.getShipments().size(), "村→村货运单应下发 1 张配对货运单");
+        assertEquals("1", req.getShipments().get(0).getShipmentId());
+        assertEquals("11", req.getShipments().get(0).getPickupStationId(), "配对单必须带取货站");
+        assertEquals("12", req.getShipments().get(0).getDeliveryStationId());
+        assertEquals(3, req.getShipments().get(0).getQuantity());
+        assertTrue(req.getOrders() == null || req.getOrders().stream()
+                        .noneMatch(o -> "1".equals(o.getOrderId())),
+                "配对单不应再以单向订单节点下发（否则取货站会丢）");
+    }
+
+    @Test
     void createSmartPlan_pool_claimed_by_concurrent_throws() {
         // P1-004 回归：并发智能派单——订单池已被其它派单 CAS 抢占（update 返回 0）→ 不重复派单
         mockSmartPlanContext();
@@ -455,9 +496,11 @@ class DispatchServiceImplTest {
         ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
         verify(dispatchPlanMapper).updateById(planCaptor.capture());
         String persisted = planCaptor.getValue().getPlanReason();
-        assertEquals(681, persisted.length());
+        assertEquals(681, longReason.length());
         assertTrue(persisted.length() > 500, "超过 500 字符的解释必须原样落库（列宽已扩到 2000）");
-        assertEquals(longReason, persisted);
+        // 方案解释现在会先写"任务窗口"，但长解释本身必须完整保留（不得被截断）
+        assertTrue(persisted.startsWith("任务窗口 "), "方案解释应先写明本次任务窗口：" + persisted);
+        assertTrue(persisted.contains(longReason), "超过 500 字符的方案解释必须完整落库");
     }
 
     @Test

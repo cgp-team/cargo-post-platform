@@ -40,6 +40,8 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_NO_FEASIBLE = new ErrorCode(1_005_008_006, "算法判定无可行解:{}");
     ErrorCode DISPATCH_SCALE_OVER_LIMIT = new ErrorCode(1_005_008_007, "智能派单规模超出算法上限（30 站点 / 25 订单 / 3 车），当前 {}，请拆分批次或减少订单");
     ErrorCode DISPATCH_ORDER_NOT_COLLECTABLE = new ErrorCode(1_005_008_008, "部分订单当前状态不可归集（仅承运审核通过的待入池订单可入池）");
+    ErrorCode DISPATCH_TASK_WINDOW_EMPTY = new ErrorCode(1_005_008_009, "任务窗口 {} 内没有可派订单（{} 单时间窗与本窗口无交集，请调整窗口或等下一班次）");
+    ErrorCode DISPATCH_NO_BACKTRACKING = new ErrorCode(1_005_008_010, "车辆已驶过站点、不能掉头取货：{}；请留到下一班次或改派其他线路");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");

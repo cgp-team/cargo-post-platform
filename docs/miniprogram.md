@@ -11,10 +11,16 @@
 - `pages/goods/goods`、`pages/goods/detail/detail`：农产品商城列表与详情。
 - `pages/goods/trace/trace`：商品溯源，商城订单的大巴承运轨迹（地图轨迹线 + 途经站点），从「我的订单」已发货/已完成订单进入。
 - `pages/send/send`：寄件下单（货物名称/重量/类型/件数/长宽高体积/是否生鲜/备注），支持从地址簿回填收货信息。物体信息随订单落 `transport_cargo_order`（`cargo_category`/`item_count`/`volume_m3`/`fresh_flag`），「我的寄货」按标签回显；前端限重与后端承运审核规则一致（单件 30kg），超限在提交前提示。
-- `pages/parcel/parcel`：我的包裹。邮快件列表直显取件码（点击复制）；单号查询展示取件码二维码、承运班次与到达预估（已分配/已发车时）。
+- `pages/parcel/parcel`：快递页，三个 tab：**我的寄货**（邮快件列表直显取件码，点击卡片直接看这单的完整物流详情）/
+  **我的购物**（商城买到的商品订单：商品图、金额、承运司机与送货进度，点卡片进订单详情）/
+  **单号查询**（取件码二维码、承运班次与到达预估、分段联运与时间轴）。「我的」页的「我的寄货 / 我的购物」入口
+  通过 `globalData.parcelIntent` 直达对应 tab。
 - **车来取货/送货提醒（演示可见）**：`page` 列表与单号查询会显示「班车 距<目标站>约 N 分钟」，距目标站点 **≤10 分钟**时升级为高亮「车快到了」提醒条并弹一次提示（同一订单不重复打扰）。位置来自**统一位置模型**：司机真实上报优先（5 分钟内标"实时"、过期标"位置可能过期"），无上报时用**确定性班次模拟**位置并标注"模拟演示"——因此演示时**不需要司机开 GPS** 也能看到倒计时；车辆位置与目标站点的距离/分钟按 Haversine + 均速 25km/h 估算，随时间刷新（15s）。
 - `pages/bus/index`、`pages/bus/detail`：实时公交独立页（车来了式：线路地图 + 车辆列表 + 车辆详情），从首页「附近公交」或快递页进入。
-- `pages/orders/orders`：农产品商城订单列表（状态筛选、取消订单、溯源入口），从"我的"页进入，不在 tab-bar。
+- `pages/orders/orders`：农产品商城订单列表（状态筛选、取消订单、溯源入口），从"我的"页进入，不在 tab-bar；
+  **点订单卡片进订单详情**。
+- `pages/orders/detail/detail`：商城订单详情（商品清单与金额、收货信息、承运车辆/司机/交付站点、
+  配送进度时间线、司机装车与妥投核验凭证、跳车辆轨迹）。数据源 `GET /app-api/transport/product-order/trace`。
 - `pages/mine/mine`、`pages/settings/settings`：我的与设置（含老年人模式、主题颜色，由 `utils/appearance.js` 统一处理）。
 - `pages/mine/profile/profile`：个人资料编辑（昵称/头像/性别）与修改密码（短信验证码 scene=3）。
 - `pages/mine/address/address`：收货地址管理（member/address 接口，省市区三级选择）；寄件页「地址簿」选择模式回填。

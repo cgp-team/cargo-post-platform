@@ -37,6 +37,18 @@
       >
         <Icon icon="ep:video-play" />一键演示（归集→调度→审核）
       </el-button>
+      <!-- 任务窗口：本批只排这个时间段的任务；窗口开始时车辆已开过的站不会再派它掉头回去取货 -->
+      <el-time-picker
+        v-model="taskWindowRange"
+        is-range
+        clearable
+        value-format="HH:mm:ss"
+        range-separator="至"
+        start-placeholder="任务窗口开始"
+        end-placeholder="任务窗口结束"
+        style="width: 260px; margin-left: 8px; vertical-align: middle"
+      />
+      <span class="task-window-tip">任务窗口（留空=当前时段）</span>
       <el-button v-hasPermi="['transport:dispatch:query']" :loading="prefetchLoading" @click="handlePrefetchRoad">
         <Icon icon="ep:guide" />预热真实路线
       </el-button>
@@ -450,6 +462,18 @@ const openVisual = (planIds: number[]) => {
   visualVisible.value = true
 }
 
+/**
+ * 任务窗口（可留空）：调度是给"某个时间段"排任务，例：早上 08:00~10:00 这一班。
+ * 后端据此 ①只排窗口内来得及取送的订单；②算出窗口开始时每台车开到哪一站，
+ * **已经开过的站不会派它掉头回去取货**（只在顺路的前方站点取派）。
+ */
+const taskWindowRange = ref<[string, string] | undefined>()
+const taskWindowParams = () => {
+  const range = taskWindowRange.value
+  if (!range || range.length !== 2 || !range[0] || !range[1]) return {}
+  return { windowStart: range[0], windowEnd: range[1] }
+}
+
 type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
 
 // 订单类型:1 客运 2 货运 3 邮快件
@@ -693,6 +717,7 @@ const submitSmart = async () => {
       depotStationId: smartForm.value.depotStationId!,
       vehicleIds: smartForm.value.vehicleIds,
       algorithmConfig: Object.keys(algorithmConfig).length ? algorithmConfig : undefined,
+      ...taskWindowParams(),
     })
     message.success(`智能派单成功,方案号:${planId}`)
     smartVisible.value = false
@@ -725,7 +750,7 @@ const runAutoPlans = async (onStage?: (text: string) => void): Promise<number[]>
     if (!remaining) break
     onStage?.(`第 ${planIds.length + 1} 套方案：正在调度 ${remaining} 单…`)
     try {
-      planIds.push(await DispatchApi.createSmartPlan({ auto: true }))
+      planIds.push(await DispatchApi.createSmartPlan({ auto: true, ...taskWindowParams() }))
     } catch (e) {
       failed += 1
       break
@@ -1007,6 +1032,11 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+.task-window-tip {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .marker-item {
   display: inline-flex;
