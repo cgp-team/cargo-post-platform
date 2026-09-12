@@ -299,6 +299,7 @@ def solve(
                     passenger_capacities, cargo_capacities,
                     initial_passenger_loads, initial_cargo_loads,
                     station_map, matrix, deadline,
+                    max_detour_km=config.max_detour_km,
                 )
                 if ant_routes is None:
                     continue
@@ -582,6 +583,7 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
+            max_detour_km=config.max_detour_km,
         )
         if repaired is not None and _routes_feasible(
             repaired, tasks_by_id, engine,
@@ -628,6 +630,7 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
+            max_detour_km=config.max_detour_km,
         )
         if routes is None:
             continue
@@ -723,8 +726,13 @@ def _repair_unassigned(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
     deadline: SearchDeadline | None = None,
+    max_detour_km: float | None = None,
 ) -> list[RouteGenome] | None:
-    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。"""
+    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。
+
+    绕行硬约束（max_detour_km）下，偏离运营路线过远的订单补插失败是预期行为——
+    这些订单留给多段联运，不强行塞给某条线路绕远。
+    """
     placed = {
         tid for r in routes for tid in r.placements
     }
@@ -748,9 +756,11 @@ def _repair_unassigned(
             initial_passenger_loads,
             initial_cargo_loads,
             candidate_size=1,
+            max_detour_km=max_detour_km,
         )
         if not candidates:
-            return None
+            # 绕行硬约束下，偏离过远的订单补插失败是预期：跳过，留给多段联运
+            continue
         cand = candidates[0]
         routes[cand.vehicle_index].insert_task(
             task, cand.pickup_index, cand.delivery_index
