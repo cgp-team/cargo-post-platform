@@ -164,12 +164,14 @@
                 <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
                 <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
                 <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
+                <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
+                  <span class="stop-handover-icon">🔄</span>
+                  <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
+                </div>
               </div>
-              <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
-                <span class="stop-handover-icon">🔄</span>
-                <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
-              </div>
-            </div>
+
+
+                          </div>
           </template>
 
           <!-- 视角二：每张订单的分段路线；不同车辆用地图上同一套颜色，交接点写清交给谁 -->
