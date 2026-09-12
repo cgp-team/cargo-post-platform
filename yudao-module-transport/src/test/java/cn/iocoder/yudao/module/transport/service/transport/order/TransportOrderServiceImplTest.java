@@ -56,6 +56,7 @@ class TransportOrderServiceImplTest {
     @Mock private CargoReviewService cargoReviewService;
     @Mock private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
     @Mock private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService cargoPricingService;
 
     private TransportOrderServiceImpl orderService;
 
@@ -71,6 +72,13 @@ class TransportOrderServiceImplTest {
         ReflectionTestUtils.setField(orderService, "cargoReviewService", cargoReviewService);
         ReflectionTestUtils.setField(orderService, "orderEventService", orderEventService);
         ReflectionTestUtils.setField(orderService, "userNotificationService", userNotificationService);
+        // 寄货计价：金额由 CargoPricingService 统一试算（件单价×件数 + 里程费），测试里给固定值
+        ReflectionTestUtils.setField(orderService, "cargoPricingService", cargoPricingService);
+        // lenient：不是每个用例都会走到计价（严格 stub 会因"未使用"报 UnnecessaryStubbing）
+        org.mockito.Mockito.lenient().when(cargoPricingService.quote(any(), any(), any())).thenReturn(
+                new cn.iocoder.yudao.module.transport.service.dispatch.CargoPricingService.CargoQuote(
+                        new BigDecimal("28.21"), new BigDecimal("10.00"), new BigDecimal("18.21"),
+                        new BigDecimal("18.21"), 2, new BigDecimal("5.00"), new BigDecimal("1.00")));
     }
 
     private AppSendOrderCreateReqVO sendReqVO(Long pickup, Long delivery) {
