@@ -763,8 +763,11 @@ def _repair_unassigned(
             max_detour_km=max_detour_km,
         )
         if not candidates:
-            # 绕行硬约束下，偏离过远的订单补插失败是预期：跳过，留给多段联运
-            continue
+            # 货运订单（DELIVERY/PICKUP/SHIPMENT）绕行超限 → 跳过，留给多段联运；
+            # 乘客订单必须完整覆盖（无联运概念）→ 插不进即该解不可用，交由上层归类无解原因。
+            if task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT):
+                continue
+            return None
         cand = candidates[0]
         routes[cand.vehicle_index].insert_task(
             task, cand.pickup_index, cand.delivery_index
