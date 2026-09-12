@@ -65,6 +65,10 @@ public class AlgorithmPlanRespDTO {
 
     private List<AlgorithmVehiclePlanDTO> vehiclePlans;
 
+    /** 绕行硬约束/覆盖不足时未分配的订单编号（业务订单 ID，后端交给多段联运处理） */
+    @JsonAlias({"unassigned_order_ids"})
+    private List<String> unassignedOrderIds;
+
     private OffsetDateTime computedAt;
 
 }

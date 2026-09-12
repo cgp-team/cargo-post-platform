@@ -138,6 +138,7 @@ def build_result(request: PlanRequest) -> PlanResult:
         distanceUnit=distance_unit,
         totalDistance=outcome.total_distance,
         vehiclePlans=outcome.vehicle_plans,
+        unassignedOrderIds=outcome.unassigned_order_ids,
         computedAt=now(),
     )
 
