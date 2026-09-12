@@ -169,13 +169,17 @@
                 </template>
                 <template v-if="route.driverText"> · {{ route.driverText }}</template>
               </div>
+              <div v-if="(route.pendingCount || 0) > 0" class="route-pending-hint">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ route.pendingCount }} 段真实路线获取中，稍后自动刷新（不再用两点直线代替）</span>
+              </div>
               <!-- 运输段口径（真实车辆）：一段一行，写清从哪到哪、哪单、是真实道路还是直线估算 -->
               <template v-if="route.legs">
                 <div v-for="lg in route.legs" :key="'leg' + lg.seq" class="stop-row">
                   <span class="stop-seq">{{ lg.seq }}</span>
                   <span class="stop-dot" :class="lg.estimated ? 'act-seat' : 'act-deliver'"></span>
                   <span class="stop-act" :class="lg.estimated ? 'act-seat' : 'act-deliver'">
-                    {{ lg.estimated ? '直线估算' : '真实道路' }}
+                    {{ lg.estimated ? '真实路线获取中' : '真实道路' }}
                   </span>
                   <span class="stop-station">{{ lg.fromName }} → {{ lg.toName }}</span>
                   <span v-if="lg.orderNo" class="stop-order">{{ lg.orderNo }}</span>
@@ -335,6 +339,8 @@ interface RouteView {
   legs?: VehicleLegRow[]
   /** 任务时间窗（该方案内该车最早离站 ~ 最晚到达）：一套方案 = 一个任务时间窗 */
   windowText?: string
+  /** 还有多少段真实道路轨迹没取到（这些段不再用两点直线代替，取到后自动重绘） */
+  pendingCount?: number
   /** 归属方案：分组时同一天的多套方案不合并，避免被当成"一台车跑了一整天" */
   /** 该车车牌（运输段分组口径） */
   plateNo?: string
@@ -659,6 +665,7 @@ const buildDriverSegmentRoute = (
   const orderNos: string[] = []
   let distanceKm = 0
   let realSegments = 0
+  let pendingCount = 0
   rows.forEach((row) => {
     const leg = row.leg
     const stored = (leg.navigationPolyline ?? [])
@@ -671,22 +678,20 @@ const buildDriverSegmentRoute = (
     if (hasCoords) {
       ensureLegRoad(key, leg.fromLongitude!, leg.fromLatitude!, leg.toLongitude!, leg.toLatitude!)
     }
-    const fallback = hasCoords
-      ? [
-          { lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) },
-          { lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) }
-        ]
-      : []
     const real = stored.length >= 2 ? stored : (cached && cached.length >= 2 ? cached : null)
-    const road = real ?? fallback
-    if (real) realSegments++
-    road.forEach((p, i) => {
-      if (i === 0 && points.length) {
-        const prev = points[points.length - 1]
-        if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
-      }
-      points.push(p)
-    })
+    if (real) {
+      realSegments++
+      real.forEach((p, i) => {
+        if (i === 0 && points.length) {
+          const prev = points[points.length - 1]
+          if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+        }
+        points.push(p)
+      })
+    } else if (hasCoords) {
+      // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：只记该段待取，取到真实轨迹后自动重绘
+      pendingCount++
+    }
     distanceKm += Number(leg.distanceKm || 0)
     if (row.orderNo && !orderNos.includes(row.orderNo)) orderNos.push(row.orderNo)
   })
@@ -709,6 +714,7 @@ const buildDriverSegmentRoute = (
     realSegments,
     totalSegments: rows.length,
     windowText: windowTextOf(rows.map((r) => r.leg)),
+    pendingCount,
     plateNo: plate
   }
 }
@@ -899,6 +905,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     const legRows: VehicleLegRow[] = []
     const locatedStops: { stop: RouteStop; lng: number; lat: number }[] = []
     let realSegments = 0
+    let pendingCount = 0
     sorted.forEach((row, index) => {
       const leg = row.leg
       const key = legKey(leg)
@@ -911,21 +918,22 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       if (hasCoords) {
         ensureLegRoad(key, leg.fromLongitude!, leg.fromLatitude!, leg.toLongitude!, leg.toLatitude!)
       }
-      const fallback = hasCoords
-        ? [
-            { lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) },
-            { lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) }
-          ]
-        : []
       const real = stored.length >= 2 ? stored : (cached && cached.length >= 2 ? cached : null)
-      const road = real ?? fallback
       const estimated = !real
-      if (!estimated) realSegments++
-      road.forEach((p, i) => {
-        // 段与段的衔接点重合：跳过下一段的首点，避免重复点造成线头/播放抖动
-        if (i === 0 && index > 0) return
-        points.push(p)
-      })
+      if (real) {
+        realSegments++
+        real.forEach((p, i) => {
+          // 段与段衔接点重合时去重（避免线头/播放抖动）；不重合保留首点，让地图把连接段画出来
+          if (i === 0 && points.length) {
+            const prev = points[points.length - 1]
+            if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+          }
+          points.push(p)
+        })
+      } else if (hasCoords) {
+        // 不再用两点直线凑数（演示口径：可视化里不能出现直线连接）：先只列出该段，取到真实轨迹后自动重绘
+        pendingCount++
+      }
       legRows.push({
         seq: index + 1,
         orderId: row.orderId,
@@ -974,6 +982,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       totalSegments: legRows.length,
       legs: legRows,
       windowText: windowTextOf(sorted.map((r) => r.leg)),
+      pendingCount,
       planId,
       plateNo: plate
     })
@@ -1010,6 +1019,7 @@ const buildRoutes = () => {
       const points: { lng: number; lat: number }[] = []
       let realSegments = 0
       let totalSegments = 0
+      let pendingCount = 0
       locatedStops.forEach((located, index) => {
         const current = { lng: located.lng, lat: located.lat }
         if (index === 0) {
@@ -1019,15 +1029,21 @@ const buildRoutes = () => {
         totalSegments++
         const key = `${plan.id}:${vehicleId}:${located.stop.visitSequence ?? 0}`
         const real = roadmapSegments.value.get(key)
-        if (real) {
+        // 只有真实道路（provider=AMAP）才算画出来；provider=EUCLIDEAN 是后端的两点兜底，
+        // 演示口径里不再把它当线路画（否则又变成"两站直线相连"）。
+        const isRealRoad = !!real && real.provider !== 'EUCLIDEAN' && real.points.length >= 2
+        if (isRealRoad) {
           realSegments++
+          real!.points.forEach((p, i) => {
+            if (i === 0 && points.length) {
+              const prev = points[points.length - 1]
+              if (Math.abs(prev.lng - p.lng) < 1e-6 && Math.abs(prev.lat - p.lat) < 1e-6) return
+            }
+            points.push(p)
+          })
+        } else {
+          pendingCount++
         }
-        const segmentPoints = real ? real.points : [points[points.length - 1], current]
-        segmentPoints.forEach((p, i) => {
-          // 拼接处去掉与上段末点重复的起点
-          if (i === 0) return
-          points.push(p)
-        })
       })
       list.push({
         key: `${plan.id}-${vehicleId}`,
@@ -1043,7 +1059,8 @@ const buildRoutes = () => {
         distanceText: distanceKm ? distanceKm.toFixed(1) : '-',
         points,
         realSegments,
-        totalSegments
+        totalSegments,
+        pendingCount
       })
     })
   })
@@ -1765,6 +1782,14 @@ onBeforeUnmount(stopPlay)
 }
 .order-group {
   margin-bottom: 12px;
+}
+.route-pending-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #e6a23c;
 }
 .order-group-head {
   display: flex;
