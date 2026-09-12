@@ -16,6 +16,18 @@ public class StationPageReqVO extends PageParam {
     @Schema(description="station name")
     private String stationName;
 
+    @Schema(description="站点类型：BUS_STOP/CARGO_STATION/MIXED")
+    private String stationType;
+
+    @Schema(description="数据来源：REAL/PROJECT/SIMULATION")
+    private String sourceType;
+
+    @Schema(description="是否可用于调度")
+    private Boolean dispatchEnabled;
+
+    @Schema(description="站点状态：0=启用 1=停用")
+    private Integer status;
+
     @DateTimeFormat(pattern=FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)
     @Schema(description="createTime")
     private LocalDateTime[] createTime;

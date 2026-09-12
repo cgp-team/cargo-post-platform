@@ -188,6 +188,9 @@ def _select_next_task(
                 feasible, _ = fast_feasible_insert_state(task, state, gap.gap_index)
                 if not feasible:
                     continue
+                # 绕行硬约束：偏离运营路线超过上限的插入判不可行（订单留给多段联运）
+                if _compute_cargo_detour(task, state, gap.gap_index, station_map, matrix) > config.max_detour_km:
+                    continue
                 score = _compute_insertion_score(task, state, gap.gap_index, station_map, matrix, config)
                 best_eta = min(best_eta, score)
 
@@ -262,6 +265,9 @@ def _generate_candidates(
             delta_dur = _compute_delta_duration(task, state, gap.gap_index, station_map, matrix)
             p_impact = _compute_passenger_impact(task, state, gap.gap_index, station_map, matrix)
             c_detour = _compute_cargo_detour(task, state, gap.gap_index, station_map, matrix)
+            # 绕行硬约束：偏离运营路线超过上限的插入直接判不可行，订单留给多段联运（换乘站接力）
+            if c_detour > config.max_detour_km:
+                continue
             h_score = _compute_insertion_score(task, state, gap.gap_index, station_map, matrix, config)
 
             candidates.append(CandidateInsertion(
@@ -488,6 +494,7 @@ def generate_insertion_candidates(
     initial_cargo_loads: dict[int, int],
     candidate_size: int,
     deadline: SearchDeadline | None = None,
+    max_detour_km: float | None = None,
 ) -> list[InsertionCandidate]:
     """为 task 生成可行插入候选（两阶段筛选）。
 
@@ -596,6 +603,15 @@ def generate_insertion_candidates(
                             dd_delivery = max(0.0, d_new_del - d_orig_del)
 
                         dd = dd_pickup + dd_delivery
+                        # 绕行硬约束只约束货运任务（DELIVERY/PICKUP/SHIPMENT）：
+                        # 偏离运营路线超过上限的插入直接跳过（订单留给多段联运）。
+                        # 乘客任务沿公交线路上下车，无"偏离运营路线取送"语义，不受此约束。
+                        if (
+                            max_detour_km is not None
+                            and dd > max_detour_km
+                            and task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT)
+                        ):
+                            continue
 
                         # duration estimate (same structure)
                         t_orig_pickup = compute_duration(from_station, after_pickup, matrix)
@@ -650,6 +666,9 @@ def generate_insertion_candidates(
                         + compute_distance(pickup_station, to_station, matrix)
                     )
                     dd = max(0.0, d_new - d_orig)
+                    # 绕行硬约束：偏离运营路线超过上限的插入直接跳过（订单留给多段联运）
+                    if max_detour_km is not None and dd > max_detour_km:
+                        continue
                     t_orig = compute_duration(from_station, to_station, matrix)
                     t_new = (
                         compute_duration(from_station, pickup_station, matrix)
@@ -848,6 +867,7 @@ def construct_ant_solution_v14(
             initial_cargo_loads,
             candidate_size,
             deadline=deadline,
+            max_detour_km=config.max_detour_km,
         )
 
         if not candidates:

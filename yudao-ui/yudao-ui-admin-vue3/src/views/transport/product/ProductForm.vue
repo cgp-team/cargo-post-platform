@@ -16,7 +16,10 @@
         </el-select>
       </el-form-item>
       <el-form-item label="商品图" prop="image">
-        <el-input v-model="formData.image" placeholder="emoji，如 🍑" />
+        <div style="width:100%">
+          <UploadFile v-model:model-value="formData.imageUrl" :limit="1" :file-type="['image']" :is-show-tip="false" />
+          <el-input v-model="formData.image" placeholder="备用 emoji（未上传图片时显示），如 🍑" style="margin-top:8px" />
+        </div>
       </el-form-item>
       <el-form-item label="角标" prop="badge">
         <el-input v-model="formData.badge" placeholder="如：大巴直通车" />
@@ -47,6 +50,7 @@
 <script setup lang="ts">
 import * as ProductApi from '@/api/transport/product'
 import { Dialog } from '@/components/Dialog'
+import UploadFile from '@/components/UploadFile/src/UploadFile.vue'
 
 const message = useMessage()
 const formLoading = ref(false)
@@ -63,6 +67,7 @@ const formData = ref<any>({
   price: 0,
   unit: '斤',
   image: '',
+  imageUrl: '',
   badge: '',
   description: '',
   stock: 0,
@@ -75,7 +80,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { name: '', fromVillage: '', price: 0, unit: '斤', image: '', badge: '', description: '', stock: 0, status: 0, sort: 0 }
+  formData.value = { name: '', fromVillage: '', price: 0, unit: '斤', image: '', imageUrl: '', badge: '', description: '', stock: 0, status: 0, sort: 0 }
   formRef.value?.resetFields()
 }
 

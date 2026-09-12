@@ -71,11 +71,14 @@ class DispatchServiceImplTest {
     @Mock private DispatchPlanMapper dispatchPlanMapper;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DispatchPlanLogMapper dispatchPlanLogMapper;
+    @Mock private TransportLegMapper transportLegMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
     @Mock private ShiftMapper shiftMapper;
     @Mock private RouteStationMapper routeStationMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
     @Mock private DispatchEstimationService dispatchEstimationService;
+    @Mock private MultiLegService multiLegService;
+    @Mock private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
 
     private DispatchServiceImpl dispatchService;
 
@@ -93,11 +96,15 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanMapper", dispatchPlanMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(dispatchService, "dispatchPlanLogMapper", dispatchPlanLogMapper);
+        ReflectionTestUtils.setField(dispatchService, "legMapper", transportLegMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "shiftMapper", shiftMapper);
         ReflectionTestUtils.setField(dispatchService, "routeStationMapper", routeStationMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
         ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
+        // 多段联运：mock 的 planLegs 默认返回空列表（不新建运输段），不影响既有直达方案断言
+        ReflectionTestUtils.setField(dispatchService, "multiLegService", multiLegService);
+        ReflectionTestUtils.setField(dispatchService, "roadPolylineService", roadPolylineService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
         // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }
@@ -321,7 +328,10 @@ class DispatchServiceImplTest {
                 StationDO.builder().id(13L).build()));
         when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1); // 仅抢占 1/2
 
-        assertThrows(IllegalStateException.class, () -> dispatchService.createSmartPlan(smartReqVO()));
+        // 并发抢占失败：异常统一转成业务可读错误（前端不再只显示"服务器错误，请联系管理员"）
+        var ex = assertThrows(cn.iocoder.yudao.framework.common.exception.ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getMessage() != null && ex.getMessage().contains("智能调度"));
         verify(algorithmAdapter, never()).plan(any());
     }
 
@@ -345,6 +355,150 @@ class DispatchServiceImplTest {
         assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
                 updates.get(updates.size() - 1).getStatus());
         verify(dispatchPlanMapper, never()).insert(any(DispatchPlanDO.class));
+    }
+
+    @Test
+    void createSmartPlan_plan_persist_failure_releases_claimed_orders() {
+        // P0-1 回归：方案落库阶段抛异常（实测为 plan_reason 列宽不足的 Data too long）时，
+        // 已 CAS 抢占的订单必须释放回订单池——否则订单停在「已分配但无方案」，池子被清空无法重跑。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        when(dispatchPlanMapper.insert(any(DispatchPlanDO.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "Data too long for column 'plan_reason' at row 1"));
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+
+        // 技术异常转成可读业务错误（前端能看到根因）
+        assertEquals(ALGORITHM_RESULT_INVALID.getCode(), ex.getCode());
+        assertTrue(ex.getMessage().contains("plan_reason"));
+        // 订单状态更新序列：CAS 抢占(已分配) → 失败释放(已入池)，最后一次必须是回池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
+        List<TransportOrderDO> updates = orderCaptor.getAllValues();
+        assertEquals(TransportOrderStatusEnum.ASSIGNED.getStatus(), updates.get(0).getStatus());
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
+                updates.get(updates.size() - 1).getStatus());
+        // 方案未落库 → 无经停明细、无半成品方案需要清理
+        verify(dispatchPlanItemMapper, never()).insert(any(DispatchPlanItemDO.class));
+        verify(dispatchPlanMapper, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void createSmartPlan_estimation_failure_cleans_partial_plan_and_releases_orders() {
+        // P0-1 回归：方案与经停明细已落库、随后估算 ETA 失败 → 半成品方案（明细/段/日志/方案）必须清掉，
+        // 订单回池，不能留下「方案存在但订单已回池」的孤儿数据（孤儿段会被下次调度复用，见 P0-A）。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        // 任务落库后由 MyBatis-Plus 回填主键（mock 里手工回填，failDispatchTask 依赖任务主键回写失败态）
+        doAnswer(invocation -> {
+            DispatchTaskDO task = invocation.getArgument(0);
+            task.setId(900L);
+            return 1;
+        }).when(dispatchTaskMapper).insert(any(DispatchTaskDO.class));
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        doThrow(new IllegalStateException("估算服务不可用"))
+                .when(dispatchEstimationService).estimatePlan(eq(100L), any(LocalDateTime.class), anyMap());
+
+        ServiceException ex = assertThrows(ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        assertTrue(ex.getMessage().contains("估算服务不可用"));
+
+        // 清理顺序：本方案的运输段 → 经停明细 → 状态日志 → 方案本体
+        verify(transportLegMapper).delete(any());
+        verify(dispatchPlanItemMapper).delete(any());
+        verify(dispatchPlanLogMapper).delete(any());
+        verify(dispatchPlanMapper).deleteById(100L);
+        // 订单最后一次更新为回池
+        ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
+        List<TransportOrderDO> updates = orderCaptor.getAllValues();
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(),
+                updates.get(updates.size() - 1).getStatus());
+        // 调度任务被置为失败，便于后台排查（事务不回滚，任务终态需要落库）
+        ArgumentCaptor<DispatchTaskDO> taskCaptor = ArgumentCaptor.forClass(DispatchTaskDO.class);
+        verify(dispatchTaskMapper, atLeast(2)).updateById(taskCaptor.capture());
+        DispatchTaskDO lastTask = taskCaptor.getAllValues().get(taskCaptor.getAllValues().size() - 1);
+        assertEquals(DispatchTaskStatusEnum.FAILED.getStatus(), lastTask.getStatus());
+    }
+
+    @Test
+    void createSmartPlan_keeps_plan_reason_longer_than_500_chars() {
+        // P0-2 回归：plan_reason 列宽已由 varchar(500) 扩到 varchar(2000)（见
+        // sql/mysql/transport-schema-incremental.sql 的幂等 MODIFY）。这里断言 681 字符的解释
+        // 原样落库（不截断到 500），避免以后又被列宽卡住导致一键演示中断。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any())).thenReturn(List.of(
+                TransportLegDO.builder().orderId(1L).planId(100L).legSequence(1)
+                        .fromStationId(11L).toStationId(12L).distanceKm(new BigDecimal("5.0"))
+                        .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0))
+                        .estimatedArrival(LocalDateTime.of(2026, 9, 12, 10, 30)).build()));
+        String longReason = "多段联运".repeat(170) + "x"; // 681 字符（实测方案 32 的解释长度）
+        when(multiLegService.preview(1L)).thenReturn(new MultiLegPlanner.PlanResult(
+                DispatchPlanningModeEnum.MULTI_LEG.getMode(), 3, 2, 18.0, 60, 1.0,
+                List.of(), List.of(), null, longReason));
+
+        Long planId = dispatchService.createSmartPlan(smartReqVO());
+
+        assertEquals(100L, planId);
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        String persisted = planCaptor.getValue().getPlanReason();
+        assertEquals(681, longReason.length());
+        assertTrue(persisted.length() > 500, "超过 500 字符的解释必须原样落库（列宽已扩到 2000）");
+        // 方案解释现在会先写"任务窗口"，但长解释本身必须完整保留（不得被截断）
+        assertTrue(persisted.startsWith("任务窗口 "), "方案解释应先写明本次任务窗口：" + persisted);
+        assertTrue(persisted.contains(longReason), "超过 500 字符的方案解释必须完整落库");
+    }
+
+    @Test
+    void getPlanRoadmap_aggregates_by_legs_so_vehicle_view_matches_order_view() {
+        // P0-B 回归：多段联运方案（v3 → v101 → v5 接力）的车辆视角必须由本方案运输段聚合。
+        // 历史缺陷：车辆视角取算法的单车经停明细，方案 30 上表现为「同一台车 南岸→重大→再回南岸」，
+        // 而订单视角是 3 段接力 —— 两个视角对同一订单给出相反结论。
+        when(dispatchPlanMapper.selectById(100L)).thenReturn(DispatchPlanDO.builder().id(100L).build());
+        when(transportLegMapper.selectListByPlanId(100L)).thenReturn(List.of(
+                leg(11L, 3L, 21L, 1, 21L, 22L, "106.60,29.52;106.55,29.50"), // 本段已缓存真实道路
+                leg(12L, 101L, 21L, 2, 22L, 23L, null),
+                leg(13L, 5L, 21L, 3, 23L, 24L, null)));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                station(21L, "重邮南门货运站", "106.60", "29.52"),
+                station(22L, "换乘站A", "106.55", "29.50"),
+                station(23L, "换乘站B", "106.50", "29.48"),
+                station(24L, "重大A区", "106.46", "29.56")));
+        when(roadPolylineService.route(anyDouble(), anyDouble(), anyDouble(), anyDouble()))
+                .thenReturn(List.of(new double[]{106.5, 29.5}, new double[]{106.48, 29.49}));
+
+        DispatchRoadmapRespVO roadmap = dispatchService.getPlanRoadmap(100L);
+
+        assertEquals("LEG", roadmap.getSource());
+        assertEquals(3, roadmap.getSegments().size());
+        // 每段一台车：segment.vehicleId 与订单视角（topology/order）的 leg 车辆一一对应，
+        // 不再出现「同一台车跨片区跑完全程再回来」
+        assertEquals(List.of(3L, 101L, 5L), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getVehicleId).toList());
+        // 段与订单/段序可追溯（前端据此与订单视角对齐）
+        assertEquals(List.of(21L, 21L, 21L), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getOrderId).toList());
+        assertEquals(List.of(1, 2, 3), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getLegSequence).toList());
+        assertTrue(roadmap.getSegments().stream().allMatch(s -> s.getVisitSequence() == 1)); // 每台车各 1 段
+        // 段上已缓存的高德轨迹直接复用（省掉前端 30 秒冷却重试），只有缺轨迹的段才补一次路网
+        assertEquals("AMAP", roadmap.getSegments().get(0).getProvider());
+        verify(roadPolylineService, times(2)).route(anyDouble(), anyDouble(), anyDouble(), anyDouble());
+        // 不再走「按经停明细出段」的旧口径
+        verify(dispatchPlanItemMapper, never()).selectList(any(Wrapper.class));
     }
 
     @Test
@@ -770,6 +924,34 @@ class DispatchServiceImplTest {
     // ==================== 按勾选订单归集（orderIds） ====================
 
     @Test
+    void collectAll_ready_for_pool_orders_pooled_without_selection() {
+        // 一键演示：不勾选任何订单，把所有「待入池」订单一次性入池
+        when(orderMapper.selectList(any())).thenReturn(List.of(
+                TransportOrderDO.builder().id(1L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build(),
+                TransportOrderDO.builder().id(2L).status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus()).build()));
+        when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(2);
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setAll(true);
+        int count = dispatchService.collectOrders(reqVO);
+
+        assertEquals(2, count);
+        ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).update(captor.capture(), any());
+        assertEquals(TransportOrderStatusEnum.POOLED.getStatus(), captor.getValue().getStatus());
+    }
+
+    @Test
+    void collectAll_without_ready_orders_returns_zero() {
+        when(orderMapper.selectList(any())).thenReturn(List.of());
+
+        DispatchCollectReqVO reqVO = new DispatchCollectReqVO();
+        reqVO.setAll(true);
+
+        assertEquals(0, dispatchService.collectOrders(reqVO));
+    }
+
+    @Test
     void collectByOrderIds_all_ready_for_pool_pooled() {
         // 全部待入池（READY_FOR_POOL，Phase 2 审核通过）→ 全部入池
         when(orderMapper.selectBatchIds(List.of(1L, 2L))).thenReturn(List.of(
@@ -842,6 +1024,26 @@ class DispatchServiceImplTest {
         int count = dispatchService.collectOrders(reqVO);
 
         assertEquals(3, count);
+    }
+
+    /** 运输段桩数据（P0-B：车辆视角由段聚合） */
+    private static TransportLegDO leg(Long id, Long vehicleId, Long orderId, int legSequence,
+                                      Long fromStationId, Long toStationId, String polyline) {
+        return TransportLegDO.builder().id(id).vehicleId(vehicleId).driverId(vehicleId).orderId(orderId)
+                .legSequence(legSequence).fromStationId(fromStationId).toStationId(toStationId)
+                .status(TransportLegStatusEnum.ASSIGNED.getStatus())
+                .handoverRequired(legSequence < 3)
+                .navigationSource(polyline != null ? "AMAP" : "ESTIMATED")
+                .navigationPolyline(polyline)
+                .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0).plusMinutes(30L * legSequence))
+                .distanceKm(new BigDecimal("12.0"))
+                .build();
+    }
+
+    /** 站点桩数据 */
+    private static StationDO station(Long id, String name, String longitude, String latitude) {
+        return StationDO.builder().id(id).stationName(name)
+                .longitude(new BigDecimal(longitude)).latitude(new BigDecimal(latitude)).build();
     }
 
 }

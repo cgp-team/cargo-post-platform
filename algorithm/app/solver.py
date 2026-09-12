@@ -40,6 +40,8 @@ class SolveOutcome:
     parameter_version: str = PARAMETER_VERSION
     warnings: list[str] = field(default_factory=list)
     iteration_stats: list[dict] = field(default_factory=list)
+    # 绕行硬约束/覆盖不足时未分配的订单编号（后端交给多段联运 MultiLegPlanner 处理）
+    unassigned_order_ids: list[str] = field(default_factory=list)
 
 
 def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:

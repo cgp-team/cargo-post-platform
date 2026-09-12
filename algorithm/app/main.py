@@ -40,8 +40,10 @@ ALGORITHM_VERSION = "haco-cps-1.4.1"
 PARAMETER_VERSION = "haco-cps-default-v1.4.1"
 BASELINE_VERSION = "ortools-1.3.0"
 
-# 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
-MAX_STATIONS = 30
+# 与算法组回复一致的规模上限：100 站点 / 25 订单 / 3 车 / 10 秒计算超时
+# 站点上限从 30 放宽到 100：联合调度（公交线路骨架 + 货运绕行）时骨架站点会并入 station 快照，
+# 3 条真实公交线路 + 订单站点可达 70~80 站，旧的 30 站上限会整批拒掉。
+MAX_STATIONS = 100
 MAX_ORDERS = 25
 MAX_VEHICLES = 3
 
@@ -114,7 +116,9 @@ def build_result(request: PlanRequest) -> PlanResult:
             warnings.append("路网距离不可用，已降级直线距离")
     outcome = solve(request, matrix)
     # 合并 solver 产生的 warnings（如 HACO_FALLBACK_TO_BASELINE）
-    warnings.extend(outcome.warnings)
+    # 各求解器（baseline / HACO-1.4 / hybrid）返回的 SolveOutcome 字段集不完全一致，
+    # 统一按「缺失即默认」读取，避免某个求解器少一个字段就把 200 打成 500。
+    warnings.extend(getattr(outcome, "warnings", None) or [])
     distance_unit = "km" if matrix is not None else "degree"
     if outcome.status == "infeasible":
         return PlanResult(
@@ -122,20 +126,22 @@ def build_result(request: PlanRequest) -> PlanResult:
             status="infeasible",
             reasonCode=outcome.reason_code,
             warnings=warnings,
-            algorithmVersion=outcome.algorithm_version,
-            parameterVersion=outcome.parameter_version,
+            algorithmVersion=getattr(outcome, "algorithm_version", ALGORITHM_VERSION),
+            parameterVersion=getattr(outcome, "parameter_version", PARAMETER_VERSION),
             distanceUnit=distance_unit,
+            unassignedOrderIds=getattr(outcome, "unassigned_order_ids", None) or [],
             computedAt=now(),
         )
     return PlanResult(
         requestId=request.requestId,
         status="feasible",
         warnings=warnings,
-        algorithmVersion=outcome.algorithm_version,
-        parameterVersion=outcome.parameter_version,
+        algorithmVersion=getattr(outcome, "algorithm_version", ALGORITHM_VERSION),
+        parameterVersion=getattr(outcome, "parameter_version", PARAMETER_VERSION),
         distanceUnit=distance_unit,
-        totalDistance=outcome.total_distance,
-        vehiclePlans=outcome.vehicle_plans,
+        totalDistance=getattr(outcome, "total_distance", 0.0),
+        vehiclePlans=getattr(outcome, "vehicle_plans", None) or [],
+        unassignedOrderIds=getattr(outcome, "unassigned_order_ids", None) or [],
         computedAt=now(),
     )
 

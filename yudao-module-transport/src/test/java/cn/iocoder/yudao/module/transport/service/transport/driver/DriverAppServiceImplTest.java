@@ -103,6 +103,13 @@ class DriverAppServiceImplTest {
     @Mock private VehicleLocationMapper vehicleLocationMapper;
     @Mock private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Mock private MemberUserApi memberUserApi;
+    @Mock private cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderItemMapper productOrderItemMapper;
+    @Mock private cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService productOrderService;
+    @Mock private cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper transportLegMapper;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.HandoverService handoverService;
+    @Mock private cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService multiLegService;
+    @Mock private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
+    @Mock private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
 
     private DriverAppServiceImpl driverAppService;
 
@@ -126,6 +133,13 @@ class DriverAppServiceImplTest {
         ReflectionTestUtils.setField(driverAppService, "vehicleLocationMapper", vehicleLocationMapper);
         ReflectionTestUtils.setField(driverAppService, "vehicleLocationTrackMapper", vehicleLocationTrackMapper);
         ReflectionTestUtils.setField(driverAppService, "memberUserApi", memberUserApi);
+        ReflectionTestUtils.setField(driverAppService, "productOrderItemMapper", productOrderItemMapper);
+        ReflectionTestUtils.setField(driverAppService, "productOrderService", productOrderService);
+        ReflectionTestUtils.setField(driverAppService, "transportLegMapper", transportLegMapper);
+        ReflectionTestUtils.setField(driverAppService, "handoverService", handoverService);
+        ReflectionTestUtils.setField(driverAppService, "multiLegService", multiLegService);
+        ReflectionTestUtils.setField(driverAppService, "orderEventService", orderEventService);
+        ReflectionTestUtils.setField(driverAppService, "userNotificationService", userNotificationService);
     }
 
     @AfterEach
@@ -476,6 +490,32 @@ class DriverAppServiceImplTest {
         driverAppService.pickupConfirm(reqVO);
 
         // 已发车订单装车后仍保持已发车（loaded 记录 +1），deliver 仍可 3→4
+        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
+        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
+        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+    }
+
+    @Test
+    void pickupConfirm_planItemWithoutShift_fallsBackToDriversOwnExecution() {
+        loginMember();
+        stubLoginDriver();
+        // 一键演示/一键调度生成的方案：经停明细不绑定固定班次（shift_id=null）。
+        // 此时装车必须回退到"司机今天实际发车的那条执行记录"，否则会报"班次执行记录不存在"，
+        // 司机端扫码装车直接卡住（答辩主链路会断在这里）。
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        stubAssignedPlanItem(1000L, null);
+        when(shiftExecutionMapper.selectListByDriverAndDate(DRIVER_ID, LocalDate.now()))
+                .thenReturn(List.of(todayExecution(0)));
+        when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg");
+        driverAppService.pickupConfirm(reqVO);
+
         ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
         verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
         assertEquals(1, loadedCaptor.getValue().getLoadedCount());
@@ -920,5 +960,47 @@ class DriverAppServiceImplTest {
         when(memberUserApi.getUser(MEMBER_ID)).thenReturn(null);
 
         assertTrue(driverAppService.pickups().isEmpty());
+    }
+
+    // ==================== 商城订单（同理寄货）：司机端装车 → 妥投 ====================
+
+    @Test
+    void pickups_includes_productOrderAssignedToDriverVehicle() {
+        loginMember();
+        stubLoginDriver();
+        // 本车绑定的商城订单（已发货未妥投）→ 进"待装车/待妥投"列表，bizType=PRODUCT
+        when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of(
+                DriverVehicleDO.builder().driverId(DRIVER_ID).vehicleId(7L).status(1).build()));
+        when(productOrderService.getDriverDeliveryTasks(7L)).thenReturn(List.of(
+                cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO.builder()
+                        .id(900L).orderNo("MP900").status(1).vehicleId(7L)
+                        .receiverName("李同学").receiverAddress("重庆邮电大学明志苑").build()));
+        when(productOrderItemMapper.selectListByOrderId(900L)).thenReturn(List.of(
+                cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO.builder()
+                        .id(1L).orderId(900L).productName("南山土鸡蛋").build()));
+
+        List<AppDriverPickupRespVO> pickups = driverAppService.pickups();
+
+        assertEquals(1, pickups.size());
+        assertEquals(900L, pickups.get(0).getOrderId());
+        assertEquals("PRODUCT", pickups.get(0).getBizType());
+        assertEquals("南山土鸡蛋", pickups.get(0).getGoodsName());
+    }
+
+    @Test
+    void productLoad_and_productDeliver_delegateToProductOrderService() {
+        loginMember();
+        stubLoginDriver();
+        when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of(
+                DriverVehicleDO.builder().driverId(DRIVER_ID).vehicleId(7L).status(1).build()));
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setOrderId(900L);
+        reqVO.setDriverPhotoUrl("http://file/load.jpg");
+
+        driverAppService.productLoad(reqVO);
+        driverAppService.productDeliver(reqVO);
+
+        verify(productOrderService).driverLoad(DRIVER_ID, 7L, 900L, "http://file/load.jpg");
+        verify(productOrderService).driverDeliver(DRIVER_ID, 7L, 900L, "http://file/load.jpg");
     }
 }

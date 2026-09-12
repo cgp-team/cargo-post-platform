@@ -12,6 +12,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
+import cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider;
+import cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider.TransitStation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +25,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider.REAL_TRANSIT;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -48,6 +51,8 @@ class AppBusServiceImplTest {
         ReflectionTestUtils.setField(appBusService, "shiftMapper", shiftMapper);
         ReflectionTestUtils.setField(appBusService, "stationMapper", stationMapper);
         ReflectionTestUtils.setField(appBusService, "algorithmClient", algorithmClient);
+        // 分层数据源：默认无现实公交数据源（未配置高德 key），项目线路层由本测试的站点/线路桩数据提供
+        ReflectionTestUtils.setField(appBusService, "transitProviders", List.of());
     }
 
     @Test
@@ -182,6 +187,53 @@ class AppBusServiceImplTest {
     }
 
     // ==================== 附近实时公交（getNearbyBuses） ====================
+
+    /** 假实现：现实公交层（AMAP）。用于验证分层标识 realTransitAvailable/transitProvider 回传 */
+    private static TransitProvider fakeRealProvider() {
+        return new TransitProvider() {
+            @Override
+            public String name() {
+                return "AMAP";
+            }
+
+            @Override
+            public String dataSource() {
+                return REAL_TRANSIT;
+            }
+
+            @Override
+            public boolean available() {
+                return true;
+            }
+
+            @Override
+            public List<TransitStation> searchNearbyStations(double latitude, double longitude, double radiusMeters) {
+                return List.of(new TransitStation("人民公园站", 104.002, 30.001, 0.22,
+                        List.of("125路"), "人民路1号", REAL_TRANSIT));
+            }
+        };
+    }
+
+    /**
+     * 分层标识回归：现实层（AMAP）产出站点时，必须回传 realTransitAvailable=true 与 transitProvider=AMAP。
+     * 历史 bug：用 provider.name()（"AMAP"）去比 REAL_TRANSIT 常量，条件永不成立 → 前端会误判"未配置现实公交"。
+     */
+    @Test
+    void nearby_realTransitProvider_marksAvailableAndProviderName() {
+        when(stationMapper.selectList()).thenReturn(List.of());
+        when(monitoringService.getMapData()).thenReturn(mapData());
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of());
+        ReflectionTestUtils.setField(appBusService, "transitProviders", List.of(fakeRealProvider()));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertTrue(resp.getRealTransitAvailable());
+        assertEquals("AMAP", resp.getTransitProvider());
+        assertEquals(1, resp.getRealStationCount());
+        assertEquals("人民公园站", resp.getNearestStation().getName());
+        assertEquals("REAL_TRANSIT", resp.getNearestStation().getDataSource());
+        assertEquals(List.of("125路"), resp.getNearestStation().getLines());
+    }
 
     private static final double USER_LAT = 30.0;
     private static final double USER_LON = 104.0;

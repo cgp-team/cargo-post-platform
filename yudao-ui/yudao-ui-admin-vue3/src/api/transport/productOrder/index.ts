@@ -23,6 +23,17 @@ export interface ProductOrderVO {
   remark?: string
   vehicleId?: number
   shiftId?: number
+  // 司机执行闭环（装车 → 到站 → 妥投）
+  vehiclePlate?: string
+  shiftCode?: string
+  driverId?: number
+  driverName?: string
+  driverMobile?: string
+  deliverStationName?: string
+  loadPhotoUrl?: string
+  loadTime?: string
+  deliverPhotoUrl?: string
+  deliverTime?: string
   createTime?: string
   items?: ProductOrderItemVO[]
 }
@@ -32,6 +43,8 @@ export interface ProductOrderShipReqVO {
   id: number
   vehicleId?: number
   shiftId?: number
+  /** 交付站点（集散中心/村级网点）：不填则默认班次线路终点站 */
+  deliverStationId?: number
 }
 
 export const getProductOrderPage = (params: PageParam & Partial<ProductOrderVO>) => {

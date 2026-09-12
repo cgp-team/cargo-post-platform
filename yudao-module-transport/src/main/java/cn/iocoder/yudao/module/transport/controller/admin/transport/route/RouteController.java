@@ -55,4 +55,20 @@ public class RouteController {
     public CommonResult<java.util.List<RouteSimpleRespVO>> simpleList() {
         return success(BeanUtils.toBean(routeService.getSimpleList(), RouteSimpleRespVO.class));
     }
+
+    @GetMapping("/stations")
+    @Operation(summary = "获得线路经停站点（站序，含站点名与经纬度）")
+    @Parameter(name="routeId", description="线路编号", required=true)
+    @PreAuthorize("@ss.hasPermission('transport:route:query')")
+    public CommonResult<java.util.List<RouteStationRespVO>> stations(@RequestParam("routeId") Long routeId) {
+        return success(routeService.getRouteStations(routeId));
+    }
+
+    @PutMapping("/stations")
+    @Operation(summary = "保存线路经停站点序列（农村无现成路网时，自建站点按顺序拼成客货邮线路）")
+    @PreAuthorize("@ss.hasPermission('transport:route:update')")
+    public CommonResult<Boolean> saveStations(@Valid @RequestBody RouteStationSaveReqVO reqVO) {
+        routeService.saveRouteStations(reqVO);
+        return success(true);
+    }
 }

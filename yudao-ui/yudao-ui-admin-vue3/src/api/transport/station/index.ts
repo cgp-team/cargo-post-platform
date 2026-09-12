@@ -9,6 +9,13 @@ export interface StationVO {
   latitude?: number
   address?: string
   status?: number // 0=启用 1=停用
+  sourceType?: string // REAL / PROJECT / SIMULATION
+  stationType?: string // BUS_STOP / CARGO_STATION / MIXED
+  userAccess?: boolean // 用户可达
+  vehicleAccess?: boolean // 车辆可达（校园禁行区 false）
+  dispatchEnabled?: boolean // 是否可用于调度
+  sort?: number
+  remark?: string
   createTime?: string
 }
 

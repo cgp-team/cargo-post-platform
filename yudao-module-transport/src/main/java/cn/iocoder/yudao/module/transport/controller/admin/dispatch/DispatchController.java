@@ -75,6 +75,32 @@ public class DispatchController {
         return success(dispatchService.getPlan(id));
     }
 
+    @GetMapping("/plan/roadmap")
+    @Operation(summary = "获得调度方案的真实道路地图数据（按车辆+经停序号的每段轨迹；高德不可用时标注直线兜底）")
+    @Parameter(name = "id", description = "方案编号", required = true)
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<DispatchRoadmapRespVO> getPlanRoadmap(@RequestParam("id") Long id) {
+        return success(dispatchService.getPlanRoadmap(id));
+    }
+
+    @GetMapping("/plan/route-between")
+    @Operation(summary = "两点之间的真实道路轨迹（调度可视化按订单视角画线路用；取不到返回空数组）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<java.util.List<DispatchRoadmapRespVO.Point>> routeBetween(
+            @RequestParam("fromLongitude") Double fromLongitude,
+            @RequestParam("fromLatitude") Double fromLatitude,
+            @RequestParam("toLongitude") Double toLongitude,
+            @RequestParam("toLatitude") Double toLatitude) {
+        return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude));
+    }
+
+    @PostMapping("/demo/recycle-pool")
+    @Operation(summary = "演示态：把方案订单放回待入池（方便反复一键演示；生产环境关闭开关后为空操作）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")
+    public CommonResult<Integer> recycleDemoPool(@RequestBody(required = false) java.util.List<Long> planIds) {
+        return success(dispatchService.recyclePlanOrdersToPool(planIds));
+    }
+
     @PutMapping("/plan/review")
     @Operation(summary = "调度方案审核")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")

@@ -9,10 +9,14 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanLogDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportHandoverDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
@@ -25,10 +29,12 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationT
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanLogMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.ProductOrderItemMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
@@ -40,11 +46,19 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackM
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportHandoverStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
+import cn.iocoder.yudao.module.transport.service.dispatch.HandoverService;
+import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
+import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
+import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
+import cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
@@ -62,6 +76,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants.BAD_REQUEST;
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 
 /**
@@ -78,6 +93,8 @@ public class DriverAppServiceImpl implements DriverAppService {
     private static final int ORDER_TYPE_CARGO = 2;
     /** 订单类型：邮快件（快递进村取件核销） */
     private static final int ORDER_TYPE_POSTAL = 3;
+    /** 商城订单在司机端的展示类型（不属于 transport_order.order_type，仅列表展示 + 分支用） */
+    private static final int ORDER_TYPE_PRODUCT = 4;
     /** 订单已取消 */
     private static final int ORDER_STATUS_CANCELLED = 5;
     /** 执行状态：在途 */
@@ -108,15 +125,24 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private CargoOrderMapper cargoOrderMapper;
     @Resource private PostalOrderMapper postalOrderMapper;
+    @Resource private ProductOrderItemMapper productOrderItemMapper;
+    @Resource private ProductOrderService productOrderService;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
+    @Resource private TransportLegMapper transportLegMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
     @Resource private AlgorithmClient algorithmClient;
+    /** 真实道路几何（高德 Web key 直连，带缓存）：司机导航轨迹的首选来源 */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     @Resource private SimulationEngine simulationEngine;
+    @Resource private HandoverService handoverService;
+    @Resource private MultiLegService multiLegService;
+    @Resource private OrderEventService orderEventService;
+    @Resource private UserNotificationService userNotificationService;
 
     @Override
     public AppDriverProfileRespVO profile() {
@@ -162,7 +188,7 @@ public class DriverAppServiceImpl implements DriverAppService {
         // 当天班次执行记录（司机维度不限）：有记录时班次状态以执行记录为准，否则保留时钟推导
         Map<Long, ShiftExecutionDO> executionMap = loadTodayExecutionMap(
                 shifts.stream().map(ShiftDO::getId).toList());
-        return shifts.stream().map(shift -> {
+        List<AppDriverShiftRespVO> all = shifts.stream().map(shift -> {
             AppDriverShiftRespVO vo = new AppDriverShiftRespVO();
             vo.setShiftId(shift.getId());
             vo.setShiftCode(shift.getShiftCode());
@@ -183,6 +209,34 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setStops(buildStops(routeStationMap.getOrDefault(shift.getRouteId(), List.of()), stationMap));
             return vo;
         }).toList();
+        // 司机端只展示"与当前时刻相关"的班次：进行中的 + 之后最近 2 班（没有则退回当天最后一班）。
+        // 线路网扩充到几十条班次后，把全部班次一次性铺给司机端既没法用、也和司机实际工作无关。
+        List<AppDriverShiftRespVO> running = all.stream()
+                .filter(s -> Integer.valueOf(1).equals(s.getStatus()))
+                .sorted(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        LocalTime now2 = LocalTime.now();
+        List<AppDriverShiftRespVO> upcoming = all.stream()
+                .filter(s -> s.getPlannedDepartureTime() != null && s.getPlannedDepartureTime().isAfter(now2))
+                .sorted(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime))
+                .limit(2)
+                .toList();
+        List<AppDriverShiftRespVO> result = new ArrayList<>(running);
+        upcoming.forEach(s -> {
+            if (result.stream().noneMatch(r -> Objects.equals(r.getShiftId(), s.getShiftId()))) {
+                result.add(s);
+            }
+        });
+        if (result.isEmpty()) {
+            return all.stream()
+                    .filter(s -> s.getPlannedDepartureTime() != null)
+                    .max(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime))
+                    .map(List::of).orElse(List.of());
+        }
+        result.sort(Comparator.comparing(AppDriverShiftRespVO::getPlannedDepartureTime,
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        return result;
     }
 
     @Override
@@ -191,22 +245,26 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (driver == null) {
             return List.of();
         }
+        // 商城订单（已发货未妥投、承运车辆=本车）同样进"待装车/待妥投"列表：
+        // 村民在小程序商城下单 → 后台发货选本车 → 司机端就能装车、妥投，走同一套司机作业闭环
+        List<AppDriverPickupRespVO> productPickups = listProductPickups(driver);
         // 仅返回当前司机已下发/执行中派单明细里可确认装车的货运+邮快件订单（与装车/妥投归属校验一致）；
         // 用 PICKUP_CONFIRM_STATUSES 而非 PENDING_STATUSES：depart 后订单已为已发车(3)，发车后仍须可见待装车任务
         Set<Long> assignedOrderIds = listAssignedOrderIds(driver.getId());
         if (assignedOrderIds.isEmpty()) {
-            return List.of();
+            return productPickups;
         }
         List<TransportOrderDO> orders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
                 .in(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO, ORDER_TYPE_POSTAL)
                 .in(TransportOrderDO::getStatus, PICKUP_CONFIRM_STATUSES)
                 .in(TransportOrderDO::getId, assignedOrderIds)
                 .orderByDesc(TransportOrderDO::getId));
-        return orders.stream().map(order -> {
+        List<AppDriverPickupRespVO> cargoPickups = orders.stream().map(order -> {
             AppDriverPickupRespVO vo = new AppDriverPickupRespVO();
             vo.setOrderId(order.getId());
             vo.setOrderNo(order.getOrderNo());
             vo.setOrderType(order.getOrderType());
+            vo.setBizType(Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL) ? "POSTAL" : "CARGO");
             if (Objects.equals(order.getOrderType(), ORDER_TYPE_POSTAL)) {
                 // 邮快件：取件码/快递单号，收件人取件核销凭证
                 PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
@@ -231,6 +289,46 @@ public class DriverAppServiceImpl implements DriverAppService {
             }
             return vo;
         }).toList();
+        List<AppDriverPickupRespVO> all = new ArrayList<>(cargoPickups);
+        all.addAll(productPickups);
+        return all;
+    }
+
+    /**
+     * 本车待执行的商城订单（司机端"待装车/待妥投"）。
+     * 未绑定车辆时直接返回空：司机只是没接商城单，不该影响寄货待办列表（不抛"未绑定车辆"）。
+     */
+    private List<AppDriverPickupRespVO> listProductPickups(DriverDO driver) {
+        Long vehicleId = driverVehicleMapper.selectActiveBindings().stream()
+                .filter(bind -> Objects.equals(bind.getDriverId(), driver.getId()))
+                .map(DriverVehicleDO::getVehicleId)
+                .findFirst()
+                .orElse(null);
+        if (vehicleId == null) {
+            return List.of();
+        }
+        return productOrderService.getDriverDeliveryTasks(vehicleId).stream()
+                .map(this::toProductPickup)
+                .collect(Collectors.toList());
+    }
+
+    /** 商城订单 → 司机端待办卡片（orderType=4 仅展示；动作走 product-load / product-deliver） */
+    private AppDriverPickupRespVO toProductPickup(ProductOrderDO order) {
+        AppDriverPickupRespVO vo = new AppDriverPickupRespVO();
+        vo.setOrderId(order.getId());
+        vo.setOrderNo(order.getOrderNo());
+        vo.setOrderType(ORDER_TYPE_PRODUCT);
+        vo.setBizType("PRODUCT");
+        List<ProductOrderItemDO> items = productOrderItemMapper.selectListByOrderId(order.getId());
+        if (!items.isEmpty()) {
+            ProductOrderItemDO first = items.get(0);
+            vo.setGoodsName(items.size() > 1
+                    ? first.getProductName() + " 等 " + items.size() + " 种" : first.getProductName());
+        }
+        vo.setReceiverName(order.getReceiverName());
+        vo.setReceiverMobile(order.getReceiverMobile());
+        vo.setReceiverAddress(order.getReceiverAddress());
+        return vo;
     }
 
     @Override
@@ -412,6 +510,14 @@ public class DriverAppServiceImpl implements DriverAppService {
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
         }
+        // 1) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
+        List<double[]> direct = roadPolylineService == null ? null : roadPolylineService.route(
+                from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+        if (direct != null && direct.size() >= 2) {
+            return new RouteFetch(direct, "amap");
+        }
+        // 2) 高德不可用：退回算法服务 /route
         try {
             AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                     .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
@@ -663,13 +769,9 @@ public class DriverAppServiceImpl implements DriverAppService {
                 cargoOrderMapper.updateById(upd);
             }
         }
-        Long shiftId = planItem.getShiftId();
-        if (shiftId == null) {
-            throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
-        }
-        // 运力校验：执行记录 + 车辆货仓件数上限
-        ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
-                shiftId, driver.getId(), LocalDate.now());
+        // 执行记录：智能派单的经停明细不绑定固定班次（shift_id 为空），按"司机今天实际发车的那条"兜底，
+        // 否则「一键演示生成的方案」在司机端扫码装车会直接报"班次执行记录不存在"，装车走不下去。
+        ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
         if (execution == null) {
             throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
         }
@@ -719,20 +821,37 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 -1（地板 0）
-        Long shiftId = planItem.getShiftId();
-        if (shiftId != null) {
-            ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
-                    shiftId, driver.getId(), LocalDate.now());
-            if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
-                ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
-                loadedUpdate.setId(execution.getId());
-                loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
-                shiftExecutionMapper.updateById(loadedUpdate);
-            }
+        // 已装件数 -1（地板 0）：执行记录口径同装车（明细没写班次时按司机实际发车记录兜底）
+        ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
+        if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
+            ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
+            loadedUpdate.setId(execution.getId());
+            loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
+            shiftExecutionMapper.updateById(loadedUpdate);
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
+        orderEventService.record(order.getId(), TransportOrderEventTypeEnum.COMPLETED, "货物已妥投，订单完成");
+        userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.COMPLETED,
+                "订单已完成", "您的货物已送达，感谢使用");
+    }
+
+    // ==================== 商城订单（同理寄货）：司机端装车 → 妥投 ====================
+
+    @Override
+    @Transactional
+    public void productLoad(AppDriverOrderActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        productOrderService.driverLoad(driver.getId(), vehicleId, reqVO.getOrderId(), reqVO.getDriverPhotoUrl());
+    }
+
+    @Override
+    @Transactional
+    public void productDeliver(AppDriverOrderActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        Long vehicleId = resolveVehicleId(driver.getId());
+        productOrderService.driverDeliver(driver.getId(), vehicleId, reqVO.getOrderId(), reqVO.getDriverPhotoUrl());
     }
 
     @Override
@@ -784,6 +903,9 @@ public class DriverAppServiceImpl implements DriverAppService {
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
+        orderEventService.record(order.getId(), TransportOrderEventTypeEnum.COMPLETED, "邮快件已取件核销，订单完成");
+        userNotificationService.sendToOrderUser(order.getId(), TransportOrderEventTypeEnum.COMPLETED,
+                "取件成功", "您的邮快件已取件，感谢使用");
     }
 
     /**
@@ -896,6 +1018,265 @@ public class DriverAppServiceImpl implements DriverAppService {
         return vo;
     }
 
+    @Override
+    public List<AppDriverHandoverRespVO> handovers(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        return handoverService.getPendingByDriver(driver.getId()).stream()
+                .map(this::toHandoverVO)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public void handoverConfirm(AppDriverHandoverConfirmReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        // 归属校验在 service 内完成：接收/交出司机可确认；接收司机未分配时可认领
+        handoverService.confirmHandover(reqVO.getHandoverId(), driver.getId(), reqVO.getPhotoUrl());
+    }
+
+    @Override
+    public List<AppDriverLegRespVO> legs(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        List<TransportLegDO> legs = transportLegMapper.selectListByDriverId(driver.getId());
+        if (legs.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, String> stationNames = stationNames(legs);
+        Map<Long, String> plateNos = plateNos(legs);
+        Map<Long, String> orderNos = orderNos(legs);
+        return legs.stream().map(leg -> toLegVO(leg, stationNames, plateNos, orderNos)).collect(Collectors.toList());
+    }
+
+    @Override
+    public AppDriverLegRespVO currentLeg(Long driverId) {
+        DriverDO driver = requireCurrentDriver(driverId);
+        // 司机只能看到自己"进行中"的段（需求 §56：绝不能把前序段当成自己的起点）
+        List<TransportLegDO> active = transportLegMapper.selectActiveByDriverId(driver.getId());
+        if (active.isEmpty()) {
+            return null;
+        }
+        TransportLegDO leg = active.get(0);
+        List<TransportLegDO> one = List.of(leg);
+        return toLegVO(leg, stationNames(one), plateNos(one), orderNos(one));
+    }
+
+    @Override
+    @Transactional
+    public void legAction(String action, AppDriverLegActionReqVO reqVO) {
+        DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
+        TransportLegDO leg = multiLegService.getLeg(reqVO.getLegId());
+        // 归属校验：司机只能操作自己的运输段
+        if (!Objects.equals(leg.getDriverId(), driver.getId())) {
+            throw exception(LEG_NOT_ASSIGNED);
+        }
+        switch (action) {
+            case "accept" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.DRIVER_ACCEPTED);
+            case "navigate" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.NAVIGATING);
+            case "arrive-origin" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_ORIGIN);
+            case "load" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.LOADING);
+            case "start" -> multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.IN_TRANSIT);
+            case "arrive-dest" -> arriveDestination(leg);
+            case "handover-start" -> {
+                TransportHandoverDO handover = requireHandoverOfLeg(leg);
+                handoverService.startHandover(handover.getId(), driver.getId());
+            }
+            case "handover-confirm" -> {
+                TransportHandoverDO handover = requireHandoverOfLeg(leg);
+                handoverService.confirmHandover(handover.getId(), driver.getId(), reqVO.getPhotoUrl());
+            }
+            case "complete" -> completeLeg(leg);
+            case "exception" -> reportLegException(leg, reqVO.getRemark());
+            default -> throw exception(BAD_REQUEST);
+        }
+    }
+
+    /** 司机上报异常（车辆故障/道路中断等，需求 §108）：段置异常 + 订单置异常 + 后台告警 */
+    private void reportLegException(TransportLegDO leg, String remark) {
+        multiLegService.forceLegStatus(leg.getId(), TransportLegStatusEnum.EXCEPTION,
+                remark != null ? remark : "司机上报异常");
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                "第 " + leg.getLegSequence() + " 段异常：" + (remark != null ? remark : "司机上报"));
+        userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.EXCEPTION,
+                "运输段异常", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence()
+                        + " 段异常：" + (remark != null ? remark : "司机上报") + "，请重调度",
+                leg.getOrderId(), leg.getId());
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.WARNING, false,
+                "运输异常提醒", "您的货物运输出现异常，平台正在重新调度车辆");
+    }
+
+    /** 到达终点：需换乘 → 通知后序司机接货；最终段 → 派送中并通知用户取货（需求 §60/§86） */
+    private void arriveDestination(TransportLegDO leg) {
+        if (Boolean.TRUE.equals(leg.getHandoverRequired())) {
+            multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_DESTINATION);
+            handoverService.markSourceArrived(leg.getOrderId(), leg.getId());
+            return;
+        }
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.ARRIVED_DESTINATION);
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.DELIVERING);
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.DELIVERING);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_ARRIVED,
+                "货物已到达目的服务站，等待用户取货");
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_ARRIVED,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED, true,
+                "货物已到达，请取货", "您的货物已到达目的服务站，请携带取件码前往取货");
+    }
+
+    /** 完成配送/取货：最后一段完成 → 订单完成 + 通知（需求 §6 禁止第一段完成即整单完成） */
+    private void completeLeg(TransportLegDO leg) {
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.COMPLETED);
+        List<TransportLegDO> all = multiLegService.getLegsByOrderId(leg.getOrderId());
+        boolean allDone = all.stream().allMatch(l -> Objects.equals(l.getStatus(),
+                TransportLegStatusEnum.COMPLETED.getStatus()));
+        if (!allDone) {
+            return; // 还有后续段：订单保持"部分完成/运输中"，绝不置完成
+        }
+        updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.COMPLETED);
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED, "全部运输段完成，订单完成");
+        userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED,
+                cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.SUCCESS, false,
+                "订单已完成", "您的货物已完成全部运输段，感谢使用");
+    }
+
+    private TransportHandoverDO requireHandoverOfLeg(TransportLegDO leg) {
+        TransportHandoverDO handover = handoverService.getByLeg(leg.getId());
+        if (handover == null) {
+            throw exception(HANDOVER_NOT_EXISTS);
+        }
+        return handover;
+    }
+
+    private void updateOrderStatus(Long orderId, TransportOrderStatusEnum target) {
+        TransportOrderDO update = new TransportOrderDO();
+        update.setStatus(target.getStatus());
+        transportOrderMapper.update(update, new LambdaQueryWrapperX<TransportOrderDO>()
+                .eq(TransportOrderDO::getId, orderId)
+                .notIn(TransportOrderDO::getStatus, TransportOrderStatusEnum.COMPLETED.getStatus(),
+                        TransportOrderStatusEnum.CANCELLED.getStatus()));
+    }
+
+    private AppDriverLegRespVO toLegVO(TransportLegDO leg, Map<Long, String> stationNames,
+                                       Map<Long, String> plateNos, Map<Long, String> orderNos) {
+        AppDriverLegRespVO vo = new AppDriverLegRespVO();
+        vo.setId(leg.getId());
+        vo.setOrderId(leg.getOrderId());
+        vo.setOrderNo(orderNos.get(leg.getOrderId()));
+        vo.setLegSequence(leg.getLegSequence());
+        vo.setFromStationId(leg.getFromStationId());
+        vo.setFromStationName(stationNames.get(leg.getFromStationId()));
+        vo.setToStationId(leg.getToStationId());
+        vo.setToStationName(stationNames.get(leg.getToStationId()));
+        vo.setStatus(leg.getStatus());
+        vo.setStatusName(TransportLegStatusEnum.nameOf(leg.getStatus()));
+        vo.setEstimatedDeparture(leg.getEstimatedDeparture());
+        vo.setEstimatedArrival(leg.getEstimatedArrival());
+        vo.setActualArrival(leg.getActualArrival());
+        vo.setVehicleId(leg.getVehicleId());
+        vo.setPlateNo(plateNos.get(leg.getVehicleId()));
+        vo.setDistanceKm(leg.getDistanceKm());
+        vo.setDurationMinutes(leg.getDurationMinutes());
+        vo.setNavigationSource(leg.getNavigationSource());
+        vo.setHandoverRequired(leg.getHandoverRequired());
+        // 换乘交接信息（需交接的段）
+        if (Boolean.TRUE.equals(leg.getHandoverRequired())) {
+            TransportHandoverDO handover = handoverService.getByLeg(leg.getId());
+            if (handover != null) {
+                vo.setHandoverId(handover.getId());
+                vo.setHandoverStatusName(TransportHandoverStatusEnum.nameOf(handover.getStatus()));
+            }
+        }
+        return vo;
+    }
+
+    private AppDriverHandoverRespVO toHandoverVO(TransportHandoverDO handover) {
+        AppDriverHandoverRespVO vo = new AppDriverHandoverRespVO();
+        vo.setId(handover.getId());
+        vo.setOrderId(handover.getOrderId());
+        vo.setOrderNo(orderNos(handover.getOrderId()));
+        vo.setStationId(handover.getStationId());
+        StationDO station = handover.getStationId() != null ? stationMapper.selectById(handover.getStationId()) : null;
+        vo.setStationName(station != null ? station.getStationName() : null);
+        vo.setFromDriverId(handover.getFromDriverId());
+        vo.setFromDriverName(driverName(handover.getFromDriverId()));
+        vo.setToDriverId(handover.getToDriverId());
+        vo.setToDriverName(driverName(handover.getToDriverId()));
+        vo.setItemCount(handover.getItemCount());
+        vo.setWeightKg(handover.getWeightKg());
+        vo.setPhotoUrl(handover.getPhotoUrl());
+        vo.setStatus(handover.getStatus());
+        vo.setStatusName(TransportHandoverStatusEnum.nameOf(handover.getStatus()));
+        vo.setHandoverTime(handover.getHandoverTime());
+        vo.setRemark(handover.getRemark());
+        if (handover.getOrderId() != null) {
+            CargoOrderDO cargo = cargoOrderMapper.selectOne(CargoOrderDO::getOrderId, handover.getOrderId());
+            vo.setGoodsName(cargo != null ? cargo.getGoodsName() : null);
+            if (vo.getItemCount() == null && cargo != null) {
+                vo.setItemCount(cargo.getItemCount());
+            }
+            if (vo.getWeightKg() == null && cargo != null) {
+                vo.setWeightKg(cargo.getWeightKg());
+            }
+        }
+        return vo;
+    }
+
+    private String orderNos(Long orderId) {
+        if (orderId == null) {
+            return null;
+        }
+        TransportOrderDO order = transportOrderMapper.selectById(orderId);
+        return order != null ? order.getOrderNo() : null;
+    }
+
+    private Map<Long, String> orderNos(List<TransportLegDO> legs) {
+        Set<Long> orderIds = legs.stream().map(TransportLegDO::getOrderId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (orderIds.isEmpty()) {
+            return Map.of();
+        }
+        return transportOrderMapper.selectBatchIds(orderIds).stream()
+                .filter(o -> o.getId() != null)
+                .collect(Collectors.toMap(TransportOrderDO::getId, o -> o.getOrderNo() != null ? o.getOrderNo() : "",
+                        (a, b) -> a));
+    }
+
+    private String driverName(Long driverId) {
+        if (driverId == null) {
+            return null;
+        }
+        DriverDO driver = driverMapper.selectById(driverId);
+        return driver != null ? driver.getName() : null;
+    }
+
+    private Map<Long, String> stationNames(List<TransportLegDO> legs) {
+        Set<Long> stationIds = new HashSet<>();
+        legs.forEach(l -> {
+            if (l.getFromStationId() != null) stationIds.add(l.getFromStationId());
+            if (l.getToStationId() != null) stationIds.add(l.getToStationId());
+        });
+        if (stationIds.isEmpty()) {
+            return Map.of();
+        }
+        return stationMapper.selectBatchIds(stationIds).stream()
+                .filter(s -> s.getId() != null)
+                .collect(Collectors.toMap(StationDO::getId, s -> s.getStationName() != null ? s.getStationName() : "",
+                        (a, b) -> a));
+    }
+
+    private Map<Long, String> plateNos(List<TransportLegDO> legs) {
+        Set<Long> vehicleIds = legs.stream().map(TransportLegDO::getVehicleId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (vehicleIds.isEmpty()) {
+            return Map.of();
+        }
+        return vehicleMapper.selectBatchIds(vehicleIds).stream()
+                .filter(v -> v.getId() != null)
+                .collect(Collectors.toMap(VehicleDO::getId, v -> v.getPlateNo() != null ? v.getPlateNo() : "",
+                        (a, b) -> a));
+    }
+
     /**
      * 以登录会员身份解析当前司机（member_user.mobile → transport_driver.mobile）。
      * 客户端传入的 driverId 仅做一致性校验，不作为身份来源。
@@ -993,6 +1374,23 @@ public class DriverAppServiceImpl implements DriverAppService {
                 .map(DriverVehicleDO::getVehicleId)
                 .findFirst()
                 .orElseThrow(() -> exception(DRIVER_VEHICLE_NOT_BOUND));
+    }
+
+    /**
+     * 取司机"当前在执行的那条班次记录"：优先派单明细上绑定的班次；明细未绑定班次
+     * （智能派单一键生成的方案就是这种）时，回退到司机今天实际发车产生的执行记录（取最新一条）。
+     * 返回 null 表示司机还没发车。
+     */
+    private ShiftExecutionDO resolveActiveExecution(Long driverId, DispatchPlanItemDO planItem) {
+        LocalDate today = LocalDate.now();
+        if (planItem != null && planItem.getShiftId() != null) {
+            ShiftExecutionDO bound = shiftExecutionMapper.selectByShiftAndDriverAndDate(
+                    planItem.getShiftId(), driverId, today);
+            if (bound != null) {
+                return bound;
+            }
+        }
+        return shiftExecutionMapper.selectListByDriverAndDate(driverId, today).stream().findFirst().orElse(null);
     }
 
     private AppDriverEarningsRecordRespVO toRecord(TransportOrderDO order) {

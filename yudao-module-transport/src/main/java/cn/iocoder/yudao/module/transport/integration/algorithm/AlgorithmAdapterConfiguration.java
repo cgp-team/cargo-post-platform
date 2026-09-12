@@ -48,7 +48,13 @@ public class AlgorithmAdapterConfiguration {
                 .build();
         // 显式替换 Jackson 转换器，避免默认转换器把 OffsetDateTime 序列化成时间戳
         restTemplate.getMessageConverters().removeIf(MappingJackson2HttpMessageConverter.class::isInstance);
-        restTemplate.getMessageConverters().add(new MappingJackson2HttpMessageConverter(algorithmObjectMapper()));
+        // 关键：只保留 JSON 转换器。classpath 上存在 YAML 转换器（jackson-dataformat-yaml）时，
+        // 它同样声明支持 application/json 且排在前面，会把请求体序列化成 YAML（"---\norigin:..."），
+        // 导致算法服务把 body 当成非 JSON 对象返回 422（真实道路 polyline / 规划全部失败）。
+        java.util.List<org.springframework.http.converter.HttpMessageConverter<?>> converters =
+                new java.util.ArrayList<>();
+        converters.add(new MappingJackson2HttpMessageConverter(algorithmObjectMapper()));
+        restTemplate.setMessageConverters(converters);
         return restTemplate;
     }
 }

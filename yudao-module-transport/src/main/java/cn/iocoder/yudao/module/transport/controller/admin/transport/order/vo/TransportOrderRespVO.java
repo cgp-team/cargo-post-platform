@@ -42,6 +42,33 @@ public class TransportOrderRespVO extends TransportOrderBaseVO {
     private String receiverMobile;
     @Schema(description = "收货地址")
     private String receiverAddress;
+    // --- 寄货服务链路（村民在哪寄 / 车辆去哪接 / 怎么交接）：后台订单管理与审核页直接可见 ---
+    @Schema(description = "用户原始寄货地址（小程序定位或手填，如 重庆邮电大学明志苑）")
+    private String originalAddress;
+    @Schema(description = "用户原始纬度(GCJ-02)")
+    private BigDecimal originalLatitude;
+    @Schema(description = "用户原始经度(GCJ-02)")
+    private BigDecimal originalLongitude;
+    @Schema(description = "取货服务方式：DOOR_PICKUP 上门 / NEAREST_STATION 最近站点 / CUSTOMER_TO_STATION 客户送站 / STATION_TO_STATION 站到站")
+    private String pickupServiceMode;
+    @Schema(description = "送达服务方式")
+    private String deliveryServiceMode;
+    @Schema(description = "交接服务站点编号")
+    private Long servicePointStationId;
+    @Schema(description = "交接服务站点名称")
+    private String servicePointStationName;
+    @Schema(description = "承运审核结果：0待审核 1通过 2需客户操作 3需人工审核 4不承运")
+    private Integer reviewStatus;
+    @Schema(description = "承运审核原因码（逗号分隔，如 USER_LOCATION_UNREACHABLE）")
+    private String reviewReasonCodes;
+    @Schema(description = "货物类别")
+    private String cargoCategory;
+    @Schema(description = "是否生鲜/需冷链")
+    private Boolean freshFlag;
+    @Schema(description = "货物件数")
+    private Integer cargoItemCount;
+    @Schema(description = "货物体积(m³)")
+    private BigDecimal cargoVolumeM3;
     // --- 邮快件信息（来自邮快件子表） ---
     @Schema(description = "快递单号")
     private String mailNo;

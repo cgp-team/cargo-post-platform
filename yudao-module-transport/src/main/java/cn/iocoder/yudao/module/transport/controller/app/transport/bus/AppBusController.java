@@ -6,6 +6,7 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusN
 import cn.iocoder.yudao.module.transport.controller.app.transport.bus.vo.AppBusRespVO;
 import cn.iocoder.yudao.module.transport.service.transport.bus.AppBusService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.annotation.security.PermitAll;
@@ -36,9 +37,20 @@ public class AppBusController {
 
     @GetMapping("/lines")
     @PermitAll
-    @Operation(summary = "实时公交线路（含经停点与该线在线车辆，供车来了式地图+列表）")
-    public CommonResult<List<AppBusLineRespVO>> lines() {
-        return success(appBusService.getLines());
+    @Operation(summary = "实时公交线路（含经停点与该线在线车辆；传 latitude/longitude 时只返回附近线路，避免主城全量线网超时）")
+    public CommonResult<List<AppBusLineRespVO>> lines(
+            @RequestParam(value = "latitude", required = false) Double latitude,
+            @RequestParam(value = "longitude", required = false) Double longitude,
+            @RequestParam(value = "radius", required = false) Double radius) {
+        return success(appBusService.getLines(latitude, longitude, radius));
+    }
+
+    @GetMapping("/line-polyline")
+    @PermitAll
+    @Operation(summary = "单条线路的真实道路轨迹（点开线路时按需查询，带 5 分钟缓存）")
+    @Parameter(name = "routeId", description = "线路编号", required = true)
+    public CommonResult<List<AppBusLineRespVO.RoadPoint>> linePolyline(@RequestParam("routeId") Long routeId) {
+        return success(appBusService.getLinePolyline(routeId));
     }
 
     @GetMapping("/nearby")

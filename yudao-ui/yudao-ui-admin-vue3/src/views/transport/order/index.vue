@@ -31,10 +31,49 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="取货站点" prop="pickupStationId" align="center" />
-        <el-table-column label="送达站点" prop="deliveryStationId" align="center" />
-        <el-table-column label="货物名称" align="center" min-width="100">
-          <template #default="scope">{{ scope.row.goodsName || '-' }}</template>
+        <el-table-column label="订单状态" align="center" width="90">
+          <template #default="scope">
+            <el-tag :type="orderStatusTag(scope.row.status)" size="small">
+              {{ orderStatusLabel(scope.row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="取货站点" align="center" min-width="130">
+          <template #default="scope">
+            {{ scope.row.pickupStationName || stationName(scope.row.pickupStationId) || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="送达站点" align="center" min-width="130">
+          <template #default="scope">
+            {{ scope.row.deliveryStationName || stationName(scope.row.deliveryStationId) || '-' }}
+          </template>
+        </el-table-column>
+        <!-- 用户原始寄货位置 + 取货方式：校园/IP 定位与车辆可达性不一致时，后台能看出"人在哪、车去哪接" -->
+        <el-table-column label="用户寄货位置" align="center" min-width="180">
+          <template #default="scope">
+            <div v-if="scope.row.originalAddress">{{ scope.row.originalAddress }}</div>
+            <div v-else class="text-gray-400">-</div>
+            <el-tag v-if="scope.row.pickupServiceMode" size="small" :type="serviceModeTag(scope.row.pickupServiceMode)">
+              {{ serviceModeLabel(scope.row.pickupServiceMode) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="交接服务站" align="center" min-width="140">
+          <template #default="scope">
+            {{ scope.row.servicePointStationName || (scope.row.servicePointStationId ? stationName(scope.row.servicePointStationId) : '-') }}
+          </template>
+        </el-table-column>
+        <el-table-column label="物品信息" align="left" min-width="200">
+          <template #default="scope">
+            <div>{{ scope.row.goodsName || '-' }}</div>
+            <div class="text-gray-400 text-xs">
+              {{ scope.row.cargoCategory || '未分类' }}
+              · {{ scope.row.cargoItemCount != null ? scope.row.cargoItemCount + ' 件' : '-' }}
+              · {{ scope.row.cargoWeightKg != null ? scope.row.cargoWeightKg + ' kg' : '-' }}
+              · {{ scope.row.cargoVolumeM3 != null ? scope.row.cargoVolumeM3 + ' m³' : '-' }}
+              <el-tag v-if="scope.row.freshFlag" size="small" type="danger" style="margin-left:4px">生鲜</el-tag>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="收货人" align="center" width="100">
           <template #default="scope">{{ scope.row.receiverName || '-' }}</template>
@@ -78,9 +117,10 @@
         </el-table-column>
         <el-table-column label="订单金额" prop="totalAmount" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
-        <el-table-column label="操作" align="center" width="200">
+        <el-table-column label="操作" align="center" width="260" fixed="right">
           <template #default="scope">
             <el-button v-if="scope.row.orderType === 2 && scope.row.auditStatus === 0" link type="warning" v-hasPermi="['transport:order:update']" @click="openAudit(scope.row)">审核</el-button>
+            <el-button link type="primary" @click="openDetail(scope.row)">详情</el-button>
             <el-button link type="primary" v-hasPermi="['transport:order:update']" @click="openForm('update', scope.row.id)">编辑</el-button>
             <el-button link type="danger" v-hasPermi="['transport:order:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
@@ -105,6 +145,23 @@
       <el-form-item label="货物信息">
         <span>{{ auditRow.goodsName || '-' }} · {{ auditRow.cargoWeightKg ? auditRow.cargoWeightKg + 'kg' : '-' }} · {{ auditRow.goodsNote || '无备注' }}</span>
       </el-form-item>
+      <el-form-item label="物品规格">
+        <span>
+          {{ auditRow.cargoCategory || '未分类' }} ·
+          {{ auditRow.cargoItemCount != null ? auditRow.cargoItemCount + ' 件' : '-' }} ·
+          {{ auditRow.cargoVolumeM3 != null ? auditRow.cargoVolumeM3 + ' m³' : '-' }}
+          {{ auditRow.freshFlag ? ' · 生鲜需冷链' : '' }}
+        </span>
+      </el-form-item>
+      <el-form-item label="取货方式">
+        <span>
+          {{ serviceModeLabel(auditRow.pickupServiceMode) }}
+          <template v-if="auditRow.originalAddress"> · 用户位置：{{ auditRow.originalAddress }}</template>
+        </span>
+      </el-form-item>
+      <el-form-item label="交接服务站">
+        <span>{{ auditRow.servicePointStationName || (auditRow.pickupStationName) || '-' }}</span>
+      </el-form-item>
       <el-form-item label="收件信息">
         <span>{{ auditRow.receiverName || '-' }} {{ auditRow.receiverMobile || '' }}</span>
       </el-form-item>
@@ -118,10 +175,70 @@
       <el-button type="danger" :loading="auditLoading" @click="submitAudit(false)">拒绝运输</el-button>
     </template>
   </Dialog>
+
+  <!-- 订单详情：寄货全链路（用户位置 → 交接服务站 → 货物规格 → 收件信息 → 图片凭证） -->
+  <Dialog v-model="detailVisible" :title="`订单详情 ${detail?.orderNo || ''}`" width="760px" v-loading="detailLoading">
+    <el-descriptions v-if="detail" :column="2" border size="small">
+      <el-descriptions-item label="订单类型">{{ orderTypeLabel(detail.orderType!) }}</el-descriptions-item>
+      <el-descriptions-item label="订单状态">
+        <el-tag :type="orderStatusTag(detail.status)" size="small">{{ orderStatusLabel(detail.status) }}</el-tag>
+      </el-descriptions-item>
+      <el-descriptions-item label="取货站点">{{ detail.pickupStationName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="送达站点">{{ detail.deliveryStationName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="用户寄货位置">
+        {{ detail.originalAddress || '-' }}
+        <span v-if="detail.originalLatitude && detail.originalLongitude" class="text-gray-400">
+          （{{ Number(detail.originalLongitude).toFixed(5) }}, {{ Number(detail.originalLatitude).toFixed(5) }}）
+        </span>
+      </el-descriptions-item>
+      <el-descriptions-item label="取货方式">{{ serviceModeLabel(detail.pickupServiceMode) }}</el-descriptions-item>
+      <el-descriptions-item label="交接服务站">
+        {{ detail.servicePointStationName || '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="承运审核">
+        {{ reviewStatusLabel(detail.reviewStatus) }}
+        <span v-if="detail.reviewReasonCodes" class="text-gray-400">（{{ detail.reviewReasonCodes }}）</span>
+      </el-descriptions-item>
+      <el-descriptions-item label="货物名称">{{ detail.goodsName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="货物类别">{{ detail.cargoCategory || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="件数">{{ detail.cargoItemCount != null ? detail.cargoItemCount + ' 件' : '-' }}</el-descriptions-item>
+      <el-descriptions-item label="重量">{{ detail.cargoWeightKg != null ? detail.cargoWeightKg + ' kg' : '-' }}</el-descriptions-item>
+      <el-descriptions-item label="体积">{{ detail.cargoVolumeM3 != null ? detail.cargoVolumeM3 + ' m³' : '-' }}</el-descriptions-item>
+      <el-descriptions-item label="是否生鲜">{{ detail.freshFlag ? '是（需冷链）' : '否' }}</el-descriptions-item>
+      <el-descriptions-item label="收件人">{{ detail.receiverName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="收件电话">{{ detail.receiverMobile || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="收件地址" :span="2">{{ detail.receiverAddress || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="备注" :span="2">{{ detail.goodsNote || '无' }}</el-descriptions-item>
+      <el-descriptions-item label="寄件照" :span="2">
+        <el-image
+          v-if="detail.photoUrl"
+          :src="detail.photoUrl"
+          :preview-src-list="[detail.photoUrl]"
+          fit="cover"
+          style="width:120px;height:120px;border-radius:8px"
+        />
+        <span v-else class="text-gray-400">无</span>
+      </el-descriptions-item>
+      <el-descriptions-item label="司机收件照" :span="2">
+        <el-image
+          v-if="detail.driverPhotoUrl"
+          :src="detail.driverPhotoUrl"
+          :preview-src-list="[detail.driverPhotoUrl]"
+          fit="cover"
+          style="width:120px;height:120px;border-radius:8px"
+        />
+        <span v-else class="text-gray-400">无</span>
+      </el-descriptions-item>
+    </el-descriptions>
+    <template #footer>
+      <el-button @click="detailVisible = false">关 闭</el-button>
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import * as OrderApi from '@/api/transport/order'
+import * as StationApi from '@/api/transport/station'
 import OrderForm from './OrderForm.vue'
 
 defineOptions({ name: 'TransportOrder' })
@@ -143,6 +260,46 @@ const formRef = ref()
 const orderTypeLabel = (type: number) => ({ 1: '客运', 2: '货运', 3: '邮快件' }[type] || '未知')
 const typeTagMap: Record<number, 'success' | 'warning' | 'info'> = { 1: 'success', 2: 'warning', 3: 'info' }
 const orderTypeTag = (type: number): 'success' | 'warning' | 'info' => typeTagMap[type] || 'info'
+
+// 订单生命周期（OrderLifecycle）：0 已创建 6 待审核 7 待客户操作 8 待入池 1 已入池 2 已分配 3 已发车 4 已完成 5 已取消
+type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
+const orderStatusLabelMap: Record<number, string> = {
+  0: '已创建', 6: '待审核', 7: '待客户操作', 8: '待入池', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消'
+}
+const orderStatusLabel = (status?: number) =>
+  status === undefined || status === null ? '-' : orderStatusLabelMap[status] || `状态${status}`
+const orderStatusTagMap: Record<number, TagType> = {
+  0: 'info', 6: 'warning', 7: 'warning', 8: 'warning', 1: 'warning', 2: 'primary', 3: 'success', 4: 'success', 5: 'danger'
+}
+const orderStatusTag = (status?: number): TagType =>
+  status === undefined || status === null ? 'info' : orderStatusTagMap[status] || 'info'
+
+// 寄货服务方式（ServiceModeEnum）：客户在哪寄、车去哪接
+const serviceModeLabelMap: Record<string, string> = {
+  DOOR_PICKUP: '上门交接',
+  NEAREST_STATION: '最近站点交接',
+  SAFE_ROADSIDE: '安全点交接',
+  CUSTOMER_TO_STATION: '客户送站',
+  STATION_TO_STATION: '站到站'
+}
+const serviceModeLabel = (code?: string) => (code ? serviceModeLabelMap[code] || code : '-')
+const serviceModeTag = (code?: string): TagType =>
+  code === 'DOOR_PICKUP' ? 'success' : code ? 'warning' : 'info'
+
+// 承运审核结果：0 待审核 1 通过 2 需客户操作 3 需人工审核 4 不承运
+const reviewStatusLabel = (status?: number) =>
+  ({ 0: '待审核', 1: '已通过', 2: '需客户操作', 3: '需人工审核', 4: '不承运' }[status ?? -1] || '-')
+
+/** 站点名兜底（后端已返回 pickupStationName 时不再依赖） */
+const stations = ref<StationApi.StationVO[]>([])
+const stationName = (id?: number) => (id == null ? '' : stations.value.find((s) => s.id === id)?.stationName || '')
+const loadStations = async () => {
+  try {
+    stations.value = await StationApi.getSimpleStationList()
+  } catch (e) {
+    /* 兜底展示失败不影响订单列表 */
+  }
+}
 
 const getList = async () => {
   loading.value = true
@@ -182,5 +339,24 @@ const submitAudit = async (pass: boolean) => {
     auditLoading.value = false
   }
 }
-onMounted(getList)
+
+/** 订单详情：单独拉一条（含子表全字段），复核后可直接给老师看"用户位置 → 交接站" */
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detail = ref<OrderApi.OrderVO>({})
+const openDetail = async (row: OrderApi.OrderVO) => {
+  detail.value = row // 先用列表数据渲染，避免白屏
+  detailVisible.value = true
+  detailLoading.value = true
+  try {
+    detail.value = await OrderApi.getOrder(row.id!)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+onMounted(() => {
+  getList()
+  loadStations()
+})
 </script>

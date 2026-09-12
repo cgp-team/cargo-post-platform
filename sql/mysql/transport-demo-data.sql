@@ -6,20 +6,32 @@
 -- ============================================
 
 -- ---------- 车辆数据 ----------
+-- 说明：演示线路全部在重庆（南岸/渝中/沙坪坝），车牌一律用重庆「渝A」，不再出现川A外地牌照
 INSERT IGNORE INTO transport_vehicle (id, plate_no, vehicle_type, passenger_capacity, cargo_capacity_kg, status, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
-(1, '川A·B5201', 1, 30, 500.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(2, '川A·B5202', 1, 25, 400.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(3, '川A·B5203', 2, 15, 800.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(4, '川A·B5204', 1, 35, 600.00, 1, 0, '1', NOW(), '1', NOW(), b'0'),
-(5, '川A·B5205', 3, 20, 1200.00, 0, 0, '1', NOW(), '1', NOW(), b'0');
+(1, '渝A·B5201', 1, 30, 500.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(2, '渝A·B5202', 1, 25, 400.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(3, '渝A·B5203', 2, 15, 800.00, 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(4, '渝A·B5204', 1, 35, 600.00, 1, 0, '1', NOW(), '1', NOW(), b'0'),
+(5, '渝A·B5205', 3, 20, 1200.00, 0, 0, '1', NOW(), '1', NOW(), b'0');
 
 -- ---------- 司机数据 ----------
+-- 身份证号统一为重庆（5001xx），与承运的重庆主城订单口径一致
 INSERT IGNORE INTO transport_driver (id, name, mobile, license_no, license_expire_date, status, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
-(1, '张建国', '13800138001', '510100198001150011', '2027-06-15', 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(2, '李伟民', '13800138002', '510100198203220012', '2028-03-20', 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(3, '王守义', '13800138003', '510100197911080013', '2026-12-01', 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(4, '赵德柱', '13800138004', '510100198508140014', '2029-09-10', 0, 0, '1', NOW(), '1', NOW(), b'0'),
-(5, '陈永发', '13800138005', '510100199012250015', '2030-01-05', 1, 0, '1', NOW(), '1', NOW(), b'0');
+(1, '周建国', '13800138001', '500108198001150011', '2027-06-15', 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(2, '李伟民', '13800138002', '500106198203220012', '2028-03-20', 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(3, '王守义', '13800138003', '500107197911080013', '2026-12-01', 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(4, '赵德柱', '13800138004', '500108198508140014', '2029-09-10', 0, 0, '1', NOW(), '1', NOW(), b'0'),
+(5, '陈永发', '13800138005', '500109199012250015', '2030-01-05', 1, 0, '1', NOW(), '1', NOW(), b'0');
+
+-- 历史库修正（幂等）：早期演示数据用了四川车牌/身份证，统一改回重庆口径
+UPDATE transport_vehicle SET plate_no = REPLACE(plate_no, '川A', '渝A')
+WHERE id BETWEEN 1 AND 5 AND plate_no LIKE '川A%';
+UPDATE transport_driver SET license_no = CONCAT('5001', SUBSTRING(license_no, 5))
+WHERE id BETWEEN 1 AND 5 AND license_no LIKE '5101%';
+-- 货仓件数上限：演示批次多单共载，件数容易顶到旧值（6~8）导致"容量越界"直接卡住一键调度；
+-- 公交/大巴行李舱能放的包裹件数远不止这些，统一给到 24 件（重量上限仍按 cargo_capacity_kg 约束）。
+UPDATE transport_vehicle SET cargo_capacity = 24
+WHERE id BETWEEN 1 AND 5 AND (cargo_capacity IS NULL OR cargo_capacity < 24);
 
 -- ---------- 司机车辆绑定 ----------
 INSERT IGNORE INTO transport_driver_vehicle (id, driver_id, vehicle_id, bind_time, unbind_time, status, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
@@ -121,11 +133,112 @@ INSERT IGNORE INTO transport_postal_order (id, order_id, mail_no, carrier_code, 
 (2, 9, 'YT0987654321', 'YTO', 1, 1.20, 0, '1', NOW(), '1', NOW(), b'0'),
 (3, 10, 'ZT5678901234', 'ZTO', 3, 5.00, 0, '1', NOW(), '1', NOW(), b'0');
 
--- ---------- 农产品商品 ----------
+-- ---------- 商城商品 ----------
+-- 排序：农产品在前（首页推荐只取前 4 个 → 首页展示农产品），重庆特产在后（id 7~12，商城列表可见）。
+-- 特产照片：随小程序包发布的实拍图（miniprogram/images/products/*.jpg）+ 后端图片 URL，见 utils/product-img.js。
+-- 农产品商品（演示种子数据）
+--
+-- ⚠️ 这里必须用 INSERT IGNORE，**不能** DELETE 后再 INSERT：
+--    本文件会随部署/演示流程反复执行（deploy-dev.yml 的迁移步骤里就有它），
+--    以前是 `DELETE FROM transport_product WHERE id BETWEEN 1 AND 12` + 重新插入，
+--    结果"后台改过的商品名称/价格/描述/状态、以及上传的商品图片(image_url)"每次都会被打回演示初值
+--    —— 用户看到的就是"后台改完商品，一刷新就没了"。
+--    INSERT IGNORE：只在缺行时补种子数据，**已存在的商品一律不动**（运营改动优先）。
+--    注意：不要往下面的列里补 image_url——种子数据不该覆盖后台配置的图片。
 INSERT IGNORE INTO transport_product (id, name, from_village, price, unit, image, badge, description, stock, status, sort, tenant_id, creator, create_time, updater, update_time, deleted) VALUES
+-- 农产品（优先展示）
 (1, '高山脆李', '云山村', 68.00, '斤', '🍑', '大巴直通车', '高山生态种植，皮薄肉厚，清甜多汁', 200, 0, 1, 0, '1', NOW(), '1', NOW(), b'0'),
 (2, '土鸡蛋30枚装', '大湾村', 45.00, '箱', '🥚', '大巴直通车', '农家散养土鸡蛋，30枚装', 150, 0, 2, 0, '1', NOW(), '1', NOW(), b'0'),
 (3, '有机红薯粉', '竹林乡', 28.00, '袋', '🍜', '', '传统手工制作，爽滑劲道', 300, 0, 3, 0, '1', NOW(), '1', NOW(), b'0'),
 (4, '野生山核桃', '青山镇', 55.00, '斤', '🥜', '大巴直通车', '深山野生，自然晾晒', 120, 0, 4, 0, '1', NOW(), '1', NOW(), b'0'),
 (5, '明前龙井茶', '云山村', 128.00, '盒', '🍵', '', '清明前采摘，鲜嫩甘醇', 80, 0, 5, 0, '1', NOW(), '1', NOW(), b'0'),
-(6, '农家腊肉', '溪口村', 88.00, '斤', '🥩', '大巴直通车', '柴火熏制，肥而不腻', 60, 0, 6, 0, '1', NOW(), '1', NOW(), b'0');
+(6, '农家腊肉', '溪口村', 88.00, '斤', '🥩', '大巴直通车', '柴火熏制，肥而不腻', 60, 0, 6, 0, '1', NOW(), '1', NOW(), b'0'),
+-- 重庆特产（商城可见，首页推荐不占用前 4 位）
+(7, '重庆老火锅底料（牛油）', '重庆·南岸', 45.00, '袋', 'https://www.themealdb.com/images/media/meals/uuqvwu1504629254.jpg', '重庆特产', '牛油熬制，麻辣鲜香，一袋可煮 3~4 人份', 200, 0, 7, 0, '1', NOW(), '1', NOW(), b'0'),
+(8, '重庆小面麻辣调料包', '重庆·渝中', 32.80, '盒', 'https://www.themealdb.com/images/media/meals/pbzcrx1763765096.jpg', '重庆特产', '手工炒制辣椒油，还原街头小面的味道', 180, 0, 8, 0, '1', NOW(), '1', NOW(), b'0'),
+(9, '涪陵榨菜（鲜脆榨菜丝）', '重庆·涪陵', 15.60, '袋', 'https://www.themealdb.com/images/media/meals/44pjrn1779814409.jpg', '重庆特产', '百年工艺，鲜脆爽口，佐餐下饭', 300, 0, 9, 0, '1', NOW(), '1', NOW(), b'0'),
+(10, '合川桃片（核桃味）', '重庆·合川', 22.00, '盒', 'https://www.themealdb.com/images/media/meals/t3r3ka1560461972.jpg', '重庆特产', '糯米核桃薄片，甜而不腻，重庆老字号茶点', 160, 0, 10, 0, '1', NOW(), '1', NOW(), b'0'),
+(11, '江津米花糖', '重庆·江津', 18.80, '袋', 'https://www.themealdb.com/images/media/meals/q47rkb1762324620.jpg', '重庆特产', '传统手工膨化，酥脆香甜', 220, 0, 11, 0, '1', NOW(), '1', NOW(), b'0'),
+(12, '城口老腊肉（烟熏）', '重庆·城口', 68.00, '斤', 'https://www.themealdb.com/images/media/meals/t1hg8s1780087329.jpg', '重庆特产', '土猪后腿，柏树枝烟熏，肥而不腻', 90, 0, 12, 0, '1', NOW(), '1', NOW(), b'0');
+
+-- ============================================
+-- 自建站点 / 自建客货邮线路 示例（农村或园区没有现成公交路网时使用）
+--
+-- 演示链路：后台「站点管理 → 新增站点 → 地图选点」建站 → 「线路管理 → 编辑 → 经停站序」把站点
+-- 按顺序拼成线路 → 立即参与附近公交、排班、调度、司机导航等全部功能。
+--
+-- 本文件把这条示例固化下来，避免每次演示都要手工建：
+--   站点 CQ-MZY-01「重邮明志苑驿站」（重庆邮电大学明志苑2舍，车辆可达、开放调度）
+--   线路 CQ-MZY-LINE「重邮明志苑—四公里集散中心」，经停：明志苑驿站 → 重邮南门货运站 → 四公里交通换乘枢纽站
+-- 幂等：INSERT ... ON DUPLICATE KEY UPDATE，可重复执行。
+-- ============================================
+
+-- 1) 自建站点（经纬度为地图选点得到的 GCJ-02 坐标）
+INSERT INTO transport_station
+    (id, station_code, station_name, station_level, longitude, latitude, address, status,
+     source_type, station_type, user_access, vehicle_access, dispatch_enabled,
+     sort, remark, tenant_id, creator, updater, deleted)
+VALUES
+    (1146, 'CQ-MZY-01', '重邮明志苑驿站', 2, 106.6055000, 29.5310000,
+     '重庆邮电大学明志苑2舍', 0, 'PROJECT', 'CARGO_STATION', b'1', b'1', b'1',
+     1, '自建示例：校园快递驿站，车辆可达、开放调度', 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    station_name = VALUES(station_name),
+    longitude = VALUES(longitude),
+    latitude = VALUES(latitude),
+    address = VALUES(address),
+    user_access = VALUES(user_access),
+    vehicle_access = VALUES(vehicle_access),
+    dispatch_enabled = VALUES(dispatch_enabled),
+    status = 0,
+    deleted = b'0';
+
+-- 2) 自建线路（起点/终点 + 里程；里程由经停站序自动累加，这里给出与站序一致的初值）
+INSERT INTO transport_route
+    (id, route_code, route_name, start_station_id, end_station_id, distance_km, status,
+     source_type, service_type, dispatch_enabled, tenant_id, creator, updater, deleted)
+VALUES
+    (545, 'CQ-MZY-LINE', '重邮明志苑—四公里集散中心', 1146, 104, 2.98, 0,
+     'PROJECT', 'MIXED', b'1', 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    route_name = VALUES(route_name),
+    start_station_id = VALUES(start_station_id),
+    end_station_id = VALUES(end_station_id),
+    distance_km = VALUES(distance_km),
+    dispatch_enabled = VALUES(dispatch_enabled),
+    status = 0,
+    deleted = b'0';
+
+-- 3) 经停站序（顺序即线路走向；planned_minutes 为从起点累计分钟）
+-- 同样不做"先删再插"：这条示例线路的站序被后台编辑过时也要保留（ON DUPLICATE KEY UPDATE 幂等）
+INSERT INTO transport_route_station
+    (id, route_id, station_id, sequence_no, planned_minutes, tenant_id, creator, updater, deleted)
+VALUES
+    (905451, 545, 1146, 1, 0, 0, '1', '1', b'0'),
+    (905452, 545, 107, 2, 1, 0, '1', '1', b'0'),
+    (905453, 545, 104, 3, 9, 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    station_id = VALUES(station_id),
+    sequence_no = VALUES(sequence_no),
+    planned_minutes = VALUES(planned_minutes),
+    deleted = b'0';
+
+-- 4) 给自建线路排两班车（否则线路只出现在"附近线路"里、没有在途车辆）
+INSERT INTO transport_shift
+    (id, shift_code, route_id, planned_departure_time, planned_duration_minutes, status,
+     tenant_id, creator, updater, deleted)
+VALUES
+    -- 时长按一个往返（去程 9 分钟 + 返程 9 分钟，留出停站作业时间）
+    (461, 'SH-MZY-01', 545, '08:20:00', 30, 0, 0, '1', '1', b'0'),
+    (462, 'SH-MZY-02', 545, '16:40:00', 30, 0, 0, '1', '1', b'0')
+ON DUPLICATE KEY UPDATE
+    route_id = VALUES(route_id),
+    planned_departure_time = VALUES(planned_departure_time),
+    planned_duration_minutes = VALUES(planned_duration_minutes),
+    status = 0,
+    deleted = b'0';
+
+SELECT '自建站点' AS info, id, station_name, longitude, latitude FROM transport_station WHERE id = 1146;
+SELECT '自建线路' AS info, r.id, r.route_name, r.distance_km, COUNT(rs.id) AS stop_count
+FROM transport_route r LEFT JOIN transport_route_station rs ON rs.route_id = r.id
+WHERE r.id = 545 GROUP BY r.id, r.route_name, r.distance_km;

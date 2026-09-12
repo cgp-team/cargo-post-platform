@@ -2,9 +2,21 @@ package cn.iocoder.yudao.module.transport.service.monitoring;
 
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringTrackRespVO;
+import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationTrackDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
@@ -19,7 +31,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,6 +57,14 @@ class MonitoringServiceImplTest {
     @Mock private VehicleLocationMapper vehicleLocationMapper;
     @Mock private SimulationEngine simulationEngine;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
+    @Mock private DriverMapper driverMapper;
+    @Mock private DriverVehicleMapper driverVehicleMapper;
+    @Mock private ShiftMapper shiftMapper;
+    @Mock private ShiftExecutionMapper shiftExecutionMapper;
+    @Mock private RouteMapper routeMapper;
+    @Mock private RouteStationMapper routeStationMapper;
+    @Mock private StationMapper stationMapper;
+    @Mock private VehicleLocationProvider locationProvider;
 
     private MonitoringServiceImpl monitoringService;
 
@@ -54,6 +76,14 @@ class MonitoringServiceImplTest {
         ReflectionTestUtils.setField(monitoringService, "vehicleLocationMapper", vehicleLocationMapper);
         ReflectionTestUtils.setField(monitoringService, "simulationEngine", simulationEngine);
         ReflectionTestUtils.setField(monitoringService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
+        ReflectionTestUtils.setField(monitoringService, "driverMapper", driverMapper);
+        ReflectionTestUtils.setField(monitoringService, "driverVehicleMapper", driverVehicleMapper);
+        ReflectionTestUtils.setField(monitoringService, "shiftMapper", shiftMapper);
+        ReflectionTestUtils.setField(monitoringService, "shiftExecutionMapper", shiftExecutionMapper);
+        ReflectionTestUtils.setField(monitoringService, "routeMapper", routeMapper);
+        ReflectionTestUtils.setField(monitoringService, "routeStationMapper", routeStationMapper);
+        ReflectionTestUtils.setField(monitoringService, "stationMapper", stationMapper);
+        ReflectionTestUtils.setField(monitoringService, "locationProvider", locationProvider);
     }
 
     @Test
@@ -135,5 +165,57 @@ class MonitoringServiceImplTest {
                 .speedKmh(BigDecimal.valueOf(speed))
                 .reportTime(reportTime)
                 .build();
+    }
+
+    // ==================== 统一位置模型：快照上下文透传到监控 VO ====================
+
+    @Test
+    void getRealtimeVehicles_simulatedSnapshot_keepsShiftRouteContext() {
+        stubEmptyFleetLookups();
+        when(locationProvider.getLocations(any(), eq(true))).thenReturn(Map.of(VEHICLE_ID,
+                VehicleLocationSnapshot.builder().vehicleId(VEHICLE_ID).source("SIMULATED").status(1)
+                        .longitude(104.1).latitude(30.6)
+                        .shiftId(1L).shiftCode("SH001").routeId(1L).routeName("县城—青山镇线")
+                        .progress(40).currentStationName("红花村站").nextStationName("青山镇站")
+                        .updatedAt(LocalDateTime.now()).build()));
+
+        List<MonitoringVehicleRespVO> vehicles = monitoringService.getRealtimeVehicles();
+
+        assertEquals(1, vehicles.size());
+        MonitoringVehicleRespVO vo = vehicles.get(0);
+        // 模拟位置必须带班次/线路上下文（实时公交按线路聚合车辆依赖），并标注 SIMULATED 不冒充真实
+        assertEquals("SH001", vo.getShiftCode());
+        assertEquals("县城—青山镇线", vo.getRouteName());
+        assertEquals("SIMULATED", vo.getDataSource());
+        assertEquals(MonitoringServiceImpl.STATUS_IN_TRANSIT, vo.getStatus().intValue());
+        assertEquals(40, vo.getProgress().intValue());
+        assertEquals("青山镇站", vo.getNextStationName());
+        assertEquals("红花村站", vo.getCurrentStationName());
+        assertEquals(104.1, vo.getLongitude());
+    }
+
+    @Test
+    void getRealtimeVehicles_offlineSnapshot_isIdleWithoutPosition() {
+        stubEmptyFleetLookups();
+        when(locationProvider.getLocations(any(), eq(true))).thenReturn(Map.of(VEHICLE_ID,
+                VehicleLocationSnapshot.builder().vehicleId(VEHICLE_ID).source("OFFLINE").status(0).build()));
+
+        List<MonitoringVehicleRespVO> vehicles = monitoringService.getRealtimeVehicles();
+
+        MonitoringVehicleRespVO vo = vehicles.get(0);
+        assertEquals(MonitoringServiceImpl.STATUS_IDLE, vo.getStatus().intValue());
+        assertNull(vo.getLongitude()); // OFFLINE 只表示真正没有位置，不编造坐标
+        assertNull(vo.getShiftCode());
+    }
+
+    private void stubEmptyFleetLookups() {
+        when(vehicleMapper.selectList()).thenReturn(List.of(
+                VehicleDO.builder().id(VEHICLE_ID).plateNo("川A12345").status(0).build()));
+        when(driverMapper.selectList()).thenReturn(List.of());
+        when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of());
+        when(shiftMapper.selectList()).thenReturn(List.of());
+        when(shiftMapper.selectList(any())).thenReturn(List.of());
+        when(routeMapper.selectList()).thenReturn(List.of());
+        when(stationMapper.selectList()).thenReturn(List.of());
     }
 }

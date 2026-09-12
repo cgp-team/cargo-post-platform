@@ -186,11 +186,50 @@ public class DispatchEstimationService {
         planUpdate.setTaskWindowStart(departTime);
         planUpdate.setTaskWindowEnd(departTime.plusMinutes(maxDurationMinutes));
         planUpdate.setEstRevenue(computeRevenue(items, stationMap, rule));
-        planUpdate.setEstCost(rule.getVehicleCostPerKm() != null
-                ? rule.getVehicleCostPerKm().multiply(BigDecimal.valueOf(totalKm)).setScale(2, RoundingMode.HALF_UP)
-                : null);
+        planUpdate.setEstCost(computeCost(items, rule, totalKm));
         dispatchPlanMapper.updateById(planUpdate);
     }
+
+    /**
+     * 货运成本口径（与业务前提一致：**利用公交/大巴空闲运力**，车辆本来就要按线路跑）：
+     * 成本 = 绕行里程成本（真实增量）+ 货运分摊的骨架里程成本（公交运营成本的一部分，按比例分摊）
+     *      + 停站作业时间成本。
+     *
+     * <p>为什么不再用"全程里程 × 车辆单价"：那等于让几张包裹订单承担整趟公交的成本，
+     * 真实场景里车的固定成本由客运/财政补贴承担，货运只应承担**增量成本 + 合理分摊**，
+     * 否则方案永远显示亏本（演示里"全是亏本运行"就是这个口径造成的）。</p>
+     */
+    private BigDecimal computeCost(List<DispatchPlanItemDO> items, PricingRuleDO rule, double totalKm) {
+        if (rule.getVehicleCostPerKm() == null) {
+            return null;
+        }
+        // 1) 绕行里程（算法给出的相对公交骨架的增量里程；没有时退回 0）
+        double detourKm = items.stream()
+                .map(DispatchPlanItemDO::getDetourDistanceKm)
+                .filter(Objects::nonNull)
+                .mapToDouble(BigDecimal::doubleValue)
+                .sum();
+        // 2) 骨架里程里由货运分摊的比例（默认 35%：其余由客运/补贴承担）
+        double sharedKm = totalKm * CARGO_COST_SHARE;
+        double billableKm = detourKm + sharedKm;
+        BigDecimal cost = rule.getVehicleCostPerKm()
+                .multiply(BigDecimal.valueOf(billableKm));
+        // 3) 停站作业时间成本（按车辆公里成本 ÷ 均速折算每分钟成本）
+        double speed = rule.getAvgSpeedKmh() != null && rule.getAvgSpeedKmh().doubleValue() > 0
+                ? rule.getAvgSpeedKmh().doubleValue() : 25.0;
+        int serviceMinutes = rule.getStopServiceMinutes() != null ? rule.getStopServiceMinutes() : 3;
+        long stops = items.stream().filter(i -> SERVICE_ACTIONS.contains(i.getActionType())).count();
+        BigDecimal perMinute = rule.getVehicleCostPerKm()
+                .divide(BigDecimal.valueOf(speed), 4, RoundingMode.HALF_UP);
+        cost = cost.add(perMinute.multiply(BigDecimal.valueOf(stops * (long) serviceMinutes)));
+        return cost.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** 货运分摊的骨架里程比例（其余由客运/财政补贴承担） */
+    private static final double CARGO_COST_SHARE = 0.35;
+    /** 直线距离 → 路网里程折算系数（计价用，避免为计价再调一次高德） */
+    /** 路网系数：直线距离 → 计费里程（寄货页试算 CargoPricingService 复用同一系数，避免两处口径漂移） */
+    public static final double ROAD_FACTOR_FOR_PRICE = 1.3;
 
     /** 明细数量：BOARD/ALIGHT=客运人数，PICKUP/DELIVERY=货运/邮快件件数（子表缺失按 1 兜底） */
     private Integer quantityOf(DispatchPlanItemDO item, Map<Long, PassengerOrderDO> passengerMap,
@@ -248,15 +287,34 @@ public class DispatchEstimationService {
                 if (rule.getCargoPricePerItem() != null) {
                     revenue = revenue.add(rule.getCargoPricePerItem().multiply(BigDecimal.valueOf(count)));
                 }
+                // 里程费：按"取货站→送达站"路网里程计价（起步价=件单价，公里费=人公里价的货运口径）
+                revenue = revenue.add(distanceFee(order, stationMap, rule));
             } else if (Objects.equals(order.getOrderType(), 3)) { // 邮快件
                 PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
                 int count = postal != null && postal.getItemCount() != null ? postal.getItemCount() : 1;
                 if (rule.getPostalPricePerItem() != null) {
                     revenue = revenue.add(rule.getPostalPricePerItem().multiply(BigDecimal.valueOf(count)));
                 }
+                revenue = revenue.add(distanceFee(order, stationMap, rule));
             }
         }
         return revenue.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** 里程费：直线距离 × 路网系数 × 里程单价（货运/邮快件按件里程计；坐标缺失按 0） */
+    private BigDecimal distanceFee(TransportOrderDO order, Map<Long, StationDO> stationMap, PricingRuleDO rule) {
+        if (rule.getPassengerPricePerKm() == null) {
+            return BigDecimal.ZERO;
+        }
+        StationDO from = stationMap.get(order.getPickupStationId());
+        StationDO to = stationMap.get(order.getDeliveryStationId());
+        if (!hasCoords(from) || !hasCoords(to)) {
+            return BigDecimal.ZERO;
+        }
+        double km = GeoDistanceUtil.haversineKm(
+                from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+                to.getLongitude().doubleValue(), to.getLatitude().doubleValue()) * ROAD_FACTOR_FOR_PRICE;
+        return rule.getPassengerPricePerKm().multiply(BigDecimal.valueOf(km));
     }
 
     private static boolean hasCoords(StationDO station) {
