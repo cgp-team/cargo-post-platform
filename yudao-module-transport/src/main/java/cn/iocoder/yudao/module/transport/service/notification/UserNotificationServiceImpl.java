@@ -190,6 +190,7 @@ public class UserNotificationServiceImpl implements UserNotificationService {
                         .build(),
                 new LambdaQueryWrapperX<TransportUserNotificationDO>()
                         .eq(TransportUserNotificationDO::getUserId, userId)
+                        .eq(TransportUserNotificationDO::getRecipientType, "USER")
                         .eq(TransportUserNotificationDO::getReadStatus, READ_STATUS_UNREAD)
                         .eqIfPresent(TransportUserNotificationDO::getOrderId, orderId));
     }
