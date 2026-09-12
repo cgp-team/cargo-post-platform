@@ -6,6 +6,7 @@ import cn.iocoder.yudao.module.transport.controller.admin.transport.notification
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportUserNotificationDO;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
 import cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum;
+import cn.iocoder.yudao.module.transport.enums.notification.NotificationRecipientTypeEnum;
 
 /**
  * 用户通知服务：订单事件发生时写 transport_user_notification，供小程序「消息中心」展示。
@@ -37,8 +38,8 @@ public interface UserNotificationService {
     Long sendToAdmin(TransportOrderEventTypeEnum eventType, NotificationLevelEnum level, String title,
                      String content, Long orderId, Long legId);
 
-    /** 标记单条通知已读（校验归属） */
-    void markAsRead(Long notificationId, Long userId);
+    /** 标记单条通知已读（校验归属：同时比对接收方类型与编号，司机 id 与会员 id 同空间，只比 id 会串） */
+    void markAsRead(Long notificationId, NotificationRecipientTypeEnum recipientType, Long recipientId);
 
     /** 批量标记已读：orderId 为空时标记该用户全部未读 */
     void markAllAsRead(Long userId, Long orderId);

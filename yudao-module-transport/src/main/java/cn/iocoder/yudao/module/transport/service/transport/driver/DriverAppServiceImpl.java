@@ -1052,12 +1052,32 @@ public class DriverAppServiceImpl implements DriverAppService {
         DriverDO driver = requireCurrentDriver(driverId);
         // 司机只能看到自己"进行中"的段（需求 §56：绝不能把前序段当成自己的起点）
         List<TransportLegDO> active = transportLegMapper.selectActiveByDriverId(driver.getId());
-        if (active.isEmpty()) {
-            return null;
+        // P1-E：只认"已下发/执行中"方案的段。历史缺陷：selectActiveByDriverId 只按段状态过滤，
+        // 会把「待审核方案」的段派到司机端（实测司机 3 拿到 plan 29 状态 0 待审核的段）。
+        List<TransportLegDO> issued = active.stream()
+                .filter(leg -> isPlanIssuedOrRunning(leg.getPlanId()))
+                .sorted(Comparator.comparing(TransportLegDO::getEstimatedDeparture,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(TransportLegDO::getLegSequence,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        if (issued.isEmpty()) {
+            return null; // 无已下发方案的活跃段：等待派单
         }
-        TransportLegDO leg = active.get(0);
+        TransportLegDO leg = issued.get(0);
         List<TransportLegDO> one = List.of(leg);
         return toLegVO(leg, stationNames(one), plateNos(one), orderNos(one));
+    }
+
+    /** P1-E：方案是否"已下发(1)/执行中(2)"；无方案的段不进入司机端（待审核方案不可见） */
+    private boolean isPlanIssuedOrRunning(Long planId) {
+        if (planId == null || dispatchPlanMapper == null) {
+            return false;
+        }
+        DispatchPlanDO plan = dispatchPlanMapper.selectById(planId);
+        return plan != null
+                && (Objects.equals(plan.getStatus(), DispatchPlanStatusEnum.ISSUED.getStatus())
+                    || Objects.equals(plan.getStatus(), DispatchPlanStatusEnum.RUNNING.getStatus()));
     }
 
     @Override
