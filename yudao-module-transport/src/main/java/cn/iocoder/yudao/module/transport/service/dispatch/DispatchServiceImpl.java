@@ -28,8 +28,6 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 
-import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
-
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -55,8 +53,6 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
-
-import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
@@ -91,6 +87,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import lombok.extern.slf4j.Slf4j;
 
 import jakarta.annotation.Resource;
+
+import org.springframework.beans.factory.annotation.Value;
 
 import org.springframework.stereotype.Service;
 
@@ -142,36 +140,45 @@ public class DispatchServiceImpl implements DispatchService {
 
     private static final String SCENARIO_MANUAL = "MANUAL";
 
-    /** 算法规模上限（与算法服务 app.py 契约一致）：100 站点 / 25 订单 / 3 车。
-     *  站点上限从 30 放宽到 100：联合调度（公交线路骨架 + 货运绕行）时骨架站点
-     *  （每条真实公交线路 18~20 站）会并入 station 快照，3 条线路 + 订单站点轻松 70~80 站，
-     *  旧的 30 站上限会把"车辆按各自公交线路运行"整批拒掉。 */
-    private static final int MAX_ALGORITHM_STATIONS = 100;
+    /** 算法规模上限（与算法服务 app.py 契约一致）：30 站点 / 25 订单 / 3 车 */
+
+    private static final int MAX_ALGORITHM_STATIONS = 30;
 
     private static final int MAX_ALGORITHM_ORDERS = 25;
 
     private static final int MAX_ALGORITHM_VEHICLES = 3;
 
     /**
-     * 一键调度「单批」订单上限（P1-1）：算法单次最多 {@value #MAX_ALGORITHM_VEHICLES} 辆车、
-     * 批次窗口 {@value #BATCH_MINUTES} 分钟。若一批塞满 25 单（MAX_ALGORITHM_ORDERS），
-     * 3 台车每台要跑 8~9 单，2 小时窗口必然超时 → 算法判 TIME_WINDOW_EXCEEDED（实测 25/26 单必现）。
-     * 因此自动模式按「3 台车 × 每车 4 单」左右的规模分批，让单车在窗口内能跑完；
-     * 其余订单留在池里，由前端「一键演示/一键调度」多轮自动成下一套方案（跨片区订单同样靠这个分批）。
-     */
-    private static final int AUTO_BATCH_MAX_ORDERS = 12;
-
-    /**
 
      * 批次规划窗口(分钟)：算法要求"整批任务总耗时 ≤ 窗口时长"。
 
-     * 30 分钟（原来的半小时批次）对真实路网（高德时空时长 + 装卸作业）太紧，
+     * 30 分钟（原来的半小时批次）对真实路网（高德时空时长 + 装卸作业）太紧；
 
-     * 2 单以上很容易判 TIME_WINDOW_EXCEEDED；这里按 2 小时规划（可覆盖 yudao.dispatch.batch-minutes）。
+     * 2 小时对公交骨架线路同样不够：一条 25~35 站的线路按真实路网跑完要 2~2.5 小时
+     * （实测重邮片区 35 站骨架 8920s > 7200s），整批订单会被判"排不进时间窗"
+     * （算法返回 TIME_WINDOW_EXCEEDED / INCOMPLETE_SOLUTION，一键演示直接失败）。
+
+     * 默认按一个班次 8 小时，可用 yudao.dispatch.batch-minutes 覆盖。
 
      */
 
-    private static final int BATCH_MINUTES = 120;
+    @Value("${yudao.dispatch.batch-minutes:480}")
+
+    private int batchMinutes;
+
+    /**
+
+     * 演示态开关：一键演示后是否把方案里的订单放回「待入池」（方便反复演示）。
+
+     * <p>生产上线设为 false：调度后的订单不再出现在订单池，
+
+     * 除非通过"驳回/打回"显式操作让它重新派送。</p>
+
+     */
+
+    @Value("${yudao.dispatch.demo-recycle-pool:true}")
+
+    private boolean demoRecyclePool;
 
 
 
@@ -188,8 +195,6 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private ShiftMapper shiftMapper;
 
     @Resource private RouteStationMapper routeStationMapper;
-
-    @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Resource private VehicleMapper vehicleMapper;
 
@@ -564,7 +569,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 其余片区留在池里，再次点击「一键调度」自动成下一套方案。
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, AUTO_BATCH_MAX_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, MAX_ALGORITHM_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -1251,22 +1256,6 @@ public class DispatchServiceImpl implements DispatchService {
 
             List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
 
-            // P2-K：本方案该司机承担的运输段（补 orderId/legId，司机点消息可跳订单；无段时退回 null）
-
-            List<TransportLegDO> planLegs = legMapper == null ? List.of() : legMapper.selectListByPlanId(planId);
-
-            Map<Long, TransportLegDO> firstLegByVehicle = new HashMap<>();
-
-            for (TransportLegDO leg : planLegs) {
-
-                if (leg.getVehicleId() != null) {
-
-                    firstLegByVehicle.putIfAbsent(leg.getVehicleId(), leg);
-
-                }
-
-            }
-
             for (Long vehicleId : vehicleIds) {
 
                 Long driverId = bindings.stream()
@@ -1305,9 +1294,6 @@ public class DispatchServiceImpl implements DispatchService {
                         .map(DispatchPlanItemDO::getOrderId).filter(Objects::nonNull).distinct().count();
                 String taskSummary = stopCount + "个站点" + (orderCount > 0 ? "、" + orderCount + "单货物" : "");
 
-                // 该司机本方案的首条运输段（补 orderId/legId，司机点消息跳订单）
-                TransportLegDO firstLeg = firstLegByVehicle.get(vehicleId);
-
                 // 微信订阅消息
                 socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
                         .setUserId(member.getId())
@@ -1323,9 +1309,7 @@ public class DispatchServiceImpl implements DispatchService {
                         cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED,
                         true, "您有新的运输任务",
                         "方案#" + planId + "已分配给您：" + taskSummary + "，请及时接单",
-                        firstLeg != null ? firstLeg.getOrderId() : null,
-                        planId,
-                        firstLeg != null ? firstLeg.getId() : null);
+                        null, planId, null);
 
             }
 
@@ -1940,7 +1924,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 与 createSmartPlan 同一批次口径：校验看到的订单数就是本次真正会被调度的订单数
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, AUTO_BATCH_MAX_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, MAX_ALGORITHM_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -2031,21 +2015,6 @@ public class DispatchServiceImpl implements DispatchService {
         List<DispatchValidateRespVO.TimeSeqIssue> issues = new ArrayList<>();
 
         for (TransportOrderDO order : pooledOrders) {
-
-            // P1-I：批次时间窗可行性预检——订单时间窗与本批次窗口完全无交集时，算法必然判
-            // "任务超出批次时间窗"（TIME_WINDOW_EXCEEDED）。这里提前给出可执行原因（哪单/哪个时间窗），
-            // 避免"validate 校验通过 → smart 提交失败"的自相矛盾。
-            LocalDateTime[] win = currentBatch();
-            if (order.getLatestDeliveryTime() != null && order.getLatestDeliveryTime().isBefore(win[0])) {
-                issues.add(timeSeqIssue(order, "送达截止时间 " + order.getLatestDeliveryTime()
-                        + " 早于本批次开始 " + win[0] + "：请刷新演示数据时间窗或拆单"));
-                continue;
-            }
-            if (order.getEarliestPickupTime() != null && order.getEarliestPickupTime().isAfter(win[1])) {
-                issues.add(timeSeqIssue(order, "取货时间 " + order.getEarliestPickupTime()
-                        + " 晚于本批次结束 " + win[1] + "：请拆到下一批次再调度"));
-                continue;
-            }
 
             if (Objects.equals(order.getOrderType(), 1)) { // 客运
 
@@ -2725,60 +2694,13 @@ public class DispatchServiceImpl implements DispatchService {
 
         ShiftDO shift = shiftMapper.selectById(shiftId);
 
-        if (shift == null) {
+        if (shift == null || shift.getRouteId() == null) {
 
             return null;
 
         }
 
-        return skeletonOfRoute(shift.getRouteId(), depotStationId);
-
-    }
-
-    /**
-     * 按车辆解析它自己的公交线路骨架（联合调度）：vehicle → shift_execution → shift → route。
-     * 智能派单（auto）时每辆车不再统一从场站出发往返，而是沿自己绑定的公交线路（始发站→终点站）运行，
-     * 线路附近的货运订单作为小范围绕行插入；没有班次/线路的车辆返回 null（纯 VRP，从场站出发的货运车）。
-     */
-    private List<String> resolveSkeletonByVehicle(Long vehicleId, Long depotStationId) {
-
-        if (vehicleId == null) {
-
-            return null;
-
-        }
-
-        List<ShiftExecutionDO> executions = shiftExecutionMapper.selectListByVehicleIds(List.of(vehicleId));
-
-        if (executions.isEmpty() || executions.get(0).getShiftId() == null) {
-
-            return null;
-
-        }
-
-        // 同一辆车可能有多条执行记录，取最新一条（id 倒序）对应的班次
-        ShiftDO shift = shiftMapper.selectById(executions.get(0).getShiftId());
-
-        if (shift == null) {
-
-            return null;
-
-        }
-
-        return skeletonOfRoute(shift.getRouteId(), depotStationId);
-
-    }
-
-    /** 线路 → 按 sequenceNo 排序的站点编号列表（去掉场站）；线路无站点返回 null */
-    private List<String> skeletonOfRoute(Long routeId, Long depotStationId) {
-
-        if (routeId == null) {
-
-            return null;
-
-        }
-
-        List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(routeId));
+        List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId()));
 
         if (routeStations.isEmpty()) {
 
@@ -2812,19 +2734,6 @@ public class DispatchServiceImpl implements DispatchService {
 
                                                  List<String> skeleton) {
 
-        // 每辆车的公交骨架：手动指定班次时所有车按同一线路经停；智能派单（auto）时按车辆绑定的线路解析
-        Map<Long, List<String>> vehicleSkeletons = new LinkedHashMap<>();
-
-        for (VehicleDO vehicle : vehicles) {
-
-            List<String> vs = (skeleton != null && !skeleton.isEmpty()) ? skeleton
-
-                    : resolveSkeletonByVehicle(vehicle.getId(), depot.getId());
-
-            vehicleSkeletons.put(vehicle.getId(), vs);
-
-        }
-
         Set<Long> stationIds = new LinkedHashSet<>();
 
         orders.forEach(order -> {
@@ -2832,17 +2741,6 @@ public class DispatchServiceImpl implements DispatchService {
             stationIds.add(order.getPickupStationId());
 
             stationIds.add(order.getDeliveryStationId());
-
-        });
-
-        // 骨架站点也必须进 station 快照，否则算法 solver 因"未知站点"KeyError 崩溃（INTERNAL_ERROR）
-        vehicleSkeletons.values().forEach(sk -> {
-
-            if (sk != null) {
-
-                sk.forEach(sid -> stationIds.add(Long.valueOf(sid)));
-
-            }
 
         });
 
@@ -2870,9 +2768,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
 
-                        // 公交骨架（联合调度）：每辆车自己的线路骨架，缺线路的车为纯 VRP
+                        // 公交骨架（Mandatory Passenger Service）：指定班次时该车辆按线路站点经停
 
-                        .skeleton(vehicleSkeletons.get(vehicle.getId()))
+                        .skeleton(skeleton)
 
                         .build())
 
@@ -3386,15 +3284,86 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-    /** 当前半小时批次区间：分钟 < 30 则 :00，否则 :30 */
+    /** 当前半小时批次区间：分钟 < 30 则 :00，否则 :30；窗长 batchMinutes（默认一个班次） */
+    @Override
 
-    private static LocalDateTime[] currentBatch() {
+    @Transactional(rollbackFor = Exception.class)
+
+    public int recyclePlanOrdersToPool(java.util.List<Long> planIds) {
+
+        if (!demoRecyclePool) {
+
+            return 0; // 生产态：调度后的订单不再回到订单池，除非显式打回重新派送
+
+        }
+
+        java.util.List<Long> ids = planIds == null ? java.util.List.of()
+
+                : planIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+
+        java.util.List<DispatchPlanDO> plans = ids.isEmpty()
+
+                ? dispatchPlanMapper.selectList(new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX<DispatchPlanDO>()
+
+                        .ge(DispatchPlanDO::getCreateTime, LocalDateTime.now().toLocalDate().atStartOfDay()))
+
+                : dispatchPlanMapper.selectBatchIds(ids);
+
+        if (plans == null || plans.isEmpty()) {
+
+            return 0;
+
+        }
+
+        java.util.Set<Long> orderIds = new java.util.HashSet<>();
+
+        for (DispatchPlanDO plan : plans) {
+
+            dispatchPlanItemMapper.selectList(
+
+                            new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX<DispatchPlanItemDO>()
+
+                                    .eq(DispatchPlanItemDO::getPlanId, plan.getId())).stream()
+
+                    .map(DispatchPlanItemDO::getOrderId)
+
+                    .filter(java.util.Objects::nonNull)
+
+                    .forEach(orderIds::add);
+
+        }
+
+        int updated = 0;
+
+        for (Long orderId : orderIds) {
+
+            updated += orderMapper.updateById(TransportOrderDO.builder()
+
+                    .id(orderId)
+
+                    .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus())
+
+                    .build());
+
+        }
+
+        if (updated > 0) {
+
+            log.info("[recyclePlanOrdersToPool][演示态：{} 单放回待入池，方案保留（planIds={}）]", updated, ids);
+
+        }
+
+        return updated;
+
+    }
+
+    private LocalDateTime[] currentBatch() {
 
         LocalDateTime now = LocalDateTime.now();
 
         LocalDateTime start = now.withMinute(now.getMinute() < 30 ? 0 : 30).withSecond(0).withNano(0);
 
-        return new LocalDateTime[]{start, start.plusMinutes(BATCH_MINUTES)};
+        return new LocalDateTime[]{start, start.plusMinutes(batchMinutes)};
 
     }
 

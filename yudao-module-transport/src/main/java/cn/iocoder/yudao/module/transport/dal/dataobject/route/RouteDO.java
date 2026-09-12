@@ -38,4 +38,10 @@ public class RouteDO extends TenantBaseDO {
 
     /** 是否可用于调度（作干线/接驳线路） */
     private Boolean dispatchEnabled;
+
+    /** 真实道路轨迹："lng,lat;lng,lat;..."（高德取到后落库，长期复用；为空时前端直线暂替） */
+    private String navigationPolyline;
+
+    /** 轨迹来源：AMAP=真实道路；NULL=未取到 */
+    private String navigationSource;
 }

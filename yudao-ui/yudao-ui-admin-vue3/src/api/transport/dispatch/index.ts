@@ -31,16 +31,6 @@ export interface DispatchPlanVO {
   approvedBy?: number
   approvedTime?: string
   createTime?: string
-  /** 方案编号（外部展示号） */
-  planNo?: string
-  /** DIRECT 一段直达 / MULTI_LEG 多段联运 */
-  planningMode?: string
-  /** 运输段总数（多段联运） */
-  totalLegCount?: number
-  /** 换乘次数 */
-  transferCount?: number
-  /** 方案解释（为什么直达/为什么联运） */
-  planReason?: string
 }
 
 /** 调度方案明细(对应 DispatchPlanItemDO) */
@@ -216,14 +206,6 @@ export interface DispatchRoadmapPoint {
 export interface DispatchRoadmapSegment {
   vehicleId?: number
   visitSequence?: number
-  /** 运输段编号（source=LEG 时有值，与订单视角 leg 对应） */
-  legId?: number
-  /** 订单编号（source=LEG 时有值） */
-  orderId?: number
-  /** 该订单内的段序（source=LEG 时有值） */
-  legSequence?: number
-  /** 本段是否需要在终点换乘交接 */
-  handoverRequired?: boolean
   fromStationId?: number
   toStationId?: number
   fromStationName?: string
@@ -238,8 +220,6 @@ export interface DispatchRoadmapRespVO {
   planId?: number
   /** AMAP / EUCLIDEAN / MIXED */
   provider?: string
-  /** 分段口径：LEG=由运输段聚合，ITEM=由经停明细聚合 */
-  source?: string
   segments?: DispatchRoadmapSegment[]
 }
 
@@ -261,6 +241,15 @@ export const getRoadBetween = (params: {
 /** 审核调度方案 */
 export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
   return request.put({ url: '/transport/dispatch/plan/review', data })
+}
+
+/**
+ * 演示态：把方案里的订单放回「待入池」，方便反复点「一键演示」。
+ * 生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后，本调用为空操作
+ * （调度后的订单不再回到订单池，除非显式打回重新派送）。
+ */
+export const recycleDemoPool = (planIds?: number[]) => {
+  return request.post({ url: '/transport/dispatch/demo/recycle-pool', data: planIds || [] })
 }
 
 /** 发车核验 */

@@ -15,9 +15,6 @@
           <span>车辆 <b>{{ summary.vehicleCount }}</b> 台</span>
           <span>总里程 <b>{{ summary.distanceText }}</b> km</span>
         </div>
-        <div v-if="activePlanReason" class="viz-reason">
-          <span class="viz-reason-label">方案解释</span>{{ activePlanReason }}
-        </div>
       </div>
 
       <div class="viz-body">
@@ -95,10 +92,18 @@
           </div>
           <!-- 车辆配色图例：演示时一眼看清"哪条线是哪台车" -->
           <div v-if="visibleRoutes.length" class="viz-vehicle-legend">
-            <div v-for="r in visibleRoutes" :key="'lg-' + r.key" class="legend-vehicle">
+            <div
+              v-for="r in visibleRoutes"
+              :key="'lg-' + r.key"
+              class="legend-vehicle legend-vehicle-clickable"
+              :class="{ picked: selectedVehicleKey === r.key }"
+              @click="selectVehicleByKey(r.key)"
+            >
               <span class="legend-vehicle-color" :style="{ background: r.color }"></span>
               <span class="legend-vehicle-name">{{ r.title }}</span>
-              <span class="legend-vehicle-meta">{{ r.orderCount }} 单 · {{ r.stops.length }} 站</span>
+              <span class="legend-vehicle-meta">
+                {{ r.orderCount }} 单 · {{ r.legs ? r.legs.length + ' 段' : r.stops.length + ' 站' }}
+              </span>
             </div>
           </div>
           <div class="viz-legend">
@@ -155,23 +160,48 @@
                 <span class="route-name">{{ route.title }}</span>
               </div>
               <div class="route-sub">
-                {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                <template v-if="route.legs">
+                  {{ route.legs.length }} 段 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                </template>
+                <template v-else>
+                  {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                </template>
                 <template v-if="route.driverText"> · {{ route.driverText }}</template>
               </div>
-              <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
-                <span class="stop-seq">{{ i + 1 }}</span>
-                <span class="stop-dot" :class="actionClass(s.actionType)"></span>
-                <span class="stop-act" :class="actionClass(s.actionType)">
-                  {{ actionLabel(s.actionType) }}{{ quantityText(s) }}
-                </span>
-                <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
-                <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
-                <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
-                <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
-                  <span class="stop-handover-icon">🔄</span>
-                  <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
+              <!-- 运输段口径（真实车辆）：一段一行，写清从哪到哪、哪单、是真实道路还是直线估算 -->
+              <template v-if="route.legs">
+                <div v-for="lg in route.legs" :key="'leg' + lg.seq" class="stop-row">
+                  <span class="stop-seq">{{ lg.seq }}</span>
+                  <span class="stop-dot" :class="lg.estimated ? 'act-seat' : 'act-deliver'"></span>
+                  <span class="stop-act" :class="lg.estimated ? 'act-seat' : 'act-deliver'">
+                    {{ lg.estimated ? '直线估算' : '真实道路' }}
+                  </span>
+                  <span class="stop-station">{{ lg.fromName }} → {{ lg.toName }}</span>
+                  <span v-if="lg.orderNo" class="stop-order">{{ lg.orderNo }}</span>
+                  <span class="stop-time">{{ lg.timeText }}</span>
+                  <span v-if="lg.distanceText && lg.distanceText !== '-'" class="stop-time">{{ lg.distanceText }}km</span>
+                  <div v-if="lg.handoverText" class="stop-handover">
+                    <span class="stop-handover-icon">🔄</span>
+                    <span class="stop-handover-text">{{ lg.handoverText }}</span>
+                  </div>
                 </div>
-              </div>
+              </template>
+              <template v-else>
+                <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
+                  <span class="stop-seq">{{ i + 1 }}</span>
+                  <span class="stop-dot" :class="actionClass(s.actionType)"></span>
+                  <span class="stop-act" :class="actionClass(s.actionType)">
+                    {{ actionLabel(s.actionType) }}{{ quantityText(s) }}
+                  </span>
+                  <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
+                  <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
+                  <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
+                  <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
+                    <span class="stop-handover-icon">🔄</span>
+                    <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
+                  </div>
+                </div>
+              </template>
 
 
                           </div>
@@ -249,6 +279,25 @@ const visible = computed({
 })
 
 type RouteStop = DispatchApi.DispatchPlanItemVO
+/**
+ * 按车辆视角的「一段运输」：来自运输段（transport_leg），是车辆真实执行的任务。
+ * 多段联运方案里，算法的「单车经停明细」会把同一片区外的订单也挂在同一台车上，
+ * 真实执行口径以运输段为准（哪台车、从哪到哪、交给谁）。
+ */
+interface VehicleLegRow {
+  seq: number
+  orderId?: number
+  orderNo?: string
+  fromName: string
+  toName: string
+  plateNo?: string
+  driverName?: string
+  /** true = 该段暂无真实道路轨迹，地图上是直线估算（虚线） */
+  estimated: boolean
+  handoverText: string
+  timeText: string
+  distanceText: string
+}
 interface RouteView {
   key: string
   planId?: number
@@ -268,6 +317,10 @@ interface RouteView {
   /** 该车轨迹中有多少段来自真实道路（AMAP）；其余为两点直线估算 */
   realSegments: number
   totalSegments: number
+  /** 按车辆视角：该车真实执行的运输段（存在时优先按它展示，而不是算法单车经停明细） */
+  legs?: VehicleLegRow[]
+  /** 该车车牌（运输段分组口径） */
+  plateNo?: string
 }
 
 const loading = ref(false)
@@ -310,8 +363,6 @@ const vehicleName = (id?: number) =>
  * 由后端 /transport/dispatch/plan/roadmap 按「车辆 + 经停序号」给出（高德驾车路网，带缓存）。
  */
 const roadmapSegments = ref<Map<string, { provider: string; points: { lng: number; lat: number }[] }>>(new Map())
-/** 原始道路轨迹响应（P0-B：source=LEG 时按运输段聚合车辆视角，plan item 只留站点与作业） */
-const legRoadmaps = ref<DispatchApi.DispatchRoadmapRespVO[]>([])
 
 const actionLabel = (action?: number) =>
   ({ 0: '场站发车', 1: '乘客上车', 2: '乘客下车', 3: '派送', 4: '揽收', 5: '返场', 6: '途经' }[action ?? -1] || '经停')
@@ -349,25 +400,30 @@ const summary = computed(() => {
   const vehicleIds = new Set<number>()
   shown.forEach((p) => (p.items ?? []).forEach((i) => i.vehicleId && vehicleIds.add(i.vehicleId)))
   const distance = shown.reduce((sum, p) => sum + (Number(p.totalDistance) || 0), 0)
+  // 车辆数按「实际画出/列出的车辆」统计：多段联运按运输段分组时会包含换乘车辆，
+  // 只按算法经停明细统计会少算（明细里换乘车辆不出现）。
   return {
     orderCount: orderIds.size,
-    vehicleCount: vehicleIds.size,
+    vehicleCount: visibleRoutes.value.length || vehicleIds.size,
     distanceText: distance ? distance.toFixed(1) : '-'
   }
 })
 
-/** 当前选中方案的方案解释（为什么直达/为什么联运）；"全部方案"时取第一套有解释的 */
-const activePlanReason = computed(() => {
-  const shown = activePlanId.value
-    ? plans.value.filter((p) => p.id === activePlanId.value)
-    : plans.value
-  const plan = shown.find((p) => p.planReason) ?? shown[0]
-  return plan?.planReason || ''
+/**
+ * 实际展示的车辆线路：**优先按运输段（真实车辆）分组**；
+ * 方案没有运输段（手工方案/历史数据）时才退回按算法经停明细分组。
+ */
+const visibleRoutes = computed(() => {
+  if (vehicleLegRoutes.value.length) {
+    if (!activePlanId.value) return vehicleLegRoutes.value
+    const plan = plans.value.find((p) => p.id === activePlanId.value)
+    const orderIds = new Set<number>(
+      (plan?.items ?? []).map((i) => i.orderId).filter((id): id is number => id != null)
+    )
+    return buildLegRoutes(orderIds)
+  }
+  return activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
 })
-
-const visibleRoutes = computed(() =>
-  activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
-)
 
 /**
  * 视角：总体 / 按车辆 / 按订单。
@@ -387,6 +443,16 @@ const switchTab = (tab: 'all' | 'vehicle' | 'order') => {
 }
 
 const selectVehicle = (key: string) => {
+  selectedVehicleKey.value = selectedVehicleKey.value === key ? '' : key
+  redraw()
+}
+
+/**
+ * 地图/图例点选车辆：切到「按车辆」视角并只显示这一台车（其余车辆线路与标记自动隐藏）。
+ * 再次点击同一台车 = 取消选择，恢复显示全部车辆。
+ */
+const selectVehicleByKey = (key: string) => {
+  panelTab.value = 'vehicle'
   selectedVehicleKey.value = selectedVehicleKey.value === key ? '' : key
   redraw()
 }
@@ -513,12 +579,28 @@ const mapRoutes = computed<RouteView[]>(() => {
   return visibleRoutes.value
 })
 
+/** 方案内所有订单的运输段（真实车辆执行口径；用于车辆视角分组与配色） */
+const topologyLegs = computed(() => {
+  const rows: { leg: TopologyApi.TopologyLeg; orderId?: number; orderNo?: string }[] = []
+  topologies.value.forEach((t) => {
+    ;(t.legs ?? []).forEach((leg) => rows.push({ leg, orderId: t.orderId, orderNo: t.orderNo }))
+  })
+  return rows
+})
+
 /** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
 const plateColorMap = computed(() => {
   const map = new Map<string, string>()
   routes.value.forEach((r) => {
     const plate = vehicles.value.find((v) => v.plateNo && r.title.includes(v.plateNo))?.plateNo
     if (plate) map.set(plate, r.color)
+  })
+  // 多段联运的换乘车辆（算法单车经停明细里不出现）续用调色板里未被占用的颜色，
+  // 保证「订单视角 / 车辆视角 / 地图」三处同一台车同一种颜色。
+  topologyLegs.value.forEach(({ leg }) => {
+    if (leg.plateNo && !map.has(leg.plateNo)) {
+      map.set(leg.plateNo, ROUTE_COLORS[map.size % ROUTE_COLORS.length])
+    }
   })
   return map
 })
@@ -595,19 +677,128 @@ const handoverInfoFor = (stationId?: number, stationNameStr?: string): string =>
   return `交给 ${target}`
 }
 
-/** 组装"每车一条线路"：多段联运方案（roadmap.source=LEG）按运输段聚合，否则按经停明细 */
+type LinkLeg = TopologyApi.TopologyLeg & { handoverTarget?: string }
+
+/**
+ * 按「真实车辆」组装线路：数据口径是运输段（transport_leg），多段联运时包含换乘车辆，
+ * 而不是算法返回的单车经停明细（明细会把跨片区订单也挂在同一台车上，导致车辆视角错位）。
+ *
+ * 每台车按预计到达时间串联它的各段：有高德轨迹段直接用（后端落库的真实道路），
+ * ESTIMATED 段按需补一次路网并缓存（10 分钟），仍拿不到才用两点直线兜底（虚线并标注）。
+ */
+const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
+  const orders = linkOrders.value.filter(
+    (o) => !orderIdFilter || (o.orderId != null && orderIdFilter.has(o.orderId))
+  )
+  if (!orders.length) return []
+  const groups = new Map<string, { leg: LinkLeg; orderId?: number; orderNo?: string }[]>()
+  orders.forEach((o) => {
+    o.legs.forEach((leg) => {
+      const plate = leg.plateNo || leg.driverName || '未知车辆'
+      if (!groups.has(plate)) groups.set(plate, [])
+      groups.get(plate)!.push({ leg: leg as LinkLeg, orderId: o.orderId, orderNo: o.orderNo })
+    })
+  })
+  const list: RouteView[] = []
+  groups.forEach((rows, plate) => {
+    const sorted = [...rows].sort((a, b) => {
+      const ta = a.leg.estimatedArrival || ''
+      const tb = b.leg.estimatedArrival || ''
+      if (ta !== tb) return ta.localeCompare(tb)
+      return (a.leg.legSequence ?? 0) - (b.leg.legSequence ?? 0)
+    })
+    const points: { lng: number; lat: number }[] = []
+    const legRows: VehicleLegRow[] = []
+    const locatedStops: { stop: RouteStop; lng: number; lat: number }[] = []
+    let realSegments = 0
+    sorted.forEach((row, index) => {
+      const leg = row.leg
+      const key = legKey(leg)
+      const stored = (leg.navigationPolyline ?? [])
+        .filter((p) => p.longitude != null && p.latitude != null)
+        .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
+      const cached = legRoadCache.value.get(key)
+      const hasCoords =
+        leg.fromLongitude != null && leg.fromLatitude != null && leg.toLongitude != null && leg.toLatitude != null
+      if (hasCoords) {
+        ensureLegRoad(key, leg.fromLongitude!, leg.fromLatitude!, leg.toLongitude!, leg.toLatitude!)
+      }
+      const fallback = hasCoords
+        ? [
+            { lng: Number(leg.fromLongitude), lat: Number(leg.fromLatitude) },
+            { lng: Number(leg.toLongitude), lat: Number(leg.toLatitude) }
+          ]
+        : []
+      const real = stored.length >= 2 ? stored : (cached && cached.length >= 2 ? cached : null)
+      const road = real ?? fallback
+      const estimated = !real
+      if (!estimated) realSegments++
+      road.forEach((p, i) => {
+        // 段与段的衔接点重合：跳过下一段的首点，避免重复点造成线头/播放抖动
+        if (i === 0 && index > 0) return
+        points.push(p)
+      })
+      legRows.push({
+        seq: index + 1,
+        orderId: row.orderId,
+        orderNo: row.orderNo,
+        fromName: leg.fromStationName || '—',
+        toName: leg.toStationName || '—',
+        plateNo: leg.plateNo,
+        driverName: leg.driverName,
+        estimated,
+        handoverText: leg.handoverTarget ? `在 ${leg.toStationName || '本站'} 交给 ${leg.handoverTarget}` : '',
+        timeText: timeText(leg.estimatedArrival),
+        distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-'
+      })
+      // 地图经停点标记：每段的到达站（换乘段标「途经」，最后一段标「派送」）
+      if (hasCoords) {
+        locatedStops.push({
+          stop: {
+            stationId: undefined,
+            stationName: leg.toStationName,
+            actionType: leg.handoverTarget ? 6 : 3,
+            visitSequence: index + 1,
+            orderNo: row.orderNo
+          } as unknown as RouteStop,
+          lng: Number(leg.toLongitude),
+          lat: Number(leg.toLatitude)
+        })
+      }
+    })
+    const orderNos = [...new Set(rows.map((r) => r.orderNo).filter(Boolean) as string[])]
+    const distanceKm = sorted.reduce((sum, r) => sum + (Number(r.leg.distanceKm) || 0), 0)
+    const driver = sorted.map((r) => r.leg).find((l) => l.driverName)?.driverName
+    list.push({
+      key: `leg-${plate}`,
+      color: plateColorMap.value.get(plate) || '#909399',
+      title: `${plate}${driver ? ` · ${driver}` : ''}`,
+      orderNos,
+      orderCount: orderNos.length,
+      stops: [],
+      locatedStops,
+      driverText: driver || '',
+      distanceKm,
+      distanceText: distanceKm ? distanceKm.toFixed(1) : '-',
+      points,
+      realSegments,
+      totalSegments: legRows.length,
+      legs: legRows,
+      plateNo: plate
+    })
+  })
+  return list
+}
+
+/** 按车辆视角的线路（运输段口径）；没有运输段时 visibleRoutes 会退回算法经停明细 */
+const vehicleLegRoutes = computed<RouteView[]>(() => buildLegRoutes())
+
+/** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
   const list: RouteView[] = []
   // 颜色在所有方案间全局递增：保证同屏每台车颜色都不同（原来按方案重置，多车会撞色）
-  const color = { n: 0 }
+  let colorIndex = 0
   plans.value.forEach((plan) => {
-    // P0-B：多段联运——车辆视角必须由「本方案的运输段」聚合，与订单视角同源，
-    // 否则会退化成"同一台车跨片区跑往返"（算法给的单车经停明细与分段接力结论相反）。
-    const roadmap = legRoadmaps.value.find((r) => r?.planId === plan.id)
-    if (roadmap?.source === 'LEG' && (roadmap.segments ?? []).length) {
-      buildLegRoutes(plan, roadmap, list, color)
-      return
-    }
     const byVehicle = new Map<number, RouteStop[]>()
     ;(plan.items ?? []).forEach((item) => {
       const key = item.vehicleId ?? 0
@@ -650,7 +841,7 @@ const buildRoutes = () => {
       list.push({
         key: `${plan.id}-${vehicleId}`,
         planId: plan.id,
-        color: ROUTE_COLORS[color.n++ % ROUTE_COLORS.length],
+        color: ROUTE_COLORS[colorIndex++ % ROUTE_COLORS.length],
         title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
         orderNos,
         orderCount: orderNos.length,
@@ -666,99 +857,6 @@ const buildRoutes = () => {
     })
   })
   routes.value = list
-}
-
-/** P0-B：按本方案运输段（roadmap source=LEG）聚合出每车一条线路，车辆视角与订单视角同源 */
-const buildLegRoutes = (
-  plan: DispatchApi.DispatchPlanRespVO,
-  roadmap: DispatchApi.DispatchRoadmapRespVO,
-  list: RouteView[],
-  color: { n: number }
-) => {
-  const orderNoOf = (orderId?: number) =>
-    orderId == null ? '' : (plan.items ?? []).find((i) => i.orderId === orderId)?.orderNo || ''
-  const byVehicle = new Map<number, DispatchApi.DispatchRoadmapSegment[]>()
-  ;(roadmap.segments ?? []).forEach((seg) => {
-    const key = seg.vehicleId ?? 0
-    if (!byVehicle.has(key)) byVehicle.set(key, [])
-    byVehicle.get(key)!.push(seg)
-  })
-  byVehicle.forEach((segs, vehicleId) => {
-    segs.sort((a, b) => (a.visitSequence ?? 0) - (b.visitSequence ?? 0))
-    const stops: RouteStop[] = []
-    const locatedStops: { stop: RouteStop; lng: number; lat: number }[] = []
-    const points: { lng: number; lat: number }[] = []
-    const orderNos = new Set<string>()
-    let realSegments = 0
-    let totalSegments = 0
-    segs.forEach((seg, idx) => {
-      const no = orderNoOf(seg.orderId)
-      if (no) orderNos.add(no)
-      const from = stationCoord(seg.fromStationId)
-      const to = stationCoord(seg.toStationId)
-      if (idx === 0) {
-        const fromStop: RouteStop = {
-          vehicleId,
-          stationId: seg.fromStationId,
-          stationName: seg.fromStationName,
-          orderNo: no,
-          visitSequence: 0,
-          actionType: 4 // 揽收
-        }
-        stops.push(fromStop)
-        if (from && from.longitude && from.latitude) {
-          locatedStops.push({ stop: fromStop, lng: Number(from.longitude), lat: Number(from.latitude) })
-          points.push({ lng: Number(from.longitude), lat: Number(from.latitude) })
-        }
-      }
-      const toStop: RouteStop = {
-        vehicleId,
-        stationId: seg.toStationId,
-        stationName: seg.toStationName,
-        orderNo: no,
-        visitSequence: idx + 1,
-        actionType: seg.handoverRequired ? 6 : 3 // 换乘中 / 派送
-      }
-      stops.push(toStop)
-      if (to && to.longitude && to.latitude) {
-        locatedStops.push({ stop: toStop, lng: Number(to.longitude), lat: Number(to.latitude) })
-      }
-      // 轨迹：优先后端真实道路分段，缺段回退两点直线
-      totalSegments++
-      const key = `${plan.id}:${vehicleId}:${seg.visitSequence ?? 0}`
-      const real = roadmapSegments.value.get(key)
-      if (real) realSegments++
-      const segPoints = real
-        ? real.points
-        : from && to && from.longitude && from.latitude && to.longitude && to.latitude
-          ? [
-              { lng: Number(from.longitude), lat: Number(from.latitude) },
-              { lng: Number(to.longitude), lat: Number(to.latitude) }
-            ]
-          : []
-      segPoints.forEach((p, i) => {
-        if (i === 0) return
-        points.push(p)
-      })
-    })
-    const orderNoList = [...orderNos]
-    list.push({
-      key: `${plan.id}-${vehicleId}`,
-      planId: plan.id,
-      color: ROUTE_COLORS[color.n++ % ROUTE_COLORS.length],
-      title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
-      orderNos: orderNoList,
-      orderCount: orderNoList.length,
-      stops,
-      locatedStops,
-      driverText: '',
-      distanceKm: 0,
-      distanceText: '-',
-      points,
-      realSegments,
-      totalSegments
-    })
-  })
 }
 
 // ==================== 地图（百度 BMapGL；坐标为 GCJ-02 → 上图前转 BD-09） ====================
@@ -870,6 +968,10 @@ const drawMap = () => {
       strokeOpacity: 0.9,
       strokeStyle: allReal ? 'solid' : 'dashed'
     })
+    // 点线路 = 选中这台车（只显示它的线路与作业点，其余车辆自动隐藏）
+    try {
+      polyline.addEventListener('click', () => selectVehicleByKey(route.key))
+    } catch (e) { /* 老版本 SDK 不支持事件绑定：不影响绘图 */ }
     map.addOverlay(polyline)
     overlays.value.push(polyline)
     allPoints.push(...path)
@@ -878,6 +980,9 @@ const drawMap = () => {
       const bd = gcj02ToBd09(located.lng, located.lat)
       const point = new BMapGL.Point(bd.lng, bd.lat)
       const marker = new BMapGL.Circle(point, 8, { strokeColor: '#fff', strokeWeight: 2, fillColor: route.color, fillOpacity: 1 })
+      try {
+        marker.addEventListener('click', () => selectVehicleByKey(route.key))
+      } catch (e) { /* ignore */ }
       map.addOverlay(marker)
       overlays.value.push(marker)
       const label = new BMapGL.Label(
@@ -1188,7 +1293,6 @@ const load = async () => {
       })
     })
     roadmapSegments.value = segmentMap
-    legRoadmaps.value = roadmaps.filter((r): r is DispatchApi.DispatchRoadmapRespVO => !!r)
     activePlanId.value = 0
     buildRoutes()
   } finally {
@@ -1238,21 +1342,6 @@ onBeforeUnmount(stopPlay)
     color: var(--el-color-primary);
     font-size: 15px;
   }
-}
-.viz-reason {
-  margin-top: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--el-text-color-regular);
-  background: var(--el-fill-color-light);
-  border-left: 3px solid var(--el-color-primary);
-  border-radius: 4px;
-}
-.viz-reason-label {
-  margin-right: 8px;
-  font-weight: 600;
-  color: var(--el-color-primary);
 }
 .viz-body {
   display: flex;
@@ -1358,6 +1447,14 @@ onBeforeUnmount(stopPlay)
 }
 .legend-vehicle-meta {
   color: var(--el-text-color-secondary);
+}
+/* 点图例/地图线路即选中该车：只显示这一台车的线路与作业点（换车自动隐藏上一条） */
+.legend-vehicle-clickable {
+  cursor: pointer;
+}
+.legend-vehicle-clickable.picked {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 1px;
 }
 .viz-legend .legend-item {
   display: inline-flex;

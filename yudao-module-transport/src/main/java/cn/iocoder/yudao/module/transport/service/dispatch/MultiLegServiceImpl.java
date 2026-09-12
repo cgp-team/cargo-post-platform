@@ -1172,6 +1172,56 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             // 而"同一辆车在同一时段承运多张订单"正是拼单/共载的正常形态，再判冲突会把共载挡掉。
 
+            if (planned != null && planned.getVehicleId() != null && legs.size() > 1) {
+
+                // 多段联运：算法按"单车满载"给的车可能不在本段运营范围内（跨片区整段派一台车）。
+
+                // 若该车绑定了运营线路而本段起终点不在其范围内，则改由"本段范围内"的车承运，
+
+                // 在换乘站与上一段交接；找不到范围内车辆时才回退沿用算法分配（不阻断调度）。
+
+                final Long plannedVehicleId = planned.getVehicleId();
+
+                DriverVehicleDO plannedBinding = bindings.stream()
+
+                        .filter(b -> Objects.equals(b.getVehicleId(), plannedVehicleId))
+
+                        .findFirst().orElse(null);
+
+                if (plannedBinding != null && plannedBinding.getRouteId() != null
+
+                        && !withinOperatingScope(plannedBinding, leg)) {
+
+                    java.util.Set<Long> inScopeUsed = assigned.stream().map(TransportLegDO::getVehicleId)
+
+                            .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+
+                    DriverVehicleDO scoped = pickBinding(bindings, leg, assigned, inScopeUsed, true, true, true);
+
+                    if (scoped == null) {
+
+                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, true);
+
+                    }
+
+                    if (scoped != null) {
+
+                        leg.setVehicleId(scoped.getVehicleId());
+
+                        leg.setDriverId(scoped.getDriverId());
+
+                        leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
+
+                        assigned.add(leg);
+
+                        continue;
+
+                    }
+
+                }
+
+            }
+
             if (planned != null && planned.getVehicleId() != null) {
 
                 leg.setVehicleId(planned.getVehicleId());
@@ -1240,11 +1290,66 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                                         boolean strictUnused) {
 
+        // 分工优先级（业务约定）：
+        //   1) 同体系 + 运营线路覆盖本段起终点（自建段用自建车、真实段用渝A车，且车不越界）
+        //   2) 同体系（体系不能混：CQUPT 车不跑真实线路、渝A 车不跑自建线路）
+        //   3) 仅运营范围覆盖（历史数据没绑线路时的兜底）
+        //   4) 全量兜底（保证任何情况下都有人可派，不因新规则卡死）
+        DriverVehicleDO inScope = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, true);
+
+        if (inScope != null) {
+
+            return inScope;
+
+        }
+
+        DriverVehicleDO sameSystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, true);
+
+        if (sameSystem != null) {
+
+            return sameSystem;
+
+        }
+
+        DriverVehicleDO scopedOnly = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false);
+
+        if (scopedOnly != null) {
+
+            return scopedOnly;
+
+        }
+
+        return pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, false);
+
+    }
+
+
+
+    private DriverVehicleDO pickBinding(List<DriverVehicleDO> bindings, TransportLegDO leg,
+
+                                        List<TransportLegDO> assigned, java.util.Set<Long> usedVehicles,
+
+                                        boolean strictUnused, boolean requireInScope, boolean requireSameSystem) {
+
+        boolean legSelfBuilt = legIsSelfBuilt(leg);
+
         for (DriverVehicleDO binding : bindings) {
 
             if (strictUnused && usedVehicles.contains(binding.getVehicleId())) {
 
                 continue;
+
+            }
+
+            if (requireInScope && !withinOperatingScope(binding, leg)) {
+
+                continue;
+
+            }
+
+            if (requireSameSystem && isSelfBuiltBinding(binding) != legSelfBuilt) {
+
+                continue; // 体系隔离：自建段只派自建车，真实段只派渝A车
 
             }
 
@@ -1265,6 +1370,186 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
 
         return null;
+
+    }
+
+
+
+    /** 运营线路 → 覆盖站点集合（一次加载后缓存；线路站点是静态基础数据） */
+
+    private final java.util.Map<Long, java.util.Set<Long>> operatingScopeCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+
+
+    private java.util.Set<Long> operatingScopeStations(Long routeId) {
+
+        return operatingScopeCache.computeIfAbsent(routeId, id -> {
+
+            if (routeStationMapper == null) {
+
+                return java.util.Set.of();
+
+            }
+
+            return routeStationMapper.selectListByRouteIds(java.util.List.of(id)).stream()
+
+                    .map(cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO::getStationId)
+
+                    .filter(Objects::nonNull)
+
+                    .collect(java.util.stream.Collectors.toSet());
+
+        });
+
+    }
+
+
+
+    /** 该段是否属于自建体系：起终点都是自建站点（PROJECT）。真实线路段与自建段据此分工 */
+
+    private boolean legIsSelfBuilt(TransportLegDO leg) {
+
+        if (leg == null || leg.getFromStationId() == null || leg.getToStationId() == null || stationMapper == null) {
+
+            return false;
+
+        }
+
+        return isProjectStation(stationMapper.selectById(leg.getFromStationId()))
+
+                && isProjectStation(stationMapper.selectById(leg.getToStationId()));
+
+    }
+
+
+
+    private static boolean isProjectStation(StationDO station) {
+
+        return station != null && "PROJECT".equalsIgnoreCase(station.getSourceType());
+
+    }
+
+
+
+    /** 该人车绑定是否属于自建体系：其运营线路是项目自建线路（自建车辆 = CQUPT 编号车牌） */
+
+    private boolean isSelfBuiltBinding(DriverVehicleDO binding) {
+
+        if (binding == null || binding.getRouteId() == null || routeMapper == null) {
+
+            return false;
+
+        }
+
+        var route = routeMapper.selectById(binding.getRouteId());
+
+        return route != null && "PROJECT".equalsIgnoreCase(route.getSourceType());
+
+    }
+
+
+
+    /**
+     * 该人车绑定的运营线路是否覆盖本段起终点（未绑线路=不限范围，只能走回退轮）。
+     *
+     * <p>两种口径取并集：</p>
+     * <ol>
+     *   <li><b>站点口径</b>：本段起终点就是该线路的站点（共站换乘）；</li>
+     *   <li><b>地理口径</b>：本段起终点都落在线路站点的运营半径内（默认 1.5km）——
+     *       即"这条线路在这片区域有真实公交运营"，此时派该线路的车是合理的
+     *       （例：南山游客中心/四公里一带本就有真实公交运营，渝A车承接这一段不算越界）。</li>
+     * </ol>
+     */
+
+    private static final double OPERATING_RANGE_KM = 1.5;
+
+
+
+    private boolean withinOperatingScope(DriverVehicleDO binding, TransportLegDO leg) {
+
+        if (binding.getRouteId() == null || leg.getFromStationId() == null || leg.getToStationId() == null) {
+
+            return false;
+
+        }
+
+        java.util.Set<Long> scope = operatingScopeStations(binding.getRouteId());
+
+        if (scope.contains(leg.getFromStationId()) && scope.contains(leg.getToStationId())) {
+
+            return true; // 站点口径：共站
+
+        }
+
+        // 地理口径：本段起终点都在该线路站点的运营半径内
+
+        return nearRouteStations(binding.getRouteId(), leg.getFromStationId())
+
+                && nearRouteStations(binding.getRouteId(), leg.getToStationId());
+
+    }
+
+
+
+    /** 站点是否落在该线路的运营半径内（按线路站点的经纬度判断） */
+
+    private boolean nearRouteStations(Long routeId, Long stationId) {
+
+        StationDO station = stationMapper == null || stationId == null ? null : stationMapper.selectById(stationId);
+
+        if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+
+            return false;
+
+        }
+
+        java.util.List<StationDO> stops = operatingScopeStationsDetailed(routeId);
+
+        double lon = station.getLongitude().doubleValue();
+
+        double lat = station.getLatitude().doubleValue();
+
+        return stops.stream()
+
+                .filter(s -> s.getLongitude() != null && s.getLatitude() != null)
+
+                .anyMatch(s -> cn.iocoder.yudao.module.transport.util.GeoDistanceUtil.haversineKm(
+
+                        lon, lat, s.getLongitude().doubleValue(), s.getLatitude().doubleValue())
+
+                        <= OPERATING_RANGE_KM);
+
+    }
+
+
+
+    private final java.util.Map<Long, java.util.List<StationDO>> operatingScopeStationCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+
+
+    private java.util.List<StationDO> operatingScopeStationsDetailed(Long routeId) {
+
+        return operatingScopeStationCache.computeIfAbsent(routeId, id -> {
+
+            if (routeStationMapper == null || stationMapper == null) {
+
+                return java.util.List.of();
+
+            }
+
+            java.util.List<Long> stationIds = routeStationMapper.selectListByRouteIds(java.util.List.of(id)).stream()
+
+                    .map(cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO::getStationId)
+
+                    .filter(Objects::nonNull)
+
+                    .distinct()
+
+                    .toList();
+
+            return stationIds.isEmpty() ? java.util.List.of() : stationMapper.selectBatchIds(stationIds);
+
+        });
 
     }
 
@@ -1375,6 +1660,13 @@ public class MultiLegServiceImpl implements MultiLegService {
                 if (binding.getVehicleId() == null || used.contains(binding.getVehicleId())) {
 
                     continue; // 跳过本单已用车辆：换乘的意义就是"换一台车"
+
+                }
+
+                // 体系隔离：改派同样不能串体系（自建段只换自建车、真实段只换渝A车）
+                if (isSelfBuiltBinding(binding) != legIsSelfBuilt(leg)) {
+
+                    continue;
 
                 }
 
