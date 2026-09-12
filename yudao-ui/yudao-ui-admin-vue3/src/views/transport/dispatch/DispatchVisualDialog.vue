@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <Dialog v-model="visible" title="调度结果可视化" width="1180px">
     <div v-loading="loading" class="viz">
       <!-- 方案切换 + 汇总 -->
