@@ -15,6 +15,9 @@
           <span>车辆 <b>{{ summary.vehicleCount }}</b> 台</span>
           <span>总里程 <b>{{ summary.distanceText }}</b> km</span>
         </div>
+        <div v-if="activePlanReason" class="viz-reason">
+          <span class="viz-reason-label">方案解释</span>{{ activePlanReason }}
+        </div>
       </div>
 
       <div class="viz-body">
@@ -307,6 +310,8 @@ const vehicleName = (id?: number) =>
  * 由后端 /transport/dispatch/plan/roadmap 按「车辆 + 经停序号」给出（高德驾车路网，带缓存）。
  */
 const roadmapSegments = ref<Map<string, { provider: string; points: { lng: number; lat: number }[] }>>(new Map())
+/** 原始道路轨迹响应（P0-B：source=LEG 时按运输段聚合车辆视角，plan item 只留站点与作业） */
+const legRoadmaps = ref<DispatchApi.DispatchRoadmapRespVO[]>([])
 
 const actionLabel = (action?: number) =>
   ({ 0: '场站发车', 1: '乘客上车', 2: '乘客下车', 3: '派送', 4: '揽收', 5: '返场', 6: '途经' }[action ?? -1] || '经停')
@@ -349,6 +354,15 @@ const summary = computed(() => {
     vehicleCount: vehicleIds.size,
     distanceText: distance ? distance.toFixed(1) : '-'
   }
+})
+
+/** 当前选中方案的方案解释（为什么直达/为什么联运）；"全部方案"时取第一套有解释的 */
+const activePlanReason = computed(() => {
+  const shown = activePlanId.value
+    ? plans.value.filter((p) => p.id === activePlanId.value)
+    : plans.value
+  const plan = shown.find((p) => p.planReason) ?? shown[0]
+  return plan?.planReason || ''
 })
 
 const visibleRoutes = computed(() =>
@@ -581,12 +595,19 @@ const handoverInfoFor = (stationId?: number, stationNameStr?: string): string =>
   return `交给 ${target}`
 }
 
-/** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
+/** 组装"每车一条线路"：多段联运方案（roadmap.source=LEG）按运输段聚合，否则按经停明细 */
 const buildRoutes = () => {
   const list: RouteView[] = []
   // 颜色在所有方案间全局递增：保证同屏每台车颜色都不同（原来按方案重置，多车会撞色）
-  let colorIndex = 0
+  const color = { n: 0 }
   plans.value.forEach((plan) => {
+    // P0-B：多段联运——车辆视角必须由「本方案的运输段」聚合，与订单视角同源，
+    // 否则会退化成"同一台车跨片区跑往返"（算法给的单车经停明细与分段接力结论相反）。
+    const roadmap = legRoadmaps.value.find((r) => r?.planId === plan.id)
+    if (roadmap?.source === 'LEG' && (roadmap.segments ?? []).length) {
+      buildLegRoutes(plan, roadmap, list, color)
+      return
+    }
     const byVehicle = new Map<number, RouteStop[]>()
     ;(plan.items ?? []).forEach((item) => {
       const key = item.vehicleId ?? 0
@@ -629,7 +650,7 @@ const buildRoutes = () => {
       list.push({
         key: `${plan.id}-${vehicleId}`,
         planId: plan.id,
-        color: ROUTE_COLORS[colorIndex++ % ROUTE_COLORS.length],
+        color: ROUTE_COLORS[color.n++ % ROUTE_COLORS.length],
         title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
         orderNos,
         orderCount: orderNos.length,
@@ -645,6 +666,99 @@ const buildRoutes = () => {
     })
   })
   routes.value = list
+}
+
+/** P0-B：按本方案运输段（roadmap source=LEG）聚合出每车一条线路，车辆视角与订单视角同源 */
+const buildLegRoutes = (
+  plan: DispatchApi.DispatchPlanRespVO,
+  roadmap: DispatchApi.DispatchRoadmapRespVO,
+  list: RouteView[],
+  color: { n: number }
+) => {
+  const orderNoOf = (orderId?: number) =>
+    orderId == null ? '' : (plan.items ?? []).find((i) => i.orderId === orderId)?.orderNo || ''
+  const byVehicle = new Map<number, DispatchApi.DispatchRoadmapSegment[]>()
+  ;(roadmap.segments ?? []).forEach((seg) => {
+    const key = seg.vehicleId ?? 0
+    if (!byVehicle.has(key)) byVehicle.set(key, [])
+    byVehicle.get(key)!.push(seg)
+  })
+  byVehicle.forEach((segs, vehicleId) => {
+    segs.sort((a, b) => (a.visitSequence ?? 0) - (b.visitSequence ?? 0))
+    const stops: RouteStop[] = []
+    const locatedStops: { stop: RouteStop; lng: number; lat: number }[] = []
+    const points: { lng: number; lat: number }[] = []
+    const orderNos = new Set<string>()
+    let realSegments = 0
+    let totalSegments = 0
+    segs.forEach((seg, idx) => {
+      const no = orderNoOf(seg.orderId)
+      if (no) orderNos.add(no)
+      const from = stationCoord(seg.fromStationId)
+      const to = stationCoord(seg.toStationId)
+      if (idx === 0) {
+        const fromStop: RouteStop = {
+          vehicleId,
+          stationId: seg.fromStationId,
+          stationName: seg.fromStationName,
+          orderNo: no,
+          visitSequence: 0,
+          actionType: 4 // 揽收
+        }
+        stops.push(fromStop)
+        if (from && from.longitude && from.latitude) {
+          locatedStops.push({ stop: fromStop, lng: Number(from.longitude), lat: Number(from.latitude) })
+          points.push({ lng: Number(from.longitude), lat: Number(from.latitude) })
+        }
+      }
+      const toStop: RouteStop = {
+        vehicleId,
+        stationId: seg.toStationId,
+        stationName: seg.toStationName,
+        orderNo: no,
+        visitSequence: idx + 1,
+        actionType: seg.handoverRequired ? 6 : 3 // 换乘中 / 派送
+      }
+      stops.push(toStop)
+      if (to && to.longitude && to.latitude) {
+        locatedStops.push({ stop: toStop, lng: Number(to.longitude), lat: Number(to.latitude) })
+      }
+      // 轨迹：优先后端真实道路分段，缺段回退两点直线
+      totalSegments++
+      const key = `${plan.id}:${vehicleId}:${seg.visitSequence ?? 0}`
+      const real = roadmapSegments.value.get(key)
+      if (real) realSegments++
+      const segPoints = real
+        ? real.points
+        : from && to && from.longitude && from.latitude && to.longitude && to.latitude
+          ? [
+              { lng: Number(from.longitude), lat: Number(from.latitude) },
+              { lng: Number(to.longitude), lat: Number(to.latitude) }
+            ]
+          : []
+      segPoints.forEach((p, i) => {
+        if (i === 0) return
+        points.push(p)
+      })
+    })
+    const orderNoList = [...orderNos]
+    list.push({
+      key: `${plan.id}-${vehicleId}`,
+      planId: plan.id,
+      color: ROUTE_COLORS[color.n++ % ROUTE_COLORS.length],
+      title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
+      orderNos: orderNoList,
+      orderCount: orderNoList.length,
+      stops,
+      locatedStops,
+      driverText: '',
+      distanceKm: 0,
+      distanceText: '-',
+      points,
+      realSegments,
+      totalSegments
+    })
+  })
 }
 
 // ==================== 地图（百度 BMapGL；坐标为 GCJ-02 → 上图前转 BD-09） ====================
@@ -1074,6 +1188,7 @@ const load = async () => {
       })
     })
     roadmapSegments.value = segmentMap
+    legRoadmaps.value = roadmaps.filter((r): r is DispatchApi.DispatchRoadmapRespVO => !!r)
     activePlanId.value = 0
     buildRoutes()
   } finally {
@@ -1123,6 +1238,21 @@ onBeforeUnmount(stopPlay)
     color: var(--el-color-primary);
     font-size: 15px;
   }
+}
+.viz-reason {
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+  background: var(--el-fill-color-light);
+  border-left: 3px solid var(--el-color-primary);
+  border-radius: 4px;
+}
+.viz-reason-label {
+  margin-right: 8px;
+  font-weight: 600;
+  color: var(--el-color-primary);
 }
 .viz-body {
   display: flex;
