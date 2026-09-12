@@ -40,8 +40,10 @@ ALGORITHM_VERSION = "haco-cps-1.4.1"
 PARAMETER_VERSION = "haco-cps-default-v1.4.1"
 BASELINE_VERSION = "ortools-1.3.0"
 
-# 与算法组回复一致的规模上限：30 站点 / 25 订单 / 3 车 / 10 秒计算超时
-MAX_STATIONS = 30
+# 与算法组回复一致的规模上限：100 站点 / 25 订单 / 3 车 / 10 秒计算超时
+# 站点上限从 30 放宽到 100：联合调度（公交线路骨架 + 货运绕行）时骨架站点会并入 station 快照，
+# 3 条真实公交线路 + 订单站点可达 70~80 站，旧的 30 站上限会整批拒掉。
+MAX_STATIONS = 100
 MAX_ORDERS = 25
 MAX_VEHICLES = 3
 
