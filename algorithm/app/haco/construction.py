@@ -603,8 +603,14 @@ def generate_insertion_candidates(
                             dd_delivery = max(0.0, d_new_del - d_orig_del)
 
                         dd = dd_pickup + dd_delivery
-                        # 绕行硬约束：偏离运营路线超过上限的插入直接跳过（订单留给多段联运）
-                        if max_detour_km is not None and dd > max_detour_km:
+                        # 绕行硬约束只约束货运任务（DELIVERY/PICKUP/SHIPMENT）：
+                        # 偏离运营路线超过上限的插入直接跳过（订单留给多段联运）。
+                        # 乘客任务沿公交线路上下车，无"偏离运营路线取送"语义，不受此约束。
+                        if (
+                            max_detour_km is not None
+                            and dd > max_detour_km
+                            and task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT)
+                        ):
                             continue
 
                         # duration estimate (same structure)
