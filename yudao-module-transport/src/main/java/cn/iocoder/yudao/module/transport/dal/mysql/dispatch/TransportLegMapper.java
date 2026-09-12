@@ -41,6 +41,20 @@ public interface TransportLegMapper extends BaseMapperX<TransportLegDO> {
                 .orderByAsc(TransportLegDO::getLegSequence));
     }
 
+    /**
+     * 按「方案 + 订单」查运输段（段序升序）。
+     *
+     * 用于多段联运的幂等判定：幂等维度必须是<b>方案</b>而不是订单。
+     * 只按 order_id 查会让新方案复用旧方案的段（P0-A：新方案在 transport_leg 里 0 行，
+     * 聚合字段却来自旧段，司机端拿到的任务与当前方案错位）。
+     */
+    default List<TransportLegDO> selectListByPlanIdAndOrderId(Long planId, Long orderId) {
+        return selectList(new LambdaQueryWrapperX<TransportLegDO>()
+                .eq(TransportLegDO::getPlanId, planId)
+                .eq(TransportLegDO::getOrderId, orderId)
+                .orderByAsc(TransportLegDO::getLegSequence));
+    }
+
     /** 查某司机当前"进行中"的运输段（已分配~运输中，用于司机端当前任务） */
     default List<TransportLegDO> selectActiveByDriverId(Long driverId) {
         return selectList(new LambdaQueryWrapperX<TransportLegDO>()

@@ -186,6 +186,10 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
 
+    /** 运输段（P0-1 失败兜底清理半成品方案时需要按 planId 删除本方案已生成的段） */
+
+    @Resource private TransportLegMapper legMapper;
+
     @Resource private DepartureCheckMapper departureCheckMapper;
 
     @Resource private AlgorithmAdapter algorithmAdapter;
@@ -679,7 +683,21 @@ public class DispatchServiceImpl implements DispatchService {
 
                 .build();
 
-        dispatchTaskMapper.insert(task);
+        // P0-1：抢占成功之后，任何落库动作失败都必须把订单释放回池子（本方法不回滚，见方法头注释）
+
+        try {
+
+            dispatchTaskMapper.insert(task);
+
+        } catch (RuntimeException ex) {
+
+            // 任务落库失败同样要释放：否则订单会停在「已分配」且订单池被清空，无法重跑
+
+            releaseClaimedOrders(pooledIds);
+
+            throw ex;
+
+        }
 
 
 
@@ -691,7 +709,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             result = algorithmAdapter.plan(algorithmReq);
 
-        } catch (ServiceException ex) {
+        } catch (RuntimeException ex) {
 
             task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
 
@@ -727,11 +745,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         dispatchTaskMapper.updateById(task);
 
+        // P0-1：以下进入「方案落库阶段」。本方法所在事务 noRollbackFor=ServiceException，异常不会自动
+        // 回滚，因此这里显式兜底：任何异常 → 清理半成品方案 + 抢占订单回池，保证「要么成方案、要么回池」。
+
+        DispatchPlanDO plan = null;
+
+        try {
+
         // 总里程：按算法返回的里程单位处理——degree 时按经停站点坐标 Haversine 换算真实公里，km 时直接使用
 
         BigDecimal totalDistanceKm = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
 
-        DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
+        plan = createPlan(task, DispatchPlanModeEnum.SMART,
 
                 totalDistanceKm, result.getAlgorithmVersion(), result.getParameterVersion());
 
@@ -893,6 +918,21 @@ public class DispatchServiceImpl implements DispatchService {
 
         return plan.getId();
 
+        } catch (RuntimeException ex) {
+
+            // P0-1 兜底：清理半成品方案 + 抢占订单回池，绝不留下「已分配但无方案」的脏订单。
+            // 顺序说明：先清方案（此时订单仍为已分配，删除不会误伤在途数据），再放订单回池。
+
+            failDispatchTask(task, ex);
+
+            cleanupPartialPlan(plan);
+
+            releaseClaimedOrders(pooledIds);
+
+            throw ex;
+
+        }
+
     }
 
 
@@ -902,6 +942,94 @@ public class DispatchServiceImpl implements DispatchService {
     private void releaseClaimedOrders(List<Long> orderIds) {
 
         updateOrdersStatus(orderIds, TransportOrderStatusEnum.POOLED, TransportOrderStatusEnum.ASSIGNED);
+
+    }
+
+
+
+    /**
+     * P0-1：清理「半成品方案」。方案落库阶段（createPlan 之后）任一异常都要把已落库的方案、
+     * 经停明细、本方案的运输段、状态日志一起删掉，避免留下「方案存在但订单已回池」的孤儿数据
+     * ——孤儿段会在下一次一键演示时被复用（P0-A），订单视角与方案视角因而错位。
+     *
+     * 清理本身是最佳努力：失败只记日志，绝不掩盖原始异常。
+     */
+
+    private void cleanupPartialPlan(DispatchPlanDO plan) {
+
+        if (plan == null || plan.getId() == null) {
+
+            return;
+
+        }
+
+        Long planId = plan.getId();
+
+        try {
+
+            if (legMapper != null) {
+
+                legMapper.delete(new LambdaQueryWrapperX<TransportLegDO>()
+
+                        .eq(TransportLegDO::getPlanId, planId));
+
+            }
+
+            dispatchPlanItemMapper.delete(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+
+                    .eq(DispatchPlanItemDO::getPlanId, planId));
+
+            dispatchPlanLogMapper.delete(new LambdaQueryWrapperX<DispatchPlanLogDO>()
+
+                    .eq(DispatchPlanLogDO::getPlanId, planId));
+
+            dispatchPlanMapper.deleteById(planId);
+
+            log.warn("[createSmartPlan] 方案 {} 落库阶段失败，已清理半成品方案并释放抢占订单", planId);
+
+        } catch (Exception ex) {
+
+            log.warn("[createSmartPlan] 清理半成品方案 {} 失败：{}", planId, ex.getMessage());
+
+        }
+
+    }
+
+
+
+    /** P0-1：技术异常时把调度任务置为失败并记录根因（事务不回滚，任务终态需要落库供后台排查） */
+
+    private void failDispatchTask(DispatchTaskDO task, Exception ex) {
+
+        if (task == null || task.getId() == null) {
+
+            return;
+
+        }
+
+        try {
+
+            Throwable root = ex;
+
+            while (root.getCause() != null && root.getCause() != root) {
+
+                root = root.getCause();
+
+            }
+
+            String detail = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
+
+            task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
+
+            task.setErrorMessage(StrUtil.sub(detail, 0, 500));
+
+            dispatchTaskMapper.updateById(task);
+
+        } catch (Exception e) {
+
+            log.warn("[createSmartPlan] 回写调度任务失败状态出错：{}", e.getMessage());
+
+        }
 
     }
 
@@ -1305,6 +1433,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         validatePlanExists(id);
 
+        // P0-B：多段联运方案必须「车辆视角 = 订单视角」。运输段（transport_leg）才是车辆真实的行驶轨迹：
+        // 订单视角是 v3→v101→v5 接力，而算法的单车经停明细会让同一台车跨片区「南岸→重大→再回来」。
+        // 本方案的段存在时，一律按「leg.vehicleId + 段序」出段（plan item 只保留站点与作业）。
+
+        List<TransportLegDO> planLegs = legMapper == null ? List.of() : legMapper.selectListByPlanId(id);
+
+        if (!planLegs.isEmpty()) {
+
+            return buildLegRoadmap(id, planLegs);
+
+        }
+
         List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
 
                 .eq(DispatchPlanItemDO::getPlanId, id)
@@ -1318,6 +1458,8 @@ public class DispatchServiceImpl implements DispatchService {
         respVO.setPlanId(id);
 
         if (items.isEmpty()) {
+
+            respVO.setSource("ITEM");
 
             respVO.setProvider("EUCLIDEAN");
 
@@ -1443,9 +1585,216 @@ public class DispatchServiceImpl implements DispatchService {
 
         respVO.setSegments(segments);
 
+        respVO.setSource("ITEM"); // 无运输段（手工方案/历史数据）：退化口径，前端按经停明细绘图
+
         respVO.setProvider(anyReal && anyFallback ? "MIXED" : (anyReal ? "AMAP" : "EUCLIDEAN"));
 
         return respVO;
+
+    }
+
+
+
+    /**
+
+     * P0-B：按「本方案的运输段」出段（车辆视角 = 订单视角）。
+
+     *
+
+     * 每台车在本方案内的段按「预计出发时间 → 订单内段序 → 订单编号」排序，段序号从 1 递增
+
+     * （前端用它做「该车第 N 段」的轨迹 key）；段上已缓存的高德轨迹直接用，缺轨迹时才按需补一次路网
+
+     * （同时省掉前端 30 秒冷却重试）。
+
+     */
+
+    private DispatchRoadmapRespVO buildLegRoadmap(Long planId, List<TransportLegDO> legs) {
+
+        DispatchRoadmapRespVO respVO = new DispatchRoadmapRespVO();
+
+        respVO.setPlanId(planId);
+
+        respVO.setSource("LEG");
+
+        Set<Long> stationIds = legs.stream()
+
+                .flatMap(leg -> java.util.stream.Stream.of(leg.getFromStationId(), leg.getToStationId()))
+
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+
+        Map<Long, StationDO> stationMap = stationIds.isEmpty() ? Map.of()
+
+                : stationMapper.selectBatchIds(stationIds).stream()
+
+                        .collect(Collectors.toMap(StationDO::getId, s -> s, (a, b) -> a));
+
+        // 按车辆分组（车辆为空归到 0，前端同样按 0 兜底）
+        Map<Long, List<TransportLegDO>> byVehicle = new LinkedHashMap<>();
+
+        for (TransportLegDO leg : legs) {
+
+            byVehicle.computeIfAbsent(leg.getVehicleId() == null ? 0L : leg.getVehicleId(),
+
+                    k -> new ArrayList<>()).add(leg);
+
+        }
+
+        List<DispatchRoadmapRespVO.Segment> segments = new ArrayList<>();
+
+        boolean anyReal = false;
+
+        boolean anyFallback = false;
+
+        for (Map.Entry<Long, List<TransportLegDO>> entry : byVehicle.entrySet()) {
+
+            List<TransportLegDO> vehicleLegs = entry.getValue();
+
+            vehicleLegs.sort(Comparator
+
+                    .comparing(TransportLegDO::getEstimatedDeparture,
+
+                            Comparator.nullsLast(Comparator.naturalOrder()))
+
+                    .thenComparing(TransportLegDO::getLegSequence, Comparator.nullsLast(Comparator.naturalOrder()))
+
+                    .thenComparing(TransportLegDO::getOrderId, Comparator.nullsLast(Comparator.naturalOrder())));
+
+            int sequence = 0; // 只对"能画出轨迹"的段计数，保证与前端跳过的无效冲点一致
+
+            for (TransportLegDO leg : vehicleLegs) {
+
+                StationDO from = leg.getFromStationId() == null ? null : stationMap.get(leg.getFromStationId());
+
+                StationDO to = leg.getToStationId() == null ? null : stationMap.get(leg.getToStationId());
+
+                if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+
+                        || to.getLongitude() == null || to.getLatitude() == null) {
+
+                    continue;
+
+                }
+
+                sequence++;
+
+                List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
+
+                if (road == null) {
+
+                    road = roadPolylineService.route(
+
+                            from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+
+                            to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+
+                }
+
+                boolean real = road != null && road.size() >= 2;
+
+                if (real) {
+
+                    anyReal = true;
+
+                } else {
+
+                    anyFallback = true;
+
+                }
+
+                List<double[]> points = real ? road : List.of(
+
+                        new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
+
+                        new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
+
+                DispatchRoadmapRespVO.Segment segment = new DispatchRoadmapRespVO.Segment();
+
+                segment.setVehicleId(entry.getKey() == 0L ? leg.getVehicleId() : entry.getKey());
+
+                segment.setVisitSequence(sequence);
+
+                segment.setLegId(leg.getId());
+
+                segment.setOrderId(leg.getOrderId());
+
+                segment.setLegSequence(leg.getLegSequence());
+
+                segment.setHandoverRequired(leg.getHandoverRequired());
+
+                segment.setFromStationId(from.getId());
+
+                segment.setToStationId(to.getId());
+
+                segment.setFromStationName(from.getStationName());
+
+                segment.setToStationName(to.getStationName());
+
+                segment.setProvider(real ? "AMAP" : "EUCLIDEAN");
+
+                segment.setPoints(points.stream().map(p -> {
+
+                    DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
+
+                    point.setLongitude(p[0]);
+
+                    point.setLatitude(p[1]);
+
+                    return point;
+
+                }).toList());
+
+                segments.add(segment);
+
+            }
+
+        }
+
+        respVO.setSegments(segments);
+
+        respVO.setProvider(anyReal && anyFallback ? "MIXED" : (anyReal ? "AMAP" : "EUCLIDEAN"));
+
+        return respVO;
+
+    }
+
+
+
+    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
+
+    private static List<double[]> parseNavigationPolyline(String polyline) {
+
+        if (StrUtil.isBlank(polyline)) {
+
+            return null;
+
+        }
+
+        List<double[]> points = new ArrayList<>();
+
+        for (String pair : polyline.split(";")) {
+
+            String[] lonLat = pair.split(",");
+
+            if (lonLat.length < 2) {
+
+                continue;
+
+            }
+
+            try {
+
+                points.add(new double[]{Double.parseDouble(lonLat[0].trim()), Double.parseDouble(lonLat[1].trim())});
+
+            } catch (NumberFormatException ignored) {
+
+                return null; // 脏数据：宁可补一次路网，也不要画出错误轨迹
+
+            }
+
+        }
+
+        return points.size() >= 2 ? points : null;
 
     }
 
