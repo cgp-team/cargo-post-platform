@@ -1160,3 +1160,11 @@ INSERT IGNORE INTO `simulation_scenario` (`id`, `tenant_id`, `name`, `descriptio
 -- 原先 image 为 varchar(32)，只能存 emoji 占位；换成真实商品照片后（外链/本地路径）长度不够。
 -- MODIFY 是幂等的，重复执行安全。
 ALTER TABLE `transport_product` MODIFY COLUMN `image` varchar(255) NOT NULL DEFAULT '' COMMENT '商品图片（本地路径或图片 URL，空=前端占位图）';
+
+-- ---------- V020（补）：调度方案 plan_reason 扩容 varchar(500) -> varchar(2000) ----------
+-- 背景：算法解释（为什么直达/为什么联运）合并多条原因后会超过 500 字符，落库时报
+--       Data too long for column 'plan_reason'，一键演示/智能调度因此中断（前端只看到失败提示）。
+-- 代码侧已按 2000 字符截断，但历史库的列宽仍是 500；transport-schema.sql 用 CREATE TABLE IF NOT EXISTS，
+-- 不会修改已存在的表，所以必须在本增量文件里把列改宽（MODIFY 幂等，可重复执行）。
+ALTER TABLE `transport_dispatch_plan`
+  MODIFY COLUMN `plan_reason` varchar(2000) NOT NULL DEFAULT '' COMMENT '方案解释（为什么直达/为什么联运）';

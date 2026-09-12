@@ -28,6 +28,7 @@ public interface TransportUserNotificationMapper extends BaseMapperX<TransportUs
                                                                        PageParam pageParam) {
         return selectPage(pageParam, new LambdaQueryWrapperX<TransportUserNotificationDO>()
                 .eq(TransportUserNotificationDO::getUserId, userId)
+                .eq(TransportUserNotificationDO::getRecipientType, "USER")
                 .eqIfPresent(TransportUserNotificationDO::getReadStatus, readStatus)
                 .orderByDesc(TransportUserNotificationDO::getId));
     }
@@ -36,6 +37,7 @@ public interface TransportUserNotificationMapper extends BaseMapperX<TransportUs
     default Long selectUnreadCount(Long userId) {
         return selectCount(new LambdaQueryWrapperX<TransportUserNotificationDO>()
                 .eq(TransportUserNotificationDO::getUserId, userId)
+                .eq(TransportUserNotificationDO::getRecipientType, "USER")
                 .eq(TransportUserNotificationDO::getReadStatus, 0));
     }
 
@@ -43,6 +45,7 @@ public interface TransportUserNotificationMapper extends BaseMapperX<TransportUs
     default List<TransportUserNotificationDO> selectListByUserAndOrder(Long userId, Long orderId) {
         return selectList(new LambdaQueryWrapperX<TransportUserNotificationDO>()
                 .eq(TransportUserNotificationDO::getUserId, userId)
+                .eq(TransportUserNotificationDO::getRecipientType, "USER")
                 .eqIfPresent(TransportUserNotificationDO::getOrderId, orderId)
                 .orderByDesc(TransportUserNotificationDO::getId));
     }
