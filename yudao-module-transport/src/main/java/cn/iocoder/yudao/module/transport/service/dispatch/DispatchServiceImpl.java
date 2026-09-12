@@ -2647,7 +2647,10 @@ public class DispatchServiceImpl implements DispatchService {
 
         int stationCount = algorithmReq.getStations() != null ? algorithmReq.getStations().size() : 0;
 
-        int orderCount = algorithmReq.getOrders() != null ? algorithmReq.getOrders().size() : 0;
+        // 任务数 = 单向订单 + 配对货运单（一个 shipment 展开成 PICKUP + DELIVERY 两个节点，
+        // 与算法契约"客运+包裹订单合计不超过 25"同一口径）
+        int orderCount = (algorithmReq.getOrders() != null ? algorithmReq.getOrders().size() : 0)
+                + (algorithmReq.getShipments() != null ? algorithmReq.getShipments().size() : 0);
 
         int vehicleCount = algorithmReq.getVehicles() != null ? algorithmReq.getVehicles().size() : 0;
 
@@ -3010,9 +3013,13 @@ public class DispatchServiceImpl implements DispatchService {
 
         Map<Long, PostalOrderDO> postalMap = preloadPostalOrders(orders);
 
+        // 配对货运单收集器（取货站 → 送达站，两端都不是场站的完整链路，见 toAlgorithmOrders）
+        List<AlgorithmShipmentDTO> shipmentDTOs = new ArrayList<>();
+
         List<AlgorithmOrderDTO> orderDTOs = orders.stream()
 
-                .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap))
+                .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap,
+                        shipmentDTOs))
 
                 .flatMap(List::stream).collect(Collectors.toList());
 
@@ -3031,6 +3038,10 @@ public class DispatchServiceImpl implements DispatchService {
                 .vehicles(vehicleDTOs)
 
                 .orders(orderDTOs)
+
+                // 配对货运单（取货站 → 送达站，两端都不是场站的完整链路）：
+                // 算法展开为同一辆车的 PICKUP + DELIVERY 两个节点，并保证"先取后送"。
+                .shipments(shipmentDTOs)
 
                 .algorithmConfig(algorithmConfig)
 
@@ -3068,7 +3079,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                                                       Map<Long, CargoOrderDO> cargoMap,
 
-                                                      Map<Long, PostalOrderDO> postalMap) {
+                                                      Map<Long, PostalOrderDO> postalMap,
+
+                                                      List<AlgorithmShipmentDTO> shipments) {
 
         if (Objects.equals(order.getOrderType(), 1)) { // 客运
 
@@ -3114,17 +3127,48 @@ public class DispatchServiceImpl implements DispatchService {
 
         // 派送：场站→村
 
-        return Collections.singletonList(AlgorithmOrderDTO.builder()
+        if (depotStationId != null && Objects.equals(order.getPickupStationId(), depotStationId)) {
 
-                .orderId(String.valueOf(order.getId()))
+            return Collections.singletonList(AlgorithmOrderDTO.builder()
 
-                .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
+                    .orderId(String.valueOf(order.getId()))
 
-                .stationId(String.valueOf(order.getDeliveryStationId()))
+                    .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
 
-                .itemCount(getItemCount(order, cargoMap, postalMap))
+                    .stationId(String.valueOf(order.getDeliveryStationId()))
+
+                    .itemCount(getItemCount(order, cargoMap, postalMap))
+
+                    .build());
+
+        }
+
+        // 完整链路：取货站 → 送达站（两端都不是场站）→ 发「配对货运单」。
+        //
+        // 为什么必须配对（PDPTW 口径，Li & Lim 2001）：取货点与送货点必须同一辆车承运、且先取后送。
+        // 历史实现这里退化成"只在送达站发一个 DELIVERY 节点 + 丢掉取货站"，等于货物凭空出现在送达站：
+        // 既看不出先后顺序，也没法约束同车与取送顺序，站点清单里也就看不到揽收点。
+        // 现在按 PlanShipment 下发，算法展开为 PICKUP + DELIVERY 两个节点（同车 + 顺序约束由算法保证），
+        // 后端 AlgorithmResultValidator 已支持按 shipmentId 校验配对完整性。
+        CargoOrderDO cargo = Objects.equals(order.getOrderType(), 2) ? cargoMap.get(order.getId()) : null;
+
+        shipments.add(AlgorithmShipmentDTO.builder()
+
+                .shipmentId(String.valueOf(order.getId()))
+
+                .pickupStationId(String.valueOf(order.getPickupStationId()))
+
+                .deliveryStationId(String.valueOf(order.getDeliveryStationId()))
+
+                .quantity(getItemCount(order, cargoMap, postalMap))
+
+                .weightKg(cargo != null && cargo.getWeightKg() != null ? cargo.getWeightKg().doubleValue() : null)
+
+                .volumeM3(cargo != null && cargo.getVolumeM3() != null ? cargo.getVolumeM3().doubleValue() : null)
 
                 .build());
+
+        return Collections.emptyList();
 
     }
 

@@ -4,11 +4,15 @@
       <!-- 方案切换 + 汇总 -->
       <div class="viz-head">
         <el-radio-group v-if="plans.length > 1" v-model="activePlanId" size="small" @change="redraw">
-          <el-radio-button :value="0">全部方案</el-radio-button>
-          <el-radio-button v-for="p in plans" :key="p.id" :value="p.id!">
+          <el-radio-button v-for="p in plans" :key="'r-' + p.id" :value="p.id!">
             方案 #{{ p.id }}
           </el-radio-button>
+          <el-radio-button :value="0">全部方案（对比用）</el-radio-button>
+          <!-- 说明：默认只选中一套方案 = 一个任务段；把多套方案叠在一张图上会把路线画乱 -->
         </el-radio-group>
+        <div v-if="plans.length > 1" class="viz-scope-tip">
+          默认只显示 <b>一个任务段</b>（方案 #{{ activePlanId || plans[0].id }}）；跨区订单是另一段，切方案分屏看，不叠加
+        </div>
         <div class="viz-summary">
           <span>方案 <b>{{ plans.length }}</b> 套</span>
           <span>订单 <b>{{ summary.orderCount }}</b> 单</span>
@@ -1537,7 +1541,9 @@ const load = async () => {
       })
     })
     roadmapSegments.value = segmentMap
-    activePlanId.value = 0
+    // 默认只选中"第一套方案" = 一个任务段（一屏只看一段，路线才讲得清）。
+    // 需要跨区对比时，用户再手动切到「全部方案（对比用）」或另一套方案（分屏看，不叠加）。
+    activePlanId.value = plans.value.length && plans.value[0].id != null ? plans.value[0].id : 0
     buildRoutes()
   } finally {
     loading.value = false
@@ -1585,6 +1591,13 @@ onBeforeUnmount(stopPlay)
   b {
     color: var(--el-color-primary);
     font-size: 15px;
+  }
+}
+.viz-scope-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  b {
+    color: var(--el-color-primary);
   }
 }
 .viz-body {

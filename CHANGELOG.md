@@ -1,3 +1,28 @@
+# 2026-09-13（四）一屏只看一个任务段 + 货运取送配对（PDPTW）+ stop_level 构造器修复
+
+- **调度可视化默认只显示"一个任务段"**（`DispatchVisualDialog`）：多套方案（去程/返程/另一片区/跨区联运）
+  叠在一张图上必然"路线混乱"。现在打开可视化**默认选中第一套方案**（= 一个任务段：一条公交骨架 + 2~3 个取送点），
+  顶部给出提示"默认只显示一个任务段；跨区订单是另一段，切方案分屏看，不叠加"；
+  方案切换按钮顺序也调整为「方案 #N ... → 全部方案（对比用）」，需要对比时手动切。
+  对应论文/开源口径：DRT 的 trip-level / OpenTripPlanner 的 per-itinerary、per-leg 展示（永远按"一段出行"呈现）。
+- **货运取送配对下发（PDPTW：同一辆车 + 先取后送）**：`toAlgorithmOrders` 以前对"取货站 → 送达站"
+  这类订单**只发一个 DELIVERY 节点、把取货站丢了**（等于货凭空出现在送达站：看不出先后、无法约束同车/顺序、
+  站点清单里也看不到揽收点）。现在两端都不是场站的完整链路改为下发 **`AlgorithmShipmentDTO` 配对货运单**
+  （`PlanShipment`：算法展开为同一辆车的 PICKUP + DELIVERY，顺序约束由算法保证，后端 `AlgorithmResultValidator`
+  已按 shipmentId 校验配对完整性）；场站锚定的「揽收（村→场站）/派送（场站→村）」两条旧口径保持不变。
+  同时 `validateScaleLimit` 的"任务数"把配对货运单计入（与算法契约"订单合计 ≤ 25"同一口径）。
+  测试：新增 `createSmartPlan_pairs_cargo_pickup_and_delivery_as_shipment`。
+- **修复算法模块 `stop_level` 构造器（CI `algorithm` 检查失败根因）**：
+  `app/haco/stop_level/constructor.py` 的贪心构造器有两处缺陷——
+  ① `_check_capacity` 在插入位置应用的是已存在活动 `a` 而不是待插入的 `activity`，且随后又应用了一次 `a`，
+  载重被算重导致后续活动全部插不进去；② 缺少**位置感知**的先后约束（只检查"BOARD 是否存在于路线某处"），
+  卸载可能被插到装载之前 → 负乘客数。
+  另 `_apply_activity` 对 DELIVERY（预装派送）也做了减货，与 evaluator 的"PRELOADED 不减货"口径不一致。
+  三处修正后 `tests/test_stop_level_representation.py` 全通过（构造器产出可行解），算法全量快测
+  **358 passed**（修复前 1 failed / 357 passed）。
+
+---
+
 # 2026-09-13（三）快递页看购物订单 + 订单详情页 + 后台改的商品不再被演示脚本冲掉
 
 - **快递页新增「我的购物」tab**（`pages/parcel/parcel`）：以前快递页只有"我的寄货 / 单号查询"，

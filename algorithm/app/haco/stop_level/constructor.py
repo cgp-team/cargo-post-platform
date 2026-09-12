@@ -62,6 +62,10 @@ def construct_greedy_stop_level(
 
             for vi, route in routes.items():
                 for pos in range(len(route.activities) + 1):
+                    # 位置感知的先后约束：ALIGHT 必须排在对应 BOARD 之后
+                    # （历史实现只检查"BOARD 是否已存在于某处"，导致卸载被插到装载前面 → 负乘客数）
+                    if not _check_position_precedence(activity, route, pos, request_map):
+                        continue
                     # 检查容量约束
                     if not _check_capacity(activity, route, pos, request_map):
                         continue
@@ -252,6 +256,33 @@ def _check_precedence(activity: Activity, routes: dict, request_map: dict) -> bo
     return True
 
 
+def _check_position_precedence(activity: Activity, route: StopLevelRoute, pos: int,
+                               request_map: dict) -> bool:
+    """位置感知的先后约束。
+
+    "活动存在"不等于"顺序正确"：ALIGHT/DELIVER 只有插在对应 BOARD/PICKUP **之后** 才合法，
+    否则解在 evaluator 里会被判为（负乘客/负货量）不可行。
+    """
+    if not activity.request_id:
+        return True
+    if activity.action == ActionType.ALIGHT:
+        return any(
+            i < pos and a.request_id == activity.request_id and a.action == ActionType.BOARD
+            for i, a in enumerate(route.activities)
+        )
+    if activity.action == ActionType.DELIVER:
+        # 只有 SHIPMENT（取送配对）的 DELIVER 需要前置 PICKUP；
+        # DELIVERY（预装派送）只有单个 DELIVER 活动，不该被前置条件挡住。
+        req = request_map.get(activity.request_id)
+        if req is None or req.request_type != "SHIPMENT":
+            return True
+        return any(
+            i < pos and a.request_id == activity.request_id and a.action == ActionType.PICKUP
+            for i, a in enumerate(route.activities)
+        )
+    return True
+
+
 def _check_capacity(activity: Activity, route: StopLevelRoute, pos: int, request_map: dict) -> bool:
     """检查容量约束。"""
     # 模拟插入后的载荷
@@ -261,7 +292,9 @@ def _check_capacity(activity: Activity, route: StopLevelRoute, pos: int, request
     for i, a in enumerate(route.activities):
         if i == pos:
             # 插入位置
-            p_load, c_load = _apply_activity(a, p_load, c_load, request_map, route)
+            # 注意：这里要应用的是**待插入的新活动** activity；历史实现误写成 a（已存在活动）
+            # 并且紧接着又把 a 应用了一次 → 货量/乘客数被算重，容量校验会把后续活动全部拒掉。
+            p_load, c_load = _apply_activity(activity, p_load, c_load, request_map, route)
 
         p_load, c_load = _apply_activity(a, p_load, c_load, request_map, route)
 
@@ -289,6 +322,11 @@ def _apply_activity(activity: Activity, p_load: int, c_load: int, request_map: d
         c_load += req.size if req else 1
     elif activity.action == ActionType.DELIVER:
         req = request_map.get(activity.request_id)
+        # 口径与 evaluator 保持一致：DELIVERY 是「预装（PRELOADED）」单——货本来就在车上
+        # （从 initialCargoLoad 消耗），DELIVER 不减当前货量；只有 SHIPMENT 的 DELIVER 才减货。
+        # 历史实现在这里统一减货，导致纯派送单把货量算成负数、后续活动全部插不进去。
+        if req is not None and req.request_type == "DELIVERY":
+            return p_load, c_load
         c_load -= req.size if req else 1
     return p_load, c_load
 
