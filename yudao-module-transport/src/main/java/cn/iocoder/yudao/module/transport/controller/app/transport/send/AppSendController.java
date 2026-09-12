@@ -56,6 +56,7 @@ import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -105,6 +106,13 @@ public class AppSendController {
     private static final int CARRIER_FRESH_MINUTES = 5;
     /** "即将到站"阈值（分钟）：距目标站点 <= 该值 → carrierApproaching=true，前端高亮并提示 */
     private static final int CARRIER_APPROACH_MINUTES = 10;
+    /** P1-G：接近目标站点的距离分级阈值(km)，可用 yudao.transport.approach.* 覆盖 */
+    @Value("${yudao.transport.approach.dist-2km:2.0}")
+    private double approachDist2Km;
+    @Value("${yudao.transport.approach.dist-1km:1.0}")
+    private double approachDist1Km;
+    @Value("${yudao.transport.approach.dist-arriving:0.5}")
+    private double approachDistArriving;
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
@@ -236,6 +244,10 @@ public class AppSendController {
         LocalDateTime eta = item.getEstimatedArrivalTime();
         if (eta != null && eta.isAfter(LocalDateTime.now())) {
             vo.setEtaMinutes((int) Duration.between(LocalDateTime.now(), eta).toMinutes());
+            // P2-M：计划经停时间是 ETA 的兜底口径（实时/模拟位置会在 fillCarrierLiveInfo 里覆盖）
+            if (vo.getEtaSource() == null) {
+                vo.setEtaSource("PLANNED");
+            }
         }
         // 司机到站/作业进度：与车辆位置无关，直接按经停明细状态给（用户端"司机已到达"提醒）
         fillCarrierArrival(vo, item, driverById(item.getDriverId()));
@@ -273,6 +285,20 @@ public class AppSendController {
     /** 是否"即将到站"：距目标站点 <= {@value #CARRIER_APPROACH_MINUTES} 分钟（前端据此高亮/弹提醒） */
     static boolean carrierApproaching(Integer etaMinutes) {
         return etaMinutes != null && etaMinutes > 0 && etaMinutes <= CARRIER_APPROACH_MINUTES;
+    }
+
+    /** P1-G：按距离分级返回接近阶段（NEAR_2KM / NEAR_1KM / ARRIVING）；超过 2km 返回 null */
+    static String approachStage(double distanceKm, double dist2km, double dist1km, double distArriving) {
+        if (distanceKm <= distArriving) {
+            return "ARRIVING";
+        }
+        if (distanceKm <= dist1km) {
+            return "NEAR_1KM";
+        }
+        if (distanceKm <= dist2km) {
+            return "NEAR_2KM";
+        }
+        return null;
     }
 
     /** 我的寄货列表批量填充承运车辆实时位置（在途订单"车来取货/送货"提醒），一次加载避免逐单 N+1 */
@@ -438,7 +464,12 @@ public class AppSendController {
         vo.setCarrierLatitude(loc.getLatitude().doubleValue());
         vo.setCarrierDistanceKm(BigDecimal.valueOf(Math.round(distanceEta.distKm() * 100) / 100.0));
         vo.setCarrierEtaMinutes(distanceEta.etaMinutes());
-        vo.setCarrierApproaching(carrierApproaching(distanceEta.etaMinutes()));
+        // P1-G：距离分级（NEAR_2KM / NEAR_1KM / ARRIVING），命中即视为"车快到了"（分钟阈值作兜底）
+        String stage = approachStage(distanceEta.distKm(), approachDist2Km, approachDist1Km, approachDistArriving);
+        vo.setCarrierApproachStage(stage);
+        vo.setCarrierApproaching(stage != null || carrierApproaching(distanceEta.etaMinutes()));
+        // P2-M：实时位置是最高优先级的 ETA 来源；模拟位置次之
+        vo.setEtaSource("SIMULATED".equals(source) ? "SIMULATED" : "REALTIME");
     }
 
     @GetMapping("/stations")

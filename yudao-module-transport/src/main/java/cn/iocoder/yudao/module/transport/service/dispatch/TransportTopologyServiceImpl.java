@@ -105,6 +105,14 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
             vo.setPlanReason(plan.getPlanReason());
         }
         vo.setLegs(legs.stream().map(l -> toLeg(l, stationNames, stations)).toList());
+        // P2-N：totalLegs/transferCount 以「实际运输段」为准（前端曾因方案字段为 0 而靠 legs.length 兜底）。
+        // 单订单视角：换乘次数 = 段数 - 1；方案级多订单：段数 - 订单数。
+        if (!legs.isEmpty()) {
+            long distinctOrders = legs.stream().map(TransportLegDO::getOrderId)
+                    .filter(Objects::nonNull).distinct().count();
+            vo.setTotalLegs(legs.size());
+            vo.setTransferCount((int) Math.max(0, legs.size() - Math.max(1, distinctOrders)));
+        }
         // 总里程统一口径：有运输段时按"各段真实路网里程之和"展示（与 Leg/地图一致），无段时回退方案侧口径
         java.math.BigDecimal legDistanceSum = legs.stream().map(TransportLegDO::getDistanceKm)
                 .filter(Objects::nonNull).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
