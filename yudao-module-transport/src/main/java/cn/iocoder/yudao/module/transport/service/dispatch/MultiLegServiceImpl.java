@@ -1,4 +1,4 @@
-﻿package cn.iocoder.yudao.module.transport.service.dispatch;
+package cn.iocoder.yudao.module.transport.service.dispatch;
 
 
 
@@ -658,12 +658,16 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                 "运输方案已调整", "您的订单第 " + leg.getLegSequence() + " 段已重新安排车辆，预计时间可能略有变化");
 
-                userNotificationService.sendToDriver(chosen.getDriverId(), TransportOrderEventTypeEnum.LEG_ASSIGNED,
+        StationDO notifyFromStation = leg.getFromStationId() == null ? null : stationMapper.selectById(leg.getFromStationId());
+        StationDO notifyToStation = leg.getToStationId() == null ? null : stationMapper.selectById(leg.getToStationId());
+        userNotificationService.sendToDriver(chosen.getDriverId(), TransportOrderEventTypeEnum.LEG_ASSIGNED,
                         cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED, true,
                         "新的运输任务",
                         "订单" + leg.getOrderId() + " 第" + leg.getLegSequence() + "段：" +
-                        (leg.getFromStationName() != null ? leg.getFromStationName() : "") + " → " +
-                        (leg.getToStationName() != null ? leg.getToStationName() : "") + "，请接单",
+                        (notifyFromStation != null && notifyFromStation.getStationName() != null
+                                ? notifyFromStation.getStationName() : "") + " → " +
+                        (notifyToStation != null && notifyToStation.getStationName() != null
+                                ? notifyToStation.getStationName() : "") + "，请接单",
                         leg.getOrderId(), leg.getPlanId(), legId);
 
 

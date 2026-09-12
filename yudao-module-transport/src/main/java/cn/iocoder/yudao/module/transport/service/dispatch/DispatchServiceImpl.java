@@ -1,4 +1,4 @@
-﻿package cn.iocoder.yudao.module.transport.service.dispatch;
+package cn.iocoder.yudao.module.transport.service.dispatch;
 
 
 
@@ -490,6 +490,24 @@ public class DispatchServiceImpl implements DispatchService {
     @Transactional(noRollbackFor = ServiceException.class)
 
     public Long createSmartPlan(DispatchSmartPlanReqVO reqVO) {
+        try {
+            return doCreateSmartPlan(reqVO);
+        } catch (ServiceException ex) {
+            throw ex; // 业务异常原样抛出（前端展示具体原因，如容量越界、无可行解）
+        } catch (Exception ex) {
+            // 兜底：把技术异常的根因写进业务错误，避免前端只看到"服务器错误，请联系管理员"
+            log.error("[createSmartPlan] 智能调度异常", ex);
+            Throwable root = ex;
+            while (root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+            }
+            String detail = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
+            throw exception(ALGORITHM_RESULT_INVALID, "智能调度执行失败：" + detail);
+        }
+    }
+
+    /** 智能派单主体（异常统一由 {@link #createSmartPlan} 兜底转成可读业务错误） */
+    private Long doCreateSmartPlan(DispatchSmartPlanReqVO reqVO) {
 
         // 取订单池；为空直接报错
 
@@ -1432,6 +1450,28 @@ public class DispatchServiceImpl implements DispatchService {
     }
 
 
+
+    /**
+     * 两点之间的真实道路轨迹：调度可视化「按订单视角」绘制线路用。
+     * 运输段落库时若高德不可用会退化成两点直线，这里按需补一次真实路网（服务端有 10 分钟缓存）。
+     */
+    @Override
+    public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
+                                                          Double toLongitude, Double toLatitude) {
+        if (fromLongitude == null || fromLatitude == null || toLongitude == null || toLatitude == null) {
+            return List.of();
+        }
+        List<double[]> road = roadPolylineService.route(fromLongitude, fromLatitude, toLongitude, toLatitude);
+        if (road == null || road.size() < 2) {
+            return List.of();
+        }
+        return road.stream().map(p -> {
+            DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
+            point.setLongitude(p[0]);
+            point.setLatitude(p[1]);
+            return point;
+        }).toList();
+    }
 
     /**
 

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 
 <project xmlns="http://maven.apache.org/POM/4.0.0"
 
@@ -22,11 +22,11 @@
 
         <module>yudao-framework</module>
 
-        <!-- Server 涓婚」鐩?-->
+        <!-- Server 主项目 -->
 
         <module>yudao-server</module>
 
-        <!-- 鍚勭�� module 鎷撳睍 -->
+        <!-- 各种 module 拓展 -->
 
         <module>yudao-module-system</module>
 
@@ -36,9 +36,9 @@
 
         <module>yudao-module-member</module>
 
-        <!-- 鍏朵綑涓婃父妯″潡锛坅i/bpm/crm/erp/im/iot/mall/mes/mp/pay/report/wms锛夊凡浠庝粨搴撶Щ闄わ紝
+        <!-- 其余上游模块（ai/bpm/crm/erp/im/iot/mall/mes/mp/pay/report/wms）已从仓库移除，
 
-             闇�瑕佹椂浠庝笂娓?RuoYi-Vue-Pro 閲嶆柊寮曞叆骞跺湪 yudao-server 涓�鎸傝�?-->
+             需要时从上游 RuoYi-Vue-Pro 重新引入并在 yudao-server 中挂载 -->
 
     </modules>
 
@@ -56,7 +56,7 @@
 
         <revision>2026.06-jdk21-SNAPSHOT</revision>
 
-        <!-- Maven 鐩稿叧 -->
+        <!-- Maven 相关 -->
 
         <java.version>21</java.version>
 
@@ -70,7 +70,7 @@
 
         <flatten-maven-plugin.version>1.7.2</flatten-maven-plugin.version>
 
-        <!-- maven-surefire-plugin 鏆傛椂鏃犳硶閫氳繃 bom 鐨勪緷璧栬�诲彇锛堝吋瀹硅�佺増鏈?IDEA 2024 鍙婁互鍓嶇増鏈�锛� -->
+        <!-- maven-surefire-plugin 暂时无法通过 bom 的依赖读取（兼容老版本 IDEA 2024 及以前版本） -->
 
         <lombok.version>1.18.42</lombok.version>
 
@@ -116,9 +116,9 @@
 
             <plugins>
 
-                <!-- maven-surefire-plugin 鎻掍欢锛岀敤浜庤繍琛屽崟鍏冩祴璇曘�?-->
+                <!-- maven-surefire-plugin 插件，用于运行单元测试。 -->
 
-                <!-- 娉ㄦ剰锛岄渶瑕佷娇鐢?3.0.X+锛屽洜涓鸿�佹敮鎸� Junit 5 鐗堟湰 -->
+                <!-- 注意，需要使用 3.0.X+，因为要支持 Junit 5 版本 -->
 
                 <plugin>
 
@@ -130,7 +130,7 @@
 
                 </plugin>
 
-                <!-- maven-compiler-plugin 鎻掍欢锛岃В鍐?spring-boot-configuration-processor + Lombok + MapStruct 缁勫悎 -->
+                <!-- maven-compiler-plugin 插件，解决 spring-boot-configuration-processor + Lombok + MapStruct 组合 -->
 
                 <!-- https://stackoverflow.com/questions/33483697/re-run-spring-boot-configuration-annotation-processor-to-update-generated-metada -->
 
@@ -170,9 +170,9 @@
 
                             <path>
 
-                                <!-- 纭�淇� Lombok 鐢熸垚鐨?getter/setter 鏂规硶鑳借�� MapStruct 姝ｇ‘璇嗗埆锛?
+                                <!-- 确保 Lombok 生成的 getter/setter 方法能被 MapStruct 正确识别，
 
-                                     閬垮厤鍑虹幇 No property named 鈥渪xx" exists 鐨勭紪璇戦敊璇?-->
+                                     避免出现 No property named “xxx" exists 的编译错误 -->
 
                                 <groupId>org.projectlombok</groupId>
 
@@ -194,7 +194,7 @@
 
                         </annotationProcessorPaths>
 
-                        <!-- Spring Boot 3 浣跨敤鍙傛暟鍚嶅彂鐜版満鍒讹紝缁熶竴淇濈暀鏂规硶鍙傛暟鍚嶃�?-->
+                        <!-- Spring Boot 3 使用参数名发现机制，统一保留方法参数名。 -->
 
                         <debug>false</debug>
 
@@ -224,7 +224,7 @@
 
         <plugins>
 
-            <!-- 缁熶竴 revision 鐗堟湰 -->
+            <!-- 统一 revision 版本 -->
 
             <plugin>
 
@@ -282,7 +282,7 @@
 
 
 
-    <!-- 浣跨敤 huawei / aliyun 鐨?Maven 婧愶紝鎻愬崌涓嬭浇閫熷害 -->
+    <!-- 使用 huawei / aliyun 的 Maven 源，提升下载速度 -->
 
     <repositories>
 
