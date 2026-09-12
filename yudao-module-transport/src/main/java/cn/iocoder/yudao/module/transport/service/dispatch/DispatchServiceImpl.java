@@ -1234,6 +1234,22 @@ public class DispatchServiceImpl implements DispatchService {
 
             List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
 
+            // P2-K：本方案该司机承担的运输段（补 orderId/legId，司机点消息可跳订单；无段时退回 null）
+
+            List<TransportLegDO> planLegs = legMapper == null ? List.of() : legMapper.selectListByPlanId(planId);
+
+            Map<Long, TransportLegDO> firstLegByVehicle = new HashMap<>();
+
+            for (TransportLegDO leg : planLegs) {
+
+                if (leg.getVehicleId() != null) {
+
+                    firstLegByVehicle.putIfAbsent(leg.getVehicleId(), leg);
+
+                }
+
+            }
+
             for (Long vehicleId : vehicleIds) {
 
                 Long driverId = bindings.stream()
@@ -1272,6 +1288,9 @@ public class DispatchServiceImpl implements DispatchService {
                         .map(DispatchPlanItemDO::getOrderId).filter(Objects::nonNull).distinct().count();
                 String taskSummary = stopCount + "个站点" + (orderCount > 0 ? "、" + orderCount + "单货物" : "");
 
+                // 该司机本方案的首条运输段（补 orderId/legId，司机点消息跳订单）
+                TransportLegDO firstLeg = firstLegByVehicle.get(vehicleId);
+
                 // 微信订阅消息
                 socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
                         .setUserId(member.getId())
@@ -1287,7 +1306,9 @@ public class DispatchServiceImpl implements DispatchService {
                         cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED,
                         true, "您有新的运输任务",
                         "方案#" + planId + "已分配给您：" + taskSummary + "，请及时接单",
-                        null, planId, null);
+                        firstLeg != null ? firstLeg.getOrderId() : null,
+                        planId,
+                        firstLeg != null ? firstLeg.getId() : null);
 
             }
 
