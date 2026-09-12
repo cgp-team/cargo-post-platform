@@ -54,6 +54,21 @@ public class DispatchPlanRespVO {
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
 
+    @Schema(description = "方案编号（外部展示号，如 DT...-P12）")
+    private String planNo;
+
+    @Schema(description = "规划方式：DIRECT 一段直达 / MULTI_LEG 多段联运")
+    private String planningMode;
+
+    @Schema(description = "运输段总数（多段联运）")
+    private Integer totalLegCount;
+
+    @Schema(description = "换乘次数")
+    private Integer transferCount;
+
+    @Schema(description = "方案解释（为什么直达/为什么联运，可 >500 字符）")
+    private String planReason;
+
     @Schema(description = "方案明细（经停序列）")
     private List<DispatchPlanItemDO> items;
 

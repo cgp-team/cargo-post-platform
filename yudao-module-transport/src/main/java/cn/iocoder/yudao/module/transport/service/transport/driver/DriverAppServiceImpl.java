@@ -3,8 +3,12 @@ package cn.iocoder.yudao.module.transport.service.transport.driver;
 import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
+import lombok.extern.slf4j.Slf4j;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
+import cn.iocoder.yudao.module.system.api.social.SocialClientApi;
+import cn.iocoder.yudao.module.system.api.social.dto.SocialWxaSubscribeMessageSendReqDTO;
+import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
@@ -64,7 +68,7 @@ import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
-
+import org.springframework.beans.factory.annotation.Value;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -85,6 +89,7 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
  */
 @Service
 @Validated
+@Slf4j
 public class DriverAppServiceImpl implements DriverAppService {
 
     /** 班次状态：启用 */
@@ -143,6 +148,15 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private MultiLegService multiLegService;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
+    @Resource private SocialClientApi socialClientApi;
+
+    /** P1-F/G：车辆接近目标站点触发的距离分级阈值(km)，可用 yudao.transport.approach.* 覆盖 */
+    @Value("${yudao.transport.approach.dist-2km:2.0}")
+    private double approachDist2Km;
+    @Value("${yudao.transport.approach.dist-1km:1.0}")
+    private double approachDist1Km;
+    @Value("${yudao.transport.approach.dist-arriving:0.5}")
+    private double approachDistArriving;
 
     @Override
     public AppDriverProfileRespVO profile() {
@@ -949,20 +963,22 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void reportLocation(AppDriverLocationReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         Long vehicleId = resolveVehicleId(driver.getId());
+        // P1-H：shiftId 允许为空——算法派单/运输段模式的司机不一定有班次；缺省用当前活跃段的班次兜底
+        Long shiftId = reqVO.getShiftId() != null ? reqVO.getShiftId() : currentLegShiftId(driver.getId());
         LocalDateTime reportTime = LocalDateTime.now();
         // 每车一行，按车辆 upsert
         VehicleLocationDO location = vehicleLocationMapper.selectByVehicleId(vehicleId);
         if (location == null) {
             vehicleLocationMapper.insert(VehicleLocationDO.builder()
                     .vehicleId(vehicleId)
-                    .shiftId(reqVO.getShiftId())
+                    .shiftId(shiftId)
                     .longitude(reqVO.getLongitude())
                     .latitude(reqVO.getLatitude())
                     .speedKmh(reqVO.getSpeedKmh())
                     .reportTime(reportTime)
                     .build());
         } else {
-            location.setShiftId(reqVO.getShiftId());
+            location.setShiftId(shiftId);
             location.setLongitude(reqVO.getLongitude());
             location.setLatitude(reqVO.getLatitude());
             location.setSpeedKmh(reqVO.getSpeedKmh());
@@ -970,16 +986,113 @@ public class DriverAppServiceImpl implements DriverAppService {
             vehicleLocationMapper.updateById(location);
         }
         // 仅班次在途（shiftId 非空）才追加历史轨迹，与最新位置同一份上报值
-        if (reqVO.getShiftId() != null) {
+        if (shiftId != null) {
             vehicleLocationTrackMapper.insert(VehicleLocationTrackDO.builder()
                     .vehicleId(vehicleId)
-                    .shiftId(reqVO.getShiftId())
+                    .shiftId(shiftId)
                     .longitude(reqVO.getLongitude())
                     .latitude(reqVO.getLatitude())
                     .speedKmh(reqVO.getSpeedKmh())
                     .reportTime(reportTime)
                     .build());
         }
+        // P1-F：车辆接近目的站时给下单用户发"即将送达"站内通知（按 订单+距离档位 幂等，同一档只推一次）
+        if (reqVO.getLongitude() != null && reqVO.getLatitude() != null) {
+            notifyApproachingOrders(vehicleId, reqVO.getLongitude().doubleValue(), reqVO.getLatitude().doubleValue());
+        }
+    }
+
+    /** P1-H：司机当前活跃段的班次（没有班次时返回 null，位置仍按车辆落库） */
+    private Long currentLegShiftId(Long driverId) {
+        return transportLegMapper.selectActiveByDriverId(driverId).stream()
+                .map(TransportLegDO::getShiftId).filter(Objects::nonNull).findFirst().orElse(null);
+    }
+
+    /**
+     * P1-F：车辆接近目的站时给下单用户发站内提醒。
+     *
+     * 只处理本车"方向经停"（送客 2 / 派送 3 / 揽收 4）关联的在途订单（已分配/已发车）；
+     * 按距离分级（2km/1km/0.5km）触发，eventId = CARRIER_APPROACHING:ORDER-{id}:STAGE-{档}，
+     * 同一订单同一档位只落一条通知（transport_user_notification 唯一键去重）。
+     */
+    private void notifyApproachingOrders(Long vehicleId, double longitude, double latitude) {
+        if (vehicleId == null || dispatchPlanItemMapper == null) {
+            return;
+        }
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getVehicleId, vehicleId)
+                .in(DispatchPlanItemDO::getActionType, 2, 3, 4));
+        if (items.isEmpty()) {
+            return;
+        }
+        // 取该车各订单的方向经停站（同一订单取一条），仅保留在途订单
+        Map<Long, DispatchPlanItemDO> orderItem = new java.util.HashMap<>();
+        for (DispatchPlanItemDO item : items) {
+            if (item.getOrderId() != null && item.getStationId() != null) {
+                orderItem.putIfAbsent(item.getOrderId(), item);
+            }
+        }
+        for (Map.Entry<Long, DispatchPlanItemDO> e : orderItem.entrySet()) {
+            Long orderId = e.getKey();
+            DispatchPlanItemDO item = e.getValue();
+            TransportOrderDO order = transportOrderMapper.selectById(orderId);
+            if (order == null || !(Objects.equals(order.getStatus(), TransportOrderStatusEnum.ASSIGNED.getStatus())
+                    || Objects.equals(order.getStatus(), TransportOrderStatusEnum.DEPARTED.getStatus()))) {
+                continue; // 非在途订单不提醒
+            }
+            StationDO station = stationMapper.selectById(item.getStationId());
+            if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+                continue;
+            }
+            double km = GeoDistanceUtil.haversineKm(longitude, latitude,
+                    station.getLongitude().doubleValue(), station.getLatitude().doubleValue());
+            String stage = approachStage(km);
+            if (stage == null) {
+                continue; // 还没进入 2km 范围
+            }
+            // 幂等键：同一订单 + 同一距离档位只推一次
+            String eventId = "CARRIER_APPROACHING:ORDER-" + orderId + ":STAGE-" + stage;
+            userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.CARRIER_APPROACHING,
+                    cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED,
+                    true, "您的包裹即将送达",
+                    "您的包裹即将送达「" + station.getStationName() + "」，"
+                            + (item.getDriverId() != null ? driverName(item.getDriverId()) + " " : "")
+                            + "约 " + (km <= approachDistArriving ? 1 : (km <= approachDist1Km ? 2 : 5)) + " 分钟后到达",
+                    eventId);
+            // P1-F：微信订阅消息（发送失败不影响位置上报主流程，站内通知已在上一步幂等落库）
+            try {
+                if (socialClientApi != null && order.getMemberUserId() != null) {
+                    MemberUserRespDTO member = memberUserApi.getUser(order.getMemberUserId());
+                    if (member != null) {
+                        socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
+                                .setUserId(member.getId())
+                                .setUserType(UserTypeEnum.MEMBER.getValue())
+                                .setTemplateTitle("派送提醒")
+                                .setPage("pages/goods/trace/trace?no=" + order.getOrderNo())
+                                .addMessage("thing1", "您的包裹即将送达「" + station.getStationName() + "」")
+                                .addMessage("thing2", "司机" + (item.getDriverId() != null ? driverName(item.getDriverId()) : "")
+                                        + "约 " + (km <= approachDistArriving ? 1 : (km <= approachDist1Km ? 2 : 5))
+                                        + " 分钟后到达"));
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("[reportLocation] 订单 {} 即将送达订阅消息发送失败：{}", orderId, ex.getMessage());
+            }
+        }
+    }
+
+    /** P1-G：按距离分级返回接近阶段；超过 2km 返回 null */
+    private String approachStage(double distanceKm) {
+        if (distanceKm <= approachDistArriving) {
+            return "ARRIVING";
+        }
+        if (distanceKm <= approachDist1Km) {
+            return "NEAR_1KM";
+        }
+        if (distanceKm <= approachDist2Km) {
+            return "NEAR_2KM";
+        }
+        return null;
     }
 
     @Override
@@ -1052,12 +1165,32 @@ public class DriverAppServiceImpl implements DriverAppService {
         DriverDO driver = requireCurrentDriver(driverId);
         // 司机只能看到自己"进行中"的段（需求 §56：绝不能把前序段当成自己的起点）
         List<TransportLegDO> active = transportLegMapper.selectActiveByDriverId(driver.getId());
-        if (active.isEmpty()) {
-            return null;
+        // P1-E：只认"已下发/执行中"方案的段。历史缺陷：selectActiveByDriverId 只按段状态过滤，
+        // 会把「待审核方案」的段派到司机端（实测司机 3 拿到 plan 29 状态 0 待审核的段）。
+        List<TransportLegDO> issued = active.stream()
+                .filter(leg -> isPlanIssuedOrRunning(leg.getPlanId()))
+                .sorted(Comparator.comparing(TransportLegDO::getEstimatedDeparture,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(TransportLegDO::getLegSequence,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        if (issued.isEmpty()) {
+            return null; // 无已下发方案的活跃段：等待派单
         }
-        TransportLegDO leg = active.get(0);
+        TransportLegDO leg = issued.get(0);
         List<TransportLegDO> one = List.of(leg);
         return toLegVO(leg, stationNames(one), plateNos(one), orderNos(one));
+    }
+
+    /** P1-E：方案是否"已下发(1)/执行中(2)"；无方案的段不进入司机端（待审核方案不可见） */
+    private boolean isPlanIssuedOrRunning(Long planId) {
+        if (planId == null || dispatchPlanMapper == null) {
+            return false;
+        }
+        DispatchPlanDO plan = dispatchPlanMapper.selectById(planId);
+        return plan != null
+                && (Objects.equals(plan.getStatus(), DispatchPlanStatusEnum.ISSUED.getStatus())
+                    || Objects.equals(plan.getStatus(), DispatchPlanStatusEnum.RUNNING.getStatus()));
     }
 
     @Override

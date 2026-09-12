@@ -31,6 +31,16 @@ export interface DispatchPlanVO {
   approvedBy?: number
   approvedTime?: string
   createTime?: string
+  /** 方案编号（外部展示号） */
+  planNo?: string
+  /** DIRECT 一段直达 / MULTI_LEG 多段联运 */
+  planningMode?: string
+  /** 运输段总数（多段联运） */
+  totalLegCount?: number
+  /** 换乘次数 */
+  transferCount?: number
+  /** 方案解释（为什么直达/为什么联运） */
+  planReason?: string
 }
 
 /** 调度方案明细(对应 DispatchPlanItemDO) */
@@ -206,6 +216,14 @@ export interface DispatchRoadmapPoint {
 export interface DispatchRoadmapSegment {
   vehicleId?: number
   visitSequence?: number
+  /** 运输段编号（source=LEG 时有值，与订单视角 leg 对应） */
+  legId?: number
+  /** 订单编号（source=LEG 时有值） */
+  orderId?: number
+  /** 该订单内的段序（source=LEG 时有值） */
+  legSequence?: number
+  /** 本段是否需要在终点换乘交接 */
+  handoverRequired?: boolean
   fromStationId?: number
   toStationId?: number
   fromStationName?: string
@@ -220,6 +238,8 @@ export interface DispatchRoadmapRespVO {
   planId?: number
   /** AMAP / EUCLIDEAN / MIXED */
   provider?: string
+  /** 分段口径：LEG=由运输段聚合，ITEM=由经停明细聚合 */
+  source?: string
   segments?: DispatchRoadmapSegment[]
 }
 

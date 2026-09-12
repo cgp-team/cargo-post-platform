@@ -1234,6 +1234,22 @@ public class DispatchServiceImpl implements DispatchService {
 
             List<DriverVehicleDO> bindings = driverVehicleMapper.selectActiveBindings();
 
+            // P2-K：本方案该司机承担的运输段（补 orderId/legId，司机点消息可跳订单；无段时退回 null）
+
+            List<TransportLegDO> planLegs = legMapper == null ? List.of() : legMapper.selectListByPlanId(planId);
+
+            Map<Long, TransportLegDO> firstLegByVehicle = new HashMap<>();
+
+            for (TransportLegDO leg : planLegs) {
+
+                if (leg.getVehicleId() != null) {
+
+                    firstLegByVehicle.putIfAbsent(leg.getVehicleId(), leg);
+
+                }
+
+            }
+
             for (Long vehicleId : vehicleIds) {
 
                 Long driverId = bindings.stream()
@@ -1272,6 +1288,9 @@ public class DispatchServiceImpl implements DispatchService {
                         .map(DispatchPlanItemDO::getOrderId).filter(Objects::nonNull).distinct().count();
                 String taskSummary = stopCount + "个站点" + (orderCount > 0 ? "、" + orderCount + "单货物" : "");
 
+                // 该司机本方案的首条运输段（补 orderId/legId，司机点消息跳订单）
+                TransportLegDO firstLeg = firstLegByVehicle.get(vehicleId);
+
                 // 微信订阅消息
                 socialClientApi.sendWxaSubscribeMessage(new SocialWxaSubscribeMessageSendReqDTO()
                         .setUserId(member.getId())
@@ -1287,7 +1306,9 @@ public class DispatchServiceImpl implements DispatchService {
                         cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED,
                         true, "您有新的运输任务",
                         "方案#" + planId + "已分配给您：" + taskSummary + "，请及时接单",
-                        null, planId, null);
+                        firstLeg != null ? firstLeg.getOrderId() : null,
+                        planId,
+                        firstLeg != null ? firstLeg.getId() : null);
 
             }
 
@@ -1993,6 +2014,21 @@ public class DispatchServiceImpl implements DispatchService {
         List<DispatchValidateRespVO.TimeSeqIssue> issues = new ArrayList<>();
 
         for (TransportOrderDO order : pooledOrders) {
+
+            // P1-I：批次时间窗可行性预检——订单时间窗与本批次窗口完全无交集时，算法必然判
+            // "任务超出批次时间窗"（TIME_WINDOW_EXCEEDED）。这里提前给出可执行原因（哪单/哪个时间窗），
+            // 避免"validate 校验通过 → smart 提交失败"的自相矛盾。
+            LocalDateTime[] win = currentBatch();
+            if (order.getLatestDeliveryTime() != null && order.getLatestDeliveryTime().isBefore(win[0])) {
+                issues.add(timeSeqIssue(order, "送达截止时间 " + order.getLatestDeliveryTime()
+                        + " 早于本批次开始 " + win[0] + "：请刷新演示数据时间窗或拆单"));
+                continue;
+            }
+            if (order.getEarliestPickupTime() != null && order.getEarliestPickupTime().isAfter(win[1])) {
+                issues.add(timeSeqIssue(order, "取货时间 " + order.getEarliestPickupTime()
+                        + " 晚于本批次结束 " + win[1] + "：请拆到下一批次再调度"));
+                continue;
+            }
 
             if (Objects.equals(order.getOrderType(), 1)) { // 客运
 
