@@ -147,6 +147,15 @@ public class DispatchServiceImpl implements DispatchService {
     private static final int MAX_ALGORITHM_VEHICLES = 3;
 
     /**
+     * 一键调度「单批」订单上限（P1-1）：算法单次最多 {@value #MAX_ALGORITHM_VEHICLES} 辆车、
+     * 批次窗口 {@value #BATCH_MINUTES} 分钟。若一批塞满 25 单（MAX_ALGORITHM_ORDERS），
+     * 3 台车每台要跑 8~9 单，2 小时窗口必然超时 → 算法判 TIME_WINDOW_EXCEEDED（实测 25/26 单必现）。
+     * 因此自动模式按「3 台车 × 每车 4 单」左右的规模分批，让单车在窗口内能跑完；
+     * 其余订单留在池里，由前端「一键演示/一键调度」多轮自动成下一套方案（跨片区订单同样靠这个分批）。
+     */
+    private static final int AUTO_BATCH_MAX_ORDERS = 12;
+
+    /**
 
      * 批次规划窗口(分钟)：算法要求"整批任务总耗时 ≤ 窗口时长"。
 
@@ -547,7 +556,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 其余片区留在池里，再次点击「一键调度」自动成下一套方案。
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, MAX_ALGORITHM_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, AUTO_BATCH_MAX_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -1923,7 +1932,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 与 createSmartPlan 同一批次口径：校验看到的订单数就是本次真正会被调度的订单数
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, MAX_ALGORITHM_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, AUTO_BATCH_MAX_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
