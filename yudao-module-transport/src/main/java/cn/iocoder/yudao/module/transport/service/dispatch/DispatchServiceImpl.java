@@ -98,6 +98,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private SocialClientApi socialClientApi;
     @Resource private MemberUserApi memberUserApi;
     @Resource private DriverMapper driverMapper;
+    @Resource private cn.iocoder.yudao.module.transport.service.notification.UserNotificationService userNotificationService;
 
     @Override
     public PageResult<TransportOrderDO> getOrderPoolPage(DispatchPoolPageReqVO reqVO) {
@@ -426,7 +427,6 @@ public class DispatchServiceImpl implements DispatchService {
                     ? DispatchPlanningModeEnum.MULTI_LEG.getMode() : DispatchPlanningModeEnum.DIRECT.getMode());
             planUpdate.setTotalLegCount(allLegs.size());
             planUpdate.setTransferCount(Math.max(0, transferCount));
-            planUpdate.setPlanReason(String.join("ï¼?, reasons));
             planUpdate.setPlanReason(cn.hutool.core.util.StrUtil.sub(String.join("£»", reasons), 0, 2000));
                     .filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(null));
             planUpdate.setEstimatedArrivalTime(allLegs.stream().map(TransportLegDO::getEstimatedArrival)
