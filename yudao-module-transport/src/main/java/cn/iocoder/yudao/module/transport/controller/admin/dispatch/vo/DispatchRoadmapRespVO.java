@@ -21,6 +21,10 @@ public class DispatchRoadmapRespVO {
     @Schema(description = "整体轨迹来源：AMAP / EUCLIDEAN / MIXED")
     private String provider;
 
+    @Schema(description = "分段口径：LEG=由本方案的运输段（多段联运）聚合；ITEM=由方案经停明细聚合（无段的历史/手工方案）",
+            example = "LEG")
+    private String source;
+
     @Schema(description = "分段道路轨迹（每段 = 上一站 → 本站）")
     private List<Segment> segments;
 
@@ -31,8 +35,20 @@ public class DispatchRoadmapRespVO {
         @Schema(description = "车辆编号")
         private Long vehicleId;
 
-        @Schema(description = "经停序号（该段终点的 visitSequence，与方案明细一一对应）")
+        @Schema(description = "段序号（该车在本方案内的第几段，从 1 开始；与前端「该车第 N 段」对齐）")
         private Integer visitSequence;
+
+        @Schema(description = "运输段编号（source=LEG 时有值，与订单视角 topology/order 的 leg 一一对应）")
+        private Long legId;
+
+        @Schema(description = "订单编号（source=LEG 时有值）")
+        private Long orderId;
+
+        @Schema(description = "该订单内的段序（source=LEG 时有值）")
+        private Integer legSequence;
+
+        @Schema(description = "本段是否需要在终点换乘交接")
+        private Boolean handoverRequired;
 
         @Schema(description = "起点站编号")
         private Long fromStationId;

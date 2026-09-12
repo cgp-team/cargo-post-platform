@@ -78,6 +78,7 @@ class DispatchServiceImplTest {
     @Mock private AlgorithmAdapter algorithmAdapter;
     @Mock private DispatchEstimationService dispatchEstimationService;
     @Mock private MultiLegService multiLegService;
+    @Mock private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
 
     private DispatchServiceImpl dispatchService;
 
@@ -103,6 +104,7 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
         // 多段联运：mock 的 planLegs 默认返回空列表（不新建运输段），不影响既有直达方案断言
         ReflectionTestUtils.setField(dispatchService, "multiLegService", multiLegService);
+        ReflectionTestUtils.setField(dispatchService, "roadPolylineService", roadPolylineService);
         // 注：driverVehicleMapper 为 Mockito mock，selectActiveBindings() 默认返回空列表，
         // 派单明细 driverId 为空，不影响既有断言；无需显式 stub（避免 UnnecessaryStubbing）
     }
@@ -456,6 +458,45 @@ class DispatchServiceImplTest {
         assertEquals(681, persisted.length());
         assertTrue(persisted.length() > 500, "超过 500 字符的解释必须原样落库（列宽已扩到 2000）");
         assertEquals(longReason, persisted);
+    }
+
+    @Test
+    void getPlanRoadmap_aggregates_by_legs_so_vehicle_view_matches_order_view() {
+        // P0-B 回归：多段联运方案（v3 → v101 → v5 接力）的车辆视角必须由本方案运输段聚合。
+        // 历史缺陷：车辆视角取算法的单车经停明细，方案 30 上表现为「同一台车 南岸→重大→再回南岸」，
+        // 而订单视角是 3 段接力 —— 两个视角对同一订单给出相反结论。
+        when(dispatchPlanMapper.selectById(100L)).thenReturn(DispatchPlanDO.builder().id(100L).build());
+        when(transportLegMapper.selectListByPlanId(100L)).thenReturn(List.of(
+                leg(11L, 3L, 21L, 1, 21L, 22L, "106.60,29.52;106.55,29.50"), // 本段已缓存真实道路
+                leg(12L, 101L, 21L, 2, 22L, 23L, null),
+                leg(13L, 5L, 21L, 3, 23L, 24L, null)));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                station(21L, "重邮南门货运站", "106.60", "29.52"),
+                station(22L, "换乘站A", "106.55", "29.50"),
+                station(23L, "换乘站B", "106.50", "29.48"),
+                station(24L, "重大A区", "106.46", "29.56")));
+        when(roadPolylineService.route(anyDouble(), anyDouble(), anyDouble(), anyDouble()))
+                .thenReturn(List.of(new double[]{106.5, 29.5}, new double[]{106.48, 29.49}));
+
+        DispatchRoadmapRespVO roadmap = dispatchService.getPlanRoadmap(100L);
+
+        assertEquals("LEG", roadmap.getSource());
+        assertEquals(3, roadmap.getSegments().size());
+        // 每段一台车：segment.vehicleId 与订单视角（topology/order）的 leg 车辆一一对应，
+        // 不再出现「同一台车跨片区跑完全程再回来」
+        assertEquals(List.of(3L, 101L, 5L), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getVehicleId).toList());
+        // 段与订单/段序可追溯（前端据此与订单视角对齐）
+        assertEquals(List.of(21L, 21L, 21L), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getOrderId).toList());
+        assertEquals(List.of(1, 2, 3), roadmap.getSegments().stream()
+                .map(DispatchRoadmapRespVO.Segment::getLegSequence).toList());
+        assertTrue(roadmap.getSegments().stream().allMatch(s -> s.getVisitSequence() == 1)); // 每台车各 1 段
+        // 段上已缓存的高德轨迹直接复用（省掉前端 30 秒冷却重试），只有缺轨迹的段才补一次路网
+        assertEquals("AMAP", roadmap.getSegments().get(0).getProvider());
+        verify(roadPolylineService, times(2)).route(anyDouble(), anyDouble(), anyDouble(), anyDouble());
+        // 不再走「按经停明细出段」的旧口径
+        verify(dispatchPlanItemMapper, never()).selectList(any(Wrapper.class));
     }
 
     @Test
@@ -981,6 +1022,26 @@ class DispatchServiceImplTest {
         int count = dispatchService.collectOrders(reqVO);
 
         assertEquals(3, count);
+    }
+
+    /** 运输段桩数据（P0-B：车辆视角由段聚合） */
+    private static TransportLegDO leg(Long id, Long vehicleId, Long orderId, int legSequence,
+                                      Long fromStationId, Long toStationId, String polyline) {
+        return TransportLegDO.builder().id(id).vehicleId(vehicleId).driverId(vehicleId).orderId(orderId)
+                .legSequence(legSequence).fromStationId(fromStationId).toStationId(toStationId)
+                .status(TransportLegStatusEnum.ASSIGNED.getStatus())
+                .handoverRequired(legSequence < 3)
+                .navigationSource(polyline != null ? "AMAP" : "ESTIMATED")
+                .navigationPolyline(polyline)
+                .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0).plusMinutes(30L * legSequence))
+                .distanceKm(new BigDecimal("12.0"))
+                .build();
+    }
+
+    /** 站点桩数据 */
+    private static StationDO station(Long id, String name, String longitude, String latitude) {
+        return StationDO.builder().id(id).stationName(name)
+                .longitude(new BigDecimal(longitude)).latitude(new BigDecimal(latitude)).build();
     }
 
 }
