@@ -29,6 +29,10 @@ public interface UserNotificationService {
     Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
                          boolean actionRequired, String title, String content);
 
+    /** 发送通知给订单所属会员（带级别/需操作 + 自定义幂等键 eventId，用于"同一订单同一档位只推一次"） */
+    Long sendToOrderUser(Long orderId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
+                         boolean actionRequired, String title, String content, String eventId);
+
     /** 发送通知给司机（换乘接驳提醒、新任务等） */
     Long sendToDriver(Long driverId, TransportOrderEventTypeEnum eventType, NotificationLevelEnum level,
                       boolean actionRequired, String title, String content,

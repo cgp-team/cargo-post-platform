@@ -13,8 +13,7 @@ public class AppDriverLocationReqVO {
     @Schema(description = "司机编号（可选，仅用于与登录态校验，身份以登录会员为准）", example = "1")
     private Long driverId;
 
-    @Schema(description = "班次编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
-    @NotNull(message = "班次编号不能为空")
+    @Schema(description = "班次编号（可选：算法派单/运输段模式的司机可能没有班次，缺省用当前活跃段的班次兜底）", example = "1")
     private Long shiftId;
 
     @Schema(description = "经度", requiredMode = Schema.RequiredMode.REQUIRED, example = "120.1234567")
