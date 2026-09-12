@@ -255,7 +255,8 @@ public final class AlgorithmResultValidator {
             if (passengers < 0 || passengers > passengerCapacity || cargo < 0 || cargo > cargoCapacity) {
                 throw exception(ALGORITHM_RESULT_INVALID,
                         "车辆 " + plan.getVehicleId() + " 容量越界（载客 " + passengers + "/" + passengerCapacity
-                                + "，载货 " + cargo + "/" + cargoCapacity + "）");
+                                + "，载货 " + cargo + "/" + cargoCapacity + "）"
+                                + "；可在「车辆管理」提高该车货仓件数上限，或减少本批次订单件数后重新调度");
             }
             // 段距离校验
             if (stop.getSegmentDistance() != null && stop.getSegmentDistance() < 0) {

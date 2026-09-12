@@ -83,6 +83,17 @@ public class DispatchController {
         return success(dispatchService.getPlanRoadmap(id));
     }
 
+    @GetMapping("/plan/route-between")
+    @Operation(summary = "两点之间的真实道路轨迹（调度可视化按订单视角画线路用；取不到返回空数组）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    public CommonResult<java.util.List<DispatchRoadmapRespVO.Point>> routeBetween(
+            @RequestParam("fromLongitude") Double fromLongitude,
+            @RequestParam("fromLatitude") Double fromLatitude,
+            @RequestParam("toLongitude") Double toLongitude,
+            @RequestParam("toLatitude") Double toLatitude) {
+        return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude));
+    }
+
     @PutMapping("/plan/review")
     @Operation(summary = "调度方案审核")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")

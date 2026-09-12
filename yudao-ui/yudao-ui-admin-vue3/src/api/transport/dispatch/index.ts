@@ -228,6 +228,16 @@ export const getDispatchPlanRoadmap = (id: number): Promise<DispatchRoadmapRespV
   return request.get({ url: '/transport/dispatch/plan/roadmap', params: { id } })
 }
 
+/** 两点之间的真实道路轨迹（按订单视角画线路用；取不到返回空数组） */
+export const getRoadBetween = (params: {
+  fromLongitude: number
+  fromLatitude: number
+  toLongitude: number
+  toLatitude: number
+}): Promise<DispatchRoadmapPoint[]> => {
+  return request.get({ url: '/transport/dispatch/plan/route-between', params })
+}
+
 /** 审核调度方案 */
 export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
   return request.put({ url: '/transport/dispatch/plan/review', data })

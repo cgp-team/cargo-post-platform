@@ -3,12 +3,15 @@
 INSERT INTO transport_vehicle
     (id, plate_no, vehicle_type, passenger_capacity, cargo_capacity_kg, cargo_capacity, status, tenant_id, creator, updater, deleted)
 VALUES
-    (101, '渝A·CQUPT01', 1, 20, 300.00, 8, 0, 0, '1', '1', b'0'),
-    (102, '渝A·CQUPT02', 1, 15, 200.00, 6, 0, 0, '1', '1', b'0'),
+    -- cargo_capacity = 货仓件数上限：公交/大巴利用空闲运力捎带，行李舱能放不少小件包裹，
+    -- 演示批次（多单共载）件数较多，这里给 24 件，避免"容量越界"直接卡住一键调度
+    (101, '渝A·CQUPT01', 1, 20, 300.00, 24, 0, 0, '1', '1', b'0'),
+    (102, '渝A·CQUPT02', 1, 15, 200.00, 24, 0, 0, '1', '1', b'0'),
     -- 第三台演示车辆：多段联运要"相邻段不同车"，至少需要 2 台空闲车；3 台可覆盖三段联运
-    (103, '渝A·CQUPT03', 1, 15, 200.00, 6, 0, 0, '1', '1', b'0')
+    (103, '渝A·CQUPT03', 1, 15, 200.00, 24, 0, 0, '1', '1', b'0')
 ON DUPLICATE KEY UPDATE
     plate_no = VALUES(plate_no),
+    cargo_capacity = VALUES(cargo_capacity),
     status = 0,
     deleted = b'0';
 

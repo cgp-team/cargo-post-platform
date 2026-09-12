@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS `transport_dispatch_plan` (
   `planning_mode` varchar(20) NOT NULL DEFAULT '' COMMENT '组织方式：DIRECT/MULTI_LEG',
   `total_leg_count` int NOT NULL DEFAULT 0 COMMENT '总运输段数',
   `transfer_count` int NOT NULL DEFAULT 0 COMMENT '换乘次数',
-  `plan_reason` varchar(500) NOT NULL DEFAULT '' COMMENT '方案解释（为什么直达/为什么联运）',
+  `plan_reason` varchar(2000) NOT NULL DEFAULT '' COMMENT '方案解释（为什么直达/为什么联运）',
   `estimated_start_time` datetime DEFAULT NULL COMMENT '预计开始时间',
   `estimated_arrival_time` datetime DEFAULT NULL COMMENT '预计到达时间',
   `actual_start_time` datetime DEFAULT NULL COMMENT '实际开始时间',

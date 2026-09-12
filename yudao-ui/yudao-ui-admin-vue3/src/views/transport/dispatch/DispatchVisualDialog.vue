@@ -119,57 +119,103 @@
 
         <!-- 右：每车任务段时间线 -->
         <div class="viz-timeline">
-          <!-- 多段联运：哪个订单、在哪一站、交给谁（转运站点工作人员或其他司机） -->
-          <div v-if="linkOrders.length" class="link-card">
-            <div class="link-title">多段联运交接</div>
-            <div v-for="o in linkOrders" :key="o.key" class="link-order">
-              <div class="link-order-head">
-                <span class="link-order-no">订单 {{ o.orderNo }}</span>
-                <span class="link-order-meta">
+          <!-- 两个视角，避免信息堆在一起：按车辆看"怎么走、在哪做什么"；按订单看"整条链路与换乘交接" -->
+          <div class="panel-tabs">
+            <div class="panel-tab" :class="{ active: panelTab === 'all' }" @click="switchTab('all')">
+              总体
+            </div>
+            <div class="panel-tab" :class="{ active: panelTab === 'vehicle' }" @click="switchTab('vehicle')">
+              按车辆（路线 + 操作）
+            </div>
+            <div class="panel-tab" :class="{ active: panelTab === 'order' }" @click="switchTab('order')">
+              按订单（含联运交接）
+            </div>
+          </div>
+          <div class="panel-tip">
+            {{ panelTab === 'all' ? '地图显示全部车辆线路'
+              : panelTab === 'vehicle' ? '点选下方某台车，地图只显示它的线路'
+              : '点选某张订单，地图只显示这单的分段路线' }}
+          </div>
+
+          <!-- 视角一/二：每台车一条线，按行驶顺序列出经停与本站操作 -->
+          <template v-if="panelTab !== 'order'">
+            <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
+            <div
+              v-for="route in visibleRoutes"
+              :key="route.key"
+              class="route-card"
+              :class="{ selectable: panelTab === 'vehicle', dimmed: panelTab === 'vehicle' && selectedVehicleKey && selectedVehicleKey !== route.key, picked: selectedVehicleKey === route.key }"
+              @click="panelTab === 'vehicle' && selectVehicle(route.key)"
+            >
+              <div class="route-title">
+                <span class="route-color" :style="{ background: route.color }"></span>
+                <span class="route-name">{{ route.title }}</span>
+              </div>
+              <div class="route-sub">
+                {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
+                <template v-if="route.driverText"> · {{ route.driverText }}</template>
+              </div>
+              <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
+                <span class="stop-seq">{{ i + 1 }}</span>
+                <span class="stop-dot" :class="actionClass(s.actionType)"></span>
+                <span class="stop-act" :class="actionClass(s.actionType)">
+                  {{ actionLabel(s.actionType) }}{{ quantityText(s) }}
+                </span>
+                <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
+                <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
+                <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
+                <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
+                  <span class="stop-handover-icon">🔄</span>
+                  <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
+                </div>
+              </div>
+
+
+                          </div>
+          </template>
+
+          <!-- 视角二：每张订单的分段路线；不同车辆用地图上同一套颜色，交接点写清交给谁 -->
+          <template v-else>
+            <div v-if="!linkOrders.length" class="text-gray-400 text-sm">
+              本方案暂无订单运输链（或该订单还未生成运输段）
+            </div>
+            <div
+              v-for="o in linkOrders"
+              :key="o.key"
+              class="order-card selectable"
+              :class="{ dimmed: selectedOrderKey && selectedOrderKey !== o.key, picked: selectedOrderKey === o.key }"
+              @click="selectOrder(o.key)"
+            >
+              <div class="order-head">
+                <span class="order-no">订单 {{ o.orderNo }}</span>
+                <span class="order-meta">
                   {{ o.totalLegs }} 段 · 换乘 {{ o.transferCount }} 次
                   <template v-if="o.durationMinutes"> · 约 {{ o.durationMinutes }} 分钟</template>
                 </span>
               </div>
-              <div v-for="(leg, i) in o.legs" :key="i" class="link-leg">
-                <span class="link-seq">{{ i + 1 }}</span>
-                <span class="link-leg-text">
-                  {{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
-                  <em v-if="leg.plateNo || leg.driverName">
-                    （{{ leg.plateNo || '车辆' }}<template v-if="leg.driverName"> / {{ leg.driverName }}</template>）
-                  </em>
-                  <template v-if="leg.handoverTarget">
-                    <span class="link-transfer">　⇄ 在 {{ leg.toStationName }} 交给 {{ leg.handoverTarget }}</span>
-                  </template>
+              <div v-if="selectedOrderKey === o.key && hasEstimatedLegs" class="order-est-hint">
+                <el-icon><WarningFilled /></el-icon>
+                <span>部分路段为直线估算，非真实道路轨迹。地图中虚线段表示估算路线。</span>
+              </div>
+              <div v-for="(leg, i) in o.legs" :key="i" class="order-leg">
+                <span class="leg-color" :style="{ background: leg.color }"></span>
+                <span class="leg-seq">{{ i + 1 }}</span>
+                <span class="leg-text">
+                  <b>{{ leg.plateNo || '车辆' }}</b>{{ leg.driverName ? ` · ${leg.driverName}` : '' }}
+                  ：{{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
                 </span>
+                <el-tooltip v-if="orderLegEstimates[i]" content="该路段暂无真实道路数据，显示为直线估算" placement="top">
+                  <span class="leg-badge est-badge">直线估算</span>
+                </el-tooltip>
+                <span v-else class="leg-badge real-badge">真实道路</span>
+              </div>
+              <div v-for="(leg, i) in o.legs" :key="'h' + i">
+                <div v-if="leg.handoverTarget" class="order-transfer">
+                  ⇄ 在 <b>{{ leg.toStationName }}</b> 交给 {{ leg.handoverTarget }}
+                </div>
               </div>
             </div>
-          </div>
-
-          <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
-          <div v-for="route in visibleRoutes" :key="route.key" class="route-card">
-            <div class="route-title">
-              <span class="route-color" :style="{ background: route.color }"></span>
-              <span class="route-name">{{ route.title }}</span>
-              <span class="route-meta">
-                {{ route.stops.length }} 站 · {{ route.distanceText }} km · 订单 {{ route.orderCount }} 单
-                <template v-if="route.driverText"> · 司机 {{ route.driverText }}</template>
-                <template v-if="route.totalSegments">
-                  · 轨迹
-                  <span :class="route.realSegments === route.totalSegments ? 'trace-real' : 'trace-est'">
-                    {{ route.realSegments === route.totalSegments ? '真实道路' : `真实 ${route.realSegments}/${route.totalSegments} 段` }}
-                  </span>
-                </template>
-              </span>
-            </div>
-            <div v-for="(s, i) in route.stops" :key="i" class="stop-row">
-              <span class="stop-seq">{{ i + 1 }}</span>
-              <span class="stop-dot" :class="actionClass(s.actionType)"></span>
-              <span class="stop-act" :class="actionClass(s.actionType)">{{ actionLabel(s.actionType) }}</span>
-              <span class="stop-station">{{ s.stationName || stationName(s.stationId) || '-' }}</span>
-              <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
-              <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
-            </div>
-          </div>
+          </template>
         </div>
       </div>
     </div>
@@ -181,6 +227,7 @@
 
 <script setup lang="ts">
 import { Dialog } from '@/components/Dialog'
+import { WarningFilled } from '@element-plus/icons-vue'
 import { loadBaiduMapSdk } from '@/components/Map/src/utils'
 import * as DispatchApi from '@/api/transport/dispatch'
 import * as DriverApi from '@/api/transport/driver'
@@ -275,6 +322,19 @@ const actionClass = (action?: number) =>
           : 'act-seat'
 const timeText = (t?: string) => (t ? t.replace('T', ' ').slice(11, 16) : '')
 
+/**
+ * 本站操作数量文案：**只标货运件数**（揽收/派送 = 件）。
+ * 上下车人数由乘客随机到站决定，不是我们能控制的，可视化里不标注，避免误导。
+ */
+const quantityText = (stop: DispatchApi.DispatchPlanItemVO) => {
+  const q = stop.quantity
+  if (q == null || q <= 0) return ''
+  const action = stop.actionType
+  // 上车(1)/下车(2)/发车(0)/返场(5)：不标注人数
+  if (action !== 3 && action !== 4) return ''
+  return ` ${q}件`
+}
+
 const summary = computed(() => {
   const shown = activePlanId.value
     ? plans.value.filter((p) => p.id === activePlanId.value)
@@ -295,8 +355,162 @@ const visibleRoutes = computed(() =>
   activePlanId.value ? routes.value.filter((r) => r.planId === activePlanId.value) : routes.value
 )
 
+/**
+ * 视角：总体 / 按车辆 / 按订单。
+ * 切换视角或点选具体车辆/订单时，**右侧列表与地图同步变化**（地图只画当前关注的对象）。
+ */
+const panelTab = ref<'all' | 'vehicle' | 'order'>('all')
+/** 按车辆视角下选中的车辆（route.key）；为空=显示全部 */
+const selectedVehicleKey = ref('')
+/** 按订单视角下选中的订单（linkOrders.key）；为空=默认显示第一单 */
+const selectedOrderKey = ref('')
+
+const switchTab = (tab: 'all' | 'vehicle' | 'order') => {
+  panelTab.value = tab
+  selectedVehicleKey.value = ''
+  selectedOrderKey.value = ''
+  redraw()
+}
+
+const selectVehicle = (key: string) => {
+  selectedVehicleKey.value = selectedVehicleKey.value === key ? '' : key
+  redraw()
+}
+
+const selectOrder = (key: string) => {
+  selectedOrderKey.value = key
+  redraw()
+}
+
+/** 当前选中订单的分段路线（用运输段的真实道路轨迹画线；不同车辆不同颜色） */
+const orderLegRoutes = computed<RouteView[]>(() => {
+  const order = linkOrders.value.find((o) => o.key === selectedOrderKey.value) ?? linkOrders.value[0]
+  if (!order) return []
+  const plan = plans.value.find((p) => (p.items ?? []).some((i) => i.orderId === order.orderId))
+  return order.legs.map((leg, index) => {
+    const pts = (leg.navigationPolyline ?? [])
+      .filter((p) => p.longitude != null && p.latitude != null)
+      .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
+    // 运输段落库时若没有真实轨迹（ESTIMATED），先按需向后端补一次真实路网（10 分钟缓存），
+    // 避免订单视角出现"直线虚线"；取到之前先用直连兜底，取到后自动重绘。
+    const key = legKey(leg)
+    const cached = legRoadCache.value.get(key)
+    if (leg.fromLongitude != null && leg.toLongitude != null) {
+      ensureLegRoad(key, leg.fromLongitude, leg.fromLatitude!, leg.toLongitude, leg.toLatitude!)
+    }
+    const fallback = leg.fromLongitude != null && leg.toLongitude != null
+      ? [{ lng: leg.fromLongitude, lat: leg.fromLatitude! }, { lng: leg.toLongitude, lat: leg.toLatitude! }]
+      : []
+    const road = pts.length >= 2 ? pts : (cached && cached.length >= 2 ? cached : fallback)
+    return {
+      key: `order-${order.orderId}-leg-${index}`,
+      planId: plan?.id,
+      color: leg.color || '#909399',
+      title: `${leg.plateNo || '车辆'} 第 ${index + 1} 段`,
+      orderNos: [order.orderNo],
+      orderCount: 1,
+      stops: [],
+      locatedStops: [],
+      driverText: leg.driverName || '',
+      distanceKm: Number(leg.distanceKm || 0),
+      distanceText: leg.distanceKm != null ? Number(leg.distanceKm).toFixed(1) : '-',
+      points: road,
+      realSegments: road === fallback ? 0 : 1,
+      totalSegments: 1
+    } as RouteView
+  }).filter((r) => r.points.length >= 2)
+})
+
+/** 订单视角中各 leg 是否使用直线估算（key = leg index，value = true 表示估算） */
+const orderLegEstimates = computed<Record<number, boolean>>(() => {
+  const order = linkOrders.value.find((o) => o.key === selectedOrderKey.value) ?? linkOrders.value[0]
+  if (!order) return {}
+  const result: Record<number, boolean> = {}
+  order.legs.forEach((leg, index) => {
+    const key = legKey(leg)
+    const cached = legRoadCache.value.get(key)
+    const hasNavPoly = (leg.navigationPolyline ?? []).filter((p: any) => p.longitude != null && p.latitude != null).length >= 2
+    const hasCachedRoad = cached && cached.length >= 2
+    // true = still using straight-line estimate
+    result[index] = !hasNavPoly && !hasCachedRoad
+  })
+  return result
+})
+
+/** 订单视角中是否至少有一段使用直线估算 */
+const hasEstimatedLegs = computed(() => Object.values(orderLegEstimates.value).some(Boolean))
+
+/** 订单分段道路缓存（key = 起终点坐标）与"正在请求"标记，避免重复请求 */
+const legRoadCache = ref<Map<string, { lng: number; lat: number }[]>>(new Map())
+const legRoadPending = new Set<string>()
+/** Tracks when a leg road request last failed, for retry cooldown */
+const legRoadFailed = ref<Map<string, number>>(new Map())
+const LEG_ROAD_RETRY_MS = 30_000 // 30s cooldown before retrying a failed leg
+const legKey = (leg: TopologyApi.TopologyLeg) =>
+  `${leg.fromLongitude},${leg.fromLatitude}->${leg.toLongitude},${leg.toLatitude}`
+
+/** 按需补取真实道路轨迹；失败后进入冷却期，冷却期过后自动重试 */
+const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLng: number, toLat: number) => {
+  if (legRoadCache.value.has(key) || legRoadPending.has(key)) return
+  // Respect retry cooldown after a previous failure
+  const failedAt = legRoadFailed.value.get(key)
+  if (failedAt && Date.now() - failedAt < LEG_ROAD_RETRY_MS) return
+  legRoadPending.add(key)
+  try {
+    const points = await DispatchApi.getRoadBetween({
+      fromLongitude: fromLng, fromLatitude: fromLat, toLongitude: toLng, toLatitude: toLat
+    })
+    if (points && points.length >= 2) {
+      const next = new Map(legRoadCache.value)
+      next.set(key, points
+        .filter((p) => p.longitude != null && p.latitude != null)
+        .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) })))
+      legRoadCache.value = next
+      // Clear failure record on success
+      const nextFailed = new Map(legRoadFailed.value)
+      nextFailed.delete(key)
+      legRoadFailed.value = nextFailed
+      redraw()
+    } else {
+      // API returned empty/insufficient data — record failure for retry
+      const nextFailed = new Map(legRoadFailed.value)
+      nextFailed.set(key, Date.now())
+      legRoadFailed.value = nextFailed
+      setTimeout(() => redraw(), LEG_ROAD_RETRY_MS + 1000)
+    }
+  } catch (e) {
+    // Record failure timestamp so computed re-evaluation triggers a retry after cooldown
+    const nextFailed = new Map(legRoadFailed.value)
+    nextFailed.set(key, Date.now())
+    legRoadFailed.value = nextFailed
+    // Schedule a redraw after retry cooldown so the next computed evaluation retries
+    setTimeout(() => redraw(), LEG_ROAD_RETRY_MS + 1000)
+  } finally {
+    legRoadPending.delete(key)
+  }
+}
+
+/** 地图实际绘制的线路（随视角变化）：总体=全部；按车辆=选中车；按订单=选中单的分段 */
+const mapRoutes = computed<RouteView[]>(() => {
+  if (panelTab.value === 'order') return orderLegRoutes.value
+  if (panelTab.value === 'vehicle' && selectedVehicleKey.value) {
+    return visibleRoutes.value.filter((r) => r.key === selectedVehicleKey.value)
+  }
+  return visibleRoutes.value
+})
+
+/** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
+const plateColorMap = computed(() => {
+  const map = new Map<string, string>()
+  routes.value.forEach((r) => {
+    const plate = vehicles.value.find((v) => v.plateNo && r.title.includes(v.plateNo))?.plateNo
+    if (plate) map.set(plate, r.color)
+  })
+  return map
+})
+
 /** 可绘制（至少 2 个带坐标的经停点）的线路：为空时页面给出明确提示而不是空白地图 */
-const drawableRoutes = computed(() => visibleRoutes.value.filter((r) => r.points.length >= 2))
+const drawableRoutes = computed(() => mapRoutes.value.filter((r) => r.points.length >= 2))
 
 /** 多段联运交接（按订单）：哪个订单在哪一站交给谁（转运站点工作人员 / 其他司机） */
 const linkOrders = computed(() => {
@@ -320,7 +534,8 @@ const linkOrders = computed(() => {
             ? `${toDriver}${toPlate ? `（${toPlate}）` : ''}`
             : (toPlate ? `车辆 ${toPlate}` : '转运站点工作人员')
         }
-        return { ...leg, handoverTarget }
+        // 用地图上"该车牌对应车辆线"的颜色，保证右栏与地图颜色一致（换车=换色，一眼看出联运）
+        return { ...leg, handoverTarget, color: plateColorMap.value.get(leg.plateNo || '') || '#909399' }
       })
       return {
         key: `link-${t.orderId}`,
@@ -333,6 +548,38 @@ const linkOrders = computed(() => {
       }
     })
 })
+
+/** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
+
+/** 转接站信息：站点名称 → 转接目标描述（用于车辆视角地图标注 & route-card 显示） */
+const handoverStationMap = computed(() => {
+  const map = new Map<string, { toDriverName?: string; toPlateNo?: string; fromDriverName?: string; fromPlateNo?: string }>()
+  topologies.value.forEach((t) => {
+    (t.handovers ?? []).forEach((h) => {
+      if (h.stationName) {
+        map.set(h.stationName, {
+          toDriverName: h.toDriverName,
+          toPlateNo: h.toPlateNo,
+          fromDriverName: h.fromDriverName,
+          fromPlateNo: h.fromPlateNo
+        })
+      }
+    })
+  })
+  return map
+})
+
+/** 判断站点是否为转接站，并返回转接描述文本 */
+const handoverInfoFor = (stationId?: number, stationNameStr?: string): string => {
+  const name = stationNameStr || stationName(stationId)
+  if (!name) return ''
+  const h = handoverStationMap.value.get(name)
+  if (!h) return ''
+  const target = h.toDriverName
+    ? `${h.toDriverName}${h.toPlateNo ? `（${h.toPlateNo}）` : ''}`
+    : (h.toPlateNo ? `车辆 ${h.toPlateNo}` : '转运站点工作人员')
+  return `交给 ${target}`
+}
 
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
@@ -495,7 +742,7 @@ const drawMap = () => {
   const BMapGL = window.BMapGL
   clearOverlays()
   const allPoints: any[] = []
-  visibleRoutes.value.forEach((route) => {
+  mapRoutes.value.forEach((route) => {
     const path = route.points.map((p) => {
       const bd = gcj02ToBd09(p.lng, p.lat)
       return new BMapGL.Point(bd.lng, bd.lat)
@@ -520,7 +767,8 @@ const drawMap = () => {
       map.addOverlay(marker)
       overlays.value.push(marker)
       const label = new BMapGL.Label(
-        `${index + 1}. ${actionLabel(stop.actionType)} · ${stop.stationName || stationName(stop.stationId)}`,
+        // 地图上把"在哪儿做什么"标清楚：序号 · 操作（货运标件数，客运不标人数）· 站名
+        `${index + 1}. ${actionLabel(stop.actionType)}${quantityText(stop)} · ${stop.stationName || stationName(stop.stationId)}`,
         { position: point, offset: new BMapGL.Size(12, -24) }
       )
       label.setStyle({
@@ -534,6 +782,39 @@ const drawMap = () => {
       })
       map.addOverlay(label)
       overlays.value.push(label)
+
+      // 转接站标注：如果该站点是转接点，额外绘制醒目菱形标记
+      const stopName = stop.stationName || stationName(stop.stationId)
+      const _handover = stopName ? handoverStationMap.value.get(stopName) : undefined
+      if (_handover) {
+        const hoTarget = _handover.toDriverName
+          ? `交给 ${_handover.toDriverName}${_handover.toPlateNo ? `(${_handover.toPlateNo})` : ''}`
+          : (_handover.toPlateNo ? `交给 ${_handover.toPlateNo}` : '交给转运站点')
+        // 橙色菱形标记
+        const hoIcon = new BMapGL.Icon(handoverIconUrl(), new BMapGL.Size(28, 28), {
+          anchor: new BMapGL.Size(14, 14)
+        })
+        const hoMarker = new BMapGL.Marker(new BMapGL.Point(bd.lng, bd.lat), { icon: hoIcon, offset: new BMapGL.Size(0, -18) })
+        map.addOverlay(hoMarker)
+        overlays.value.push(hoMarker)
+        // 转接信息标签
+        const hoLabel = new BMapGL.Label(
+          `🔄 ${hoTarget}`,
+          { position: point, offset: new BMapGL.Size(12, -44) }
+        )
+        hoLabel.setStyle({
+          color: '#e6a23c',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          border: '1px solid #e6a23c',
+          padding: '2px 8px',
+          background: '#fff8e1',
+          borderRadius: '4px'
+        })
+        map.addOverlay(hoLabel)
+        overlays.value.push(hoLabel)
+      }
+
     })
     // 方向箭头：沿轨迹等距放 2 个箭头（含真实道路时更直观看出行驶方向）
     directionArrows(route).forEach((arrow) => {
@@ -560,6 +841,15 @@ const drawMap = () => {
   if (allPoints.length) {
     map.setViewport(allPoints)
   }
+
+}
+/** 转接站菱形图标（橙色，带"转"字） */
+const handoverIconUrl = () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <polygon points="16,2 30,16 16,30 2,16" fill="#e6a23c" stroke="#ffffff" stroke-width="2"/>
+    <text x="16" y="20" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="bold">转</text>
+  </svg>`
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
 }
 
 /** 箭头图标（SVG data URI，颜色随线路） */
@@ -625,7 +915,7 @@ let playTimer: number | undefined
 /** 进度 p(0~100) → 各线路上的当前位置（按分段长度线性插值） */
 const positionsAt = (p: number) => {
   const ratio = Math.max(0, Math.min(100, p)) / 100
-  return visibleRoutes.value.map((route) => {
+  return mapRoutes.value.map((route) => {
     const pts = route.points
     if (pts.length === 0) return { key: route.key, index: 0, point: null }
     if (pts.length === 1) return { key: route.key, index: 0, point: pts[0] }
@@ -657,7 +947,7 @@ const positionsAt = (p: number) => {
 
 /** SVG 示意图：真实经纬度 → 归一化到 1000×620 画布 */
 const svgProjection = computed(() => {
-  const pts = visibleRoutes.value.flatMap((r) => r.points)
+  const pts = mapRoutes.value.flatMap((r) => r.points)
   if (!pts.length) return null
   const lngs = pts.map((p) => p.lng)
   const lats = pts.map((p) => p.lat)
@@ -679,7 +969,7 @@ const svgProjection = computed(() => {
 const svgLines = computed(() => {
   const proj = svgProjection.value
   if (!proj) return []
-  return visibleRoutes.value.map((route) => {
+  return mapRoutes.value.map((route) => {
     const dots = route.points.map((p) => proj.project(p))
     return { key: route.key, color: route.color, dots, points: dots.map((d) => `${d.x},${d.y}`).join(' ') }
   })
@@ -692,7 +982,7 @@ const svgMovers = computed(() => {
     .filter((p) => p.point)
     .map((p) => {
       const pos = proj.project(p.point!)
-      const route = visibleRoutes.value.find((r) => r.key === p.key)
+      const route = mapRoutes.value.find((r) => r.key === p.key)
       return { key: p.key, x: pos.x, y: pos.y, color: route?.color || '#409eff' }
     })
 })
@@ -998,6 +1288,132 @@ onBeforeUnmount(stopPlay)
   overflow-y: auto;
   padding-right: 4px;
 }
+.panel-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.panel-tab {
+  padding: 4px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  user-select: none;
+}
+.panel-tab.active {
+  background: #1f5e9e;
+  border-color: #1f5e9e;
+  color: #fff;
+}
+.panel-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+.route-card.selectable,
+.order-card.selectable {
+  cursor: pointer;
+}
+.route-card.picked,
+.order-card.picked {
+  border-color: #1f5e9e;
+  box-shadow: 0 0 0 1px #1f5e9e inset;
+}
+.route-card.dimmed,
+.order-card.dimmed {
+  opacity: 0.45;
+}
+.route-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+}
+.order-card {
+  border: 1px solid #c7d8ea;
+  background: #f5f9ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.order-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.order-no {
+  font-size: 13px;
+  font-weight: 600;
+  color: #123f6e;
+}
+.order-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.order-leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.leg-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.est-badge {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border: 1px solid #faecd8;
+}
+.real-badge {
+  background: #ecf5ff;
+  color: #409eff;
+  border: 1px solid #d9ecff;
+}
+.order-est-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #e6a23c;
+  line-height: 1.5;
+  .el-icon {
+    flex-shrink: 0;
+  }
+}
+.leg-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.leg-seq {
+  color: var(--el-text-color-placeholder);
+  width: 12px;
+  text-align: right;
+}
+.leg-text {
+  color: var(--el-text-color-primary);
+}
+.order-transfer {
+  margin-left: 28px;
+  font-size: 12px;
+  color: #e6a23c;
+  line-height: 1.6;
+}
 .link-card {
   border: 1px solid #c7d8ea;
   background: #f5f9ff;
@@ -1139,5 +1555,24 @@ onBeforeUnmount(stopPlay)
 }
 .stop-act.act-seat {
   color: var(--el-color-primary);
+}
+
+.stop-handover {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 0 4px 26px;
+  color: #e6a23c;
+  background: #fff8e1;
+  margin: 2px 0;
+  border-radius: 4px;
+  border-left: 3px solid #e6a23c;
+}
+.stop-handover-icon {
+  font-size: 14px;
+}
+.stop-handover-text {
+  font-weight: 600;
 }
 </style>

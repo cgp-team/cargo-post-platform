@@ -79,10 +79,12 @@ class CargoReviewServiceImplTest {
     }
 
     @Test
-    void overweight_rejected() {
+    void overweight_conditional_split_suggestion() {
+        // 业务规则：有解决方案就告诉用户做什么 —— 超重可拆分 → 需客户操作（不是直接拒运）
         CargoReviewResult r = service.review("土鸡蛋", new BigDecimal("50"), false, "", 1L, 2L);
-        assertTrue(r.isRejected());
+        assertEquals(ReviewStatusEnum.CONDITIONAL.getStatus(), r.getReviewStatus());
         assertTrue(r.getReasonCodes().contains(ReviewReasonCodeEnum.OVER_WEIGHT.getCode()));
+        assertTrue(r.getMessage() != null && r.getMessage().contains("拆分"));
     }
 
     @Test
