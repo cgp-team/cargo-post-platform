@@ -44,7 +44,7 @@ import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionU
 import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 
 /**
- * 多段联运服务实现：规划（委托 {@link MultiLegPlanner}）→ 落库运输段 → 状态机推进 + 资源状态同步。
+ * 多段联运服务实现：规划（委托 {@link MultiLegPlanner}）→ 落库运输�?�?状态机推进 + 资源状态同步�?
  */
 @Service
 @Validated
@@ -67,7 +67,7 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private AlgorithmClient algorithmClient;
     @Resource private OrderEventService orderEventService;
     @Resource private UserNotificationService userNotificationService;
-    /** 车辆当前位置（REAL > 模拟引擎 > 班次插值）：多段联运按"谁离本段起点近"改派，避免一台车跨城往返 */
+    /** 车辆当前位置（REAL > 模拟引擎 > 班次插值）：多段联运按"谁离本段起点�?改派，避免一台车跨城往�?*/
     @Resource private cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider vehicleLocationProvider;
 
     @Override
@@ -81,9 +81,9 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
     @Override
-    // REQUIRES_NEW：调用方 DispatchServiceImpl.createSmartPlan 会吞掉段规划异常（多段是增强能力，
-    // 不该让整单调度失败）。若参与外层事务，异常会把共享事务标记 rollback-only，导致外层提交时
-    // 抛 UnexpectedRollbackException；独立事务可保证"段规划失败只回滚自己，不影响已生成的直达方案"。
+    // REQUIRES_NEW：调用方 DispatchServiceImpl.createSmartPlan 会吞掉段规划异常（多段是增强能力�?
+    // 不该让整单调度失败）。若参与外层事务，异常会把共享事务标�?rollback-only，导致外层提交时
+    // �?UnexpectedRollbackException；独立事务可保证"段规划失败只回滚自己，不影响已生成的直达方案"�?
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId) {
         TransportOrderDO order = orderMapper.selectById(orderId);
@@ -118,7 +118,7 @@ public class MultiLegServiceImpl implements MultiLegService {
                     .build();
             legs.add(leg);
         }
-        // 真实道路：逐段取高德路网（距离/时长/polyline），失败保持 ESTIMATED（不伪装真实道路，需求 §73/§141）
+        // 真实道路：逐段取高德路网（距离/时长/polyline），失败保持 ESTIMATED（不伪装真实道路，需�?§73/§141�?
         enrichWithRoadRoute(legs);
         // 预计时间基于最终时长（可能是路网时长）顺序推进
         LocalDateTime cursor = LocalDateTime.now().plusMinutes(MultiLegPlanner.PREPARE_MINUTES);
@@ -138,15 +138,15 @@ public class MultiLegServiceImpl implements MultiLegService {
                 result.reason(), "{\"legCount\":" + result.legCount() + ",\"transferCount\":"
                         + result.transferCount() + ",\"mode\":\"" + result.mode() + "\"}");
         userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_CREATED,
-                "已生成运输方案", result.reason());
+                "已生成运输方�?, result.reason());
         return legs;
     }
 
     /**
-     * 逐段补真实道路轨迹（需求 §73/§74/§141）：
-     * 高德路网可用 → navigationSource=AMAP + 存储 polyline（"lon,lat;..." 紧凑串）+ 用真实距离/时长覆盖估算；
-     * 失败/不可用 → 保持 ESTIMATED，界面按"估算值"展示，绝不伪装成实时道路导航。
-     * 段数 ≤3，且算法侧有 24h 路网缓存，成本可控。
+     * 逐段补真实道路轨迹（需�?§73/§74/§141）：
+     * 高德路网可用 �?navigationSource=AMAP + 存储 polyline�?lon,lat;..." 紧凑串）+ 用真实距�?时长覆盖估算�?
+     * 失败/不可�?�?保持 ESTIMATED，界面按"估算�?展示，绝不伪装成实时道路导航�?
+     * 段数 �?，且算法侧有 24h 路网缓存，成本可控�?
      */
     private void enrichWithRoadRoute(List<TransportLegDO> legs) {
         if (algorithmClient == null || legs.isEmpty()) {
@@ -187,7 +187,7 @@ public class MultiLegServiceImpl implements MultiLegService {
                     leg.setDurationMinutes(Math.max(1, (int) Math.round(route.getDurationSeconds() / 60)));
                 }
             } catch (Exception ex) {
-                log.debug("[multi-leg] 订单 {} 第 {} 段真实道路不可用，保留估算：{}",
+                log.debug("[multi-leg] 订单 {} �?{} 段真实道路不可用，保留估算：{}",
                         leg.getOrderId(), leg.getLegSequence(), ex.getMessage());
             }
         }
@@ -209,8 +209,8 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
     /**
-     * 供规划使用的线路站点：只保留"启用且可用于调度"的线路（需求 §38：
-     * 停用线路不得用于调度/导航），避免拿停用线路当换乘通道。
+     * 供规划使用的线路站点：只保留"启用且可用于调度"的线路（需�?§38�?
+     * 停用线路不得用于调度/导航），避免拿停用线路当换乘通道�?
      */
     private List<RouteStationDO> routeStationsForPlanning() {
         List<RouteStationDO> all = routeStationMapper.selectList();
@@ -248,10 +248,10 @@ public class MultiLegServiceImpl implements MultiLegService {
         if (current == targetStatus) {
             return; // 幂等
         }
-        // 状态机守卫：禁止跳级（需求 §6/§115，如"运输中"不能直接"已完成"）
+        // 状态机守卫：禁止跳级（需�?§6/§115，如"运输�?不能直接"已完�?�?
         if (!TransportLegStatusEnum.canTransit(current, targetStatus)) {
             throw exception(LEG_TRANSITION_ILLEGAL,
-                    (current == null ? "未知" : current.getName()) + " → " + targetStatus.getName());
+                    (current == null ? "未知" : current.getName()) + " �?" + targetStatus.getName());
         }
         applyLegStatus(leg, targetStatus, null);
     }
@@ -279,7 +279,7 @@ public class MultiLegServiceImpl implements MultiLegService {
                 ? List.of() : driverVehicleMapper.selectActiveBindings();
         DriverVehicleDO chosen = null;
         for (DriverVehicleDO binding : bindings) {
-            // 排除当前（故障/异常）资源，并在同一时段无冲突
+            // 排除当前（故�?异常）资源，并在同一时段无冲�?
             if (Objects.equals(binding.getVehicleId(), leg.getVehicleId())
                     && Objects.equals(binding.getDriverId(), leg.getDriverId())) {
                 continue;
@@ -294,7 +294,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             }
         }
         if (chosen == null) {
-            // 方案置异常，等人工介入（需求 §108）
+            // 方案置异常，等人工介入（需�?§108�?
             if (dispatchPlanMapper != null && leg.getPlanId() != null) {
                 DispatchPlanDO planUpdate = new DispatchPlanDO();
                 planUpdate.setId(leg.getPlanId());
@@ -302,10 +302,10 @@ public class MultiLegServiceImpl implements MultiLegService {
                 dispatchPlanMapper.updateById(planUpdate);
             }
             orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
-                    "第 " + leg.getLegSequence() + " 段重调度失败：当前无可调度车辆/司机");
+                    "�?" + leg.getLegSequence() + " 段重调度失败：当前无可调度车�?司机");
             userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
                     cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.EXCEPTION,
-                    "重调度失败", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence() + " 段无可调度资源",
+                    "重调度失�?, "订单 " + leg.getOrderId() + " �?" + leg.getLegSequence() + " 段无可调度资�?,
                     leg.getOrderId(), legId);
             throw exception(NO_AVAILABLE_RESOURCE);
         }
@@ -319,21 +319,21 @@ public class MultiLegServiceImpl implements MultiLegService {
         legMapper.updateById(update);
         // 异常资源释放
         releaseVehicle(fromVehicle);
-        // 分配新资源后写事件 + 多方通知（用户/新司机/后台）
+        // 分配新资源后写事�?+ 多方通知（用�?新司�?后台�?
         orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.PLAN_REPLANNED,
-                "第 " + leg.getLegSequence() + " 段已重新调度（车辆 "
-                        + (fromVehicle == null ? "无" : fromVehicle) + " → " + chosen.getVehicleId()
-                        + (reason != null ? "，原因：" + reason : "") + "）");
+                "�?" + leg.getLegSequence() + " 段已重新调度（车�?"
+                        + (fromVehicle == null ? "�? : fromVehicle) + " �?" + chosen.getVehicleId()
+                        + (reason != null ? "，原因：" + reason : "") + "�?);
         userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.PLAN_REPLANNED,
                 cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.WARNING, false,
-                "运输方案已调整", "您的订单第 " + leg.getLegSequence() + " 段已重新安排车辆，预计时间可能略有变化");
+                "运输方案已调�?, "您的订单�?" + leg.getLegSequence() + " 段已重新安排车辆，预计时间可能略有变�?);
         userNotificationService.sendToDriver(chosen.getDriverId(), TransportOrderEventTypeEnum.LEG_ASSIGNED,
                 cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.ACTION_REQUIRED, true,
-                "新的运输任务", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence() + " 段已分配给您，请接单",
+                "新的运输任务", "订单 " + leg.getOrderId() + " �?" + leg.getLegSequence() + " 段已分配给您，请接单",
                 leg.getOrderId(), leg.getPlanId(), legId);
         userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.PLAN_REPLANNED,
                 cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.WARNING,
-                "已完成重调度", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence() + " 段已换车",
+                "已完成重调度", "订单 " + leg.getOrderId() + " �?" + leg.getLegSequence() + " 段已换车",
                 leg.getOrderId(), legId);
         return legMapper.selectById(legId);
     }
@@ -344,7 +344,7 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
         VehicleDO upd = new VehicleDO();
         upd.setId(vehicleId);
-        upd.setRealtimeStatus(0); // 释放回空闲
+        upd.setRealtimeStatus(0); // 释放回空�?
         vehicleMapper.updateById(upd);
     }
 
@@ -370,9 +370,9 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
     /**
-     * 段与班次执行同步（需求 §125）：段开始 → 司机当天执行记录置在途；
-     * 段完成且该司机当天已无其他进行中段 → 执行记录置已完成。
-     * 避免"Leg=已完成 而 ShiftExecution 仍在途"的系统分裂。
+     * 段与班次执行同步（需�?§125）：段开�?�?司机当天执行记录置在途；
+     * 段完成且该司机当天已无其他进行中�?�?执行记录置已完成�?
+     * 避免"Leg=已完�?�?ShiftExecution 仍在�?的系统分裂�?
      */
     private void syncShiftExecution(TransportLegDO leg, TransportLegStatusEnum target) {
         if (shiftExecutionMapper == null || leg.getDriverId() == null) {
@@ -387,7 +387,7 @@ public class MultiLegServiceImpl implements MultiLegService {
         if (target == TransportLegStatusEnum.IN_TRANSIT) {
             ShiftExecutionDO upd = new ShiftExecutionDO();
             upd.setId(execution.getId());
-            upd.setStatus(0); // 在途
+            upd.setStatus(0); // 在�?
             if (execution.getDepartTime() == null) {
                 upd.setDepartTime(LocalDateTime.now());
             }
@@ -400,7 +400,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             }
             ShiftExecutionDO upd = new ShiftExecutionDO();
             upd.setId(execution.getId());
-            upd.setStatus(1); // 已完成
+            upd.setStatus(1); // 已完�?
             if (execution.getArriveTime() == null) {
                 upd.setArriveTime(LocalDateTime.now());
             }
@@ -408,7 +408,7 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
     }
 
-    /** 车辆/司机状态与运输段同步（需求 §123/§124）：在途 → 车辆在途/司机忙碌；完成 → 空闲/在线 */
+    /** 车辆/司机状态与运输段同步（需�?§123/§124）：在�?�?车辆在�?司机忙碌；完�?�?空闲/在线 */
     private void syncResourceStatus(TransportLegDO leg, TransportLegStatusEnum target) {
         boolean busy = target == TransportLegStatusEnum.IN_TRANSIT
                 || target == TransportLegStatusEnum.NAVIGATING
@@ -447,33 +447,33 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
     private void recordLegEvent(TransportLegDO leg, TransportLegStatusEnum target, String reason) {
-        String prefix = "第 " + leg.getLegSequence() + " 段";
+        String prefix = "�?" + leg.getLegSequence() + " �?;
         switch (target) {
             case DRIVER_ACCEPTED -> orderEventService.record(leg.getOrderId(),
-                    TransportOrderEventTypeEnum.LEG_ACCEPTED, prefix + "司机已接单");
+                    TransportOrderEventTypeEnum.LEG_ACCEPTED, prefix + "司机已接�?);
             case IN_TRANSIT -> orderEventService.record(leg.getOrderId(),
-                    TransportOrderEventTypeEnum.LEG_STARTED, prefix + "已开始运输");
+                    TransportOrderEventTypeEnum.LEG_STARTED, prefix + "已开始运�?);
             case ARRIVED_DESTINATION -> orderEventService.record(leg.getOrderId(),
-                    TransportOrderEventTypeEnum.LEG_ARRIVED, prefix + "已到达" + (Boolean.TRUE.equals(leg.getHandoverRequired()) ? "换乘站" : "目的站"));
+                    TransportOrderEventTypeEnum.LEG_ARRIVED, prefix + "已到�? + (Boolean.TRUE.equals(leg.getHandoverRequired()) ? "换乘�? : "目的�?));
             case COMPLETED -> orderEventService.record(leg.getOrderId(),
-                    TransportOrderEventTypeEnum.LEG_COMPLETED, prefix + "已完成" + (reason != null ? "：" + reason : ""));
+                    TransportOrderEventTypeEnum.LEG_COMPLETED, prefix + "已完�? + (reason != null ? "�? + reason : ""));
             case EXCEPTION -> orderEventService.record(leg.getOrderId(),
-                    TransportOrderEventTypeEnum.ORDER_EXCEPTION, prefix + "异常" + (reason != null ? "：" + reason : ""));
-            default -> { /* 其余状态无需单独记事件 */ }
+                    TransportOrderEventTypeEnum.ORDER_EXCEPTION, prefix + "异常" + (reason != null ? "�? + reason : ""));
+            default -> { /* 其余状态无需单独记事�?*/ }
         }
     }
 
     /**
-     * 给待分配段绑定车辆/司机（需求 §48/§49/§113）：
-     * 1. 取当前有效人车绑定，尽量让相邻段用不同车辆（换乘的意义）；
-     * 2. **必须无时间冲突**：车辆/司机在该时段已被其他段占用则跳过该绑定；
-     * 3. 全部绑定都冲突 → 保持"已规划/未分配"，由人工改派（并在日志中明确提示，绝不硬塞冲突车辆）。
+     * 给待分配段绑定车�?司机（需�?§48/§49/§113）：
+     * 1. 取当前有效人车绑定，尽量让相邻段用不同车辆（换乘的意义）�?
+     * 2. **必须无时间冲�?*：车�?司机在该时段已被其他段占用则跳过该绑定；
+     * 3. 全部绑定都冲�?�?保持"已规�?未分�?，由人工改派（并在日志中明确提示，绝不硬塞冲突车辆）�?
      */
     private void assignVehicles(List<TransportLegDO> legs, Long orderId, Long planId,
                                 Long planVehicleId, Long planDriverId) {
-        // 优先采用**调度算法给出的车辆/司机分配**（transport_dispatch_plan_item）：
-        // 算法会把同一片区的多张订单拼到同一辆车上（拼单/共载），这里必须沿用它的分配，
-        // 否则会出现"为某一单单独派一辆车"的假象，与真实运营（一车多单）不符。
+        // 优先采用**调度算法给出的车�?司机分配**（transport_dispatch_plan_item）：
+        // 算法会把同一片区的多张订单拼到同一辆车上（拼单/共载），这里必须沿用它的分配�?
+        // 否则会出�?为某一单单独派一辆车"的假象，与真实运营（一车多单）不符�?
         java.util.Map<Long, cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO> byStation =
                 new java.util.HashMap<>();
         // 该订单在算法方案里所属的车辆（取派送明细中最靠前的一条）：拼单共载时用它给取货段派车
@@ -508,19 +508,19 @@ public class MultiLegServiceImpl implements MultiLegService {
         List<TransportLegDO> assigned = new ArrayList<>();
         for (int i = 0; i < legs.size(); i++) {
             TransportLegDO leg = legs.get(i);
-            // 1) 算法已分配（该订单在该经停上的车辆/司机）→ 直接沿用（实现"一车多单"）
+            // 1) 算法已分配（该订单在该经停上的车�?司机）→ 直接沿用（实�?一车多�?�?
             var planned = byStation.get(leg.getFromStationId());
             if (planned == null && !Boolean.TRUE.equals(leg.getHandoverRequired())) {
-                // 最后一段：取"算法分配给该订单送达站"的车辆（一车多单继续沿用同一辆车）
+                // 最后一段：�?算法分配给该订单送达�?的车辆（一车多单继续沿用同一辆车�?
                 planned = byStation.get(leg.getToStationId());
             }
             if (planned == null && i == 0) {
-                // 取货段：算法把取货视作"场站预装"（明细里只有派送站）→ 用该订单所属车辆，
+                // 取货段：算法把取货视�?场站预装"（明细里只有派送站）→ 用该订单所属车辆，
                 // 这样同一辆车上的多张订单在取货段就落在同一辆车上（真实拼单，不是专车）
                 planned = orderVehicleItem;
             }
-            // 注意：这里**不做时段冲突判断**——算法在派单时已按容量/时间窗校验过，
-            // 而"同一辆车在同一时段承运多张订单"正是拼单/共载的正常形态，再判冲突会把共载挡掉。
+            // 注意：这�?*不做时段冲突判断**——算法在派单时已按容�?时间窗校验过�?
+            // �?同一辆车在同一时段承运多张订单"正是拼单/共载的正常形态，再判冲突会把共载挡掉�?
             if (planned != null && planned.getVehicleId() != null) {
                 leg.setVehicleId(planned.getVehicleId());
                 leg.setDriverId(planned.getDriverId());
@@ -530,9 +530,9 @@ public class MultiLegServiceImpl implements MultiLegService {
                 assigned.add(leg);
                 continue;
             }
-            // 2) 算法未覆盖（多段中转站没有明细）→ 按人车绑定兜底，并避让时段冲突
-            // 相邻段优先用**不同**车辆（换乘的意义，需求 §111：Leg1.vehicle != Leg2.vehicle）：
-            // 第一轮只挑"本方案还没用过且无时段冲突"的绑定；没有才退而求其次允许复用。
+            // 2) 算法未覆盖（多段中转站没有明细）�?按人车绑定兜底，并避让时段冲�?
+            // 相邻段优先用**不同**车辆（换乘的意义，需�?§111：Leg1.vehicle != Leg2.vehicle）：
+            // 第一轮只�?本方案还没用过且无时段冲�?的绑定；没有才退而求其次允许复用�?
             java.util.Set<Long> usedVehicles = assigned.stream().map(TransportLegDO::getVehicleId)
                     .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
             DriverVehicleDO chosen = pickBinding(bindings, leg, assigned, usedVehicles, true);
@@ -540,7 +540,7 @@ public class MultiLegServiceImpl implements MultiLegService {
                 chosen = pickBinding(bindings, leg, assigned, usedVehicles, false);
             }
             if (chosen == null) {
-                log.warn("[multi-leg] 订单 {} 第 {} 段在 {}~{} 无可用车辆/司机（时段冲突），保持未分配",
+                log.warn("[multi-leg] 订单 {} �?{} 段在 {}~{} 无可用车�?司机（时段冲突），保持未分配",
                         leg.getOrderId(), leg.getLegSequence(), leg.getEstimatedDeparture(), leg.getEstimatedArrival());
                 continue;
             }
@@ -570,21 +570,21 @@ public class MultiLegServiceImpl implements MultiLegService {
         return null;
     }
 
-    /** 触发改派的最小"当前车离本段起点"距离（km）：低于它说明车就在附近，没必要换车 */
+    /** 触发改派的最�?当前车离本段起点"距离（km）：低于它说明车就在附近，没必要换车 */
     private static final double RELAY_MIN_CURRENT_KM = 6.0;
-    /** 改派收益下限（km）：换车后至少近这么多才值得多一次交接 */
+    /** 改派收益下限（km）：换车后至少近这么多才值得多一次交�?*/
     private static final double RELAY_MIN_GAIN_KM = 3.0;
 
     /**
-     * 多段联运 · 按"谁离本段起点近"改派后续段。
+     * 多段联运 · �?谁离本段起点�?改派后续段�?
      *
-     * <p>背景：调度算法可能把一张跨片区订单（如"重邮 → 巴南龙洲湾"）整段交给同一台车，
+     * <p>背景：调度算法可能把一张跨片区订单（如"重邮 �?巴南龙洲�?）整段交给同一台车�?
      * 于是出现"一台公交车跑到巴南再空车绕回来"的不合理调度。真实运营里每台车有自己的作业片区，
-     * 跨片区应由**另一台车/另一位司机在换乘站接驳**。</p>
+     * 跨片区应�?*另一台车/另一位司机在换乘站接�?*�?/p>
      *
-     * <p>做法：对第 2 段起的每一段，比较"当前派车"与"本单还没用过、且当前就在本段起点附近"的车，
+     * <p>做法：对�?2 段起的每一段，比较"当前派车"�?本单还没用过、且当前就在本段起点附近"的车�?
      * 若当前车离本段起点较远（>{@value #RELAY_MIN_CURRENT_KM}km）且换车后能明显更近
-     * （>{@value #RELAY_MIN_GAIN_KM}km），就改派该车/司机，并把前一段标记为需要换乘交接。</p>
+     * �?{@value #RELAY_MIN_GAIN_KM}km），就改派该�?司机，并把前一段标记为需要换乘交接�?/p>
      */
     private void relayFarLegsToNearbyVehicles(List<TransportLegDO> legs) {
         if (vehicleLocationProvider == null || driverVehicleMapper == null || legs == null || legs.size() < 2) {
@@ -608,7 +608,7 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
         java.util.Set<Long> used = legs.stream().map(TransportLegDO::getVehicleId)
                 .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
-        // 改派后需要给新车留"从当前位置开到交接站"的时间：记下每段的调动分钟，最后统一重排时间
+        // 改派后需要给新车�?从当前位置开到交接站"的时间：记下每段的调动分钟，最后统一重排时间
         java.util.Map<Integer, Integer> repositionMinutes = new java.util.HashMap<>();
         for (int i = 1; i < legs.size(); i++) {
             TransportLegDO leg = legs.get(i);
@@ -618,7 +618,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             }
             double currentKm = distanceToStation(locs.get(leg.getVehicleId()), from);
             if (currentKm < RELAY_MIN_CURRENT_KM) {
-                continue; // 当前车本来就在本段起点附近，不需要换车
+                continue; // 当前车本来就在本段起点附近，不需要换�?
             }
             DriverVehicleDO best = null;
             double bestKm = Double.MAX_VALUE;
@@ -635,10 +635,10 @@ public class MultiLegServiceImpl implements MultiLegService {
             if (best == null || currentKm - bestKm < RELAY_MIN_GAIN_KM) {
                 continue;
             }
-            log.info("[multi-leg] 订单 {} 第 {} 段按片区改派：车辆 {}（距起点 {}km）→ 车辆 {}（{}km）",
+            log.info("[multi-leg] 订单 {} �?{} 段按片区改派：车�?{}（距起点 {}km）→ 车辆 {}（{}km�?,
                     leg.getOrderId(), leg.getLegSequence(), leg.getVehicleId(), round1(currentKm),
                     best.getVehicleId(), round1(bestKm));
-            legs.get(i - 1).setHandoverRequired(true); // 上一段结束需要交接给新司机
+            legs.get(i - 1).setHandoverRequired(true); // 上一段结束需要交接给新司�?
             leg.setVehicleId(best.getVehicleId());
             leg.setDriverId(best.getDriverId());
             leg.setShiftId(null);
@@ -646,16 +646,14 @@ public class MultiLegServiceImpl implements MultiLegService {
             leg.setHandoverRequired(true);
             leg.setStatus(TransportLegStatusEnum.ASSIGNED.getStatus());
             used.add(best.getVehicleId());
-            // 新车从当前位置开到本段起点需要的分钟（按 20km/h 城区均速估算，向上取整）
-            repositionMinutes.put(i, (int) Math.ceil(bestKm / 20.0 * 60));
+            // 新车从当前位置开到本段起点需要的分钟（按 20km/h 城区均速估算，向上取整�?            repositionMinutes.put(i, (int) Math.ceil(bestKm / 20.0 * 60));
         }
         retimeWithReposition(legs, repositionMinutes);
     }
 
     /**
-     * 改派后重排各段时间：把"新车开到交接站"的调动时间算进去，交接站越远留的时间越足。
-     *
-     * <p>规则来自业务约束：联运一定要统筹好几个司机车辆的时间，换乘站点过远要留足交接时间。</p>
+     * 改派后重排各段时间：�?新车开到交接站"的调动时间算进去，交接站越远留的时间越足�?     *
+     * <p>规则来自业务约束：联运一定要统筹好几个司机车辆的时间，换乘站点过远要留足交接时间�?/p>
      */
     private void retimeWithReposition(List<TransportLegDO> legs, java.util.Map<Integer, Integer> repositionMinutes) {
         if (legs == null || legs.isEmpty()) {
@@ -670,8 +668,7 @@ public class MultiLegServiceImpl implements MultiLegService {
             int travel = leg.getDurationMinutes() != null ? leg.getDurationMinutes()
                     : MultiLegPlanner.travelMinutes(leg.getDistanceKm() == null ? 0 : leg.getDistanceKm().doubleValue());
             if (i > 0) {
-                // 上一段到达 + 交接停留（换乘段才需要）+ 新车调动到交接站的行驶时间
-                cursor = legs.get(i - 1).getEstimatedArrival();
+                // 上一段到�?+ 交接停留（换乘段才需要）+ 新车调动到交接站的行驶时�?                cursor = legs.get(i - 1).getEstimatedArrival();
                 if (cursor == null) {
                     return;
                 }
@@ -690,7 +687,7 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
     }
 
-    /** 车辆当前位置到目标站点的直线距离（km）；无位置返回一个大数 */
+    /** 车辆当前位置到目标站点的直线距离（km）；无位置返回一个大�?*/
     private static double distanceToStation(cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationSnapshot loc,
                                             StationDO station) {
         if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null
@@ -707,3 +704,5 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
 }
+
+

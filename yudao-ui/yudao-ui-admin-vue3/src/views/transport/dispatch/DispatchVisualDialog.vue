@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <Dialog v-model="visible" title="调度结果可视化" width="1180px">
     <div v-loading="loading" class="viz">
       <!-- 方案切换 + 汇总 -->
@@ -165,6 +165,10 @@
                 <span v-if="s.orderNo" class="stop-order">{{ s.orderNo }}</span>
                 <span class="stop-time">{{ timeText(s.estimatedArrivalTime) }}</span>
               </div>
+              <div v-if="handoverInfoFor(s.stationId, s.stationName)" class="stop-handover">
+                <span class="stop-handover-icon">🔄</span>
+                <span class="stop-handover-text">在此转{{ handoverInfoFor(s.stationId, s.stationName) }}</span>
+              </div>
             </div>
           </template>
 
@@ -187,6 +191,10 @@
                   <template v-if="o.durationMinutes"> · 约 {{ o.durationMinutes }} 分钟</template>
                 </span>
               </div>
+              <div v-if="selectedOrderKey === o.key && hasEstimatedLegs" class="order-est-hint">
+                <el-icon><WarningFilled /></el-icon>
+                <span>部分路段为直线估算，非真实道路轨迹。地图中虚线段表示估算路线。</span>
+              </div>
               <div v-for="(leg, i) in o.legs" :key="i" class="order-leg">
                 <span class="leg-color" :style="{ background: leg.color }"></span>
                 <span class="leg-seq">{{ i + 1 }}</span>
@@ -194,6 +202,10 @@
                   <b>{{ leg.plateNo || '车辆' }}</b>{{ leg.driverName ? ` · ${leg.driverName}` : '' }}
                   ：{{ leg.fromStationName || '—' }} → {{ leg.toStationName || '—' }}
                 </span>
+                <el-tooltip v-if="orderLegEstimates[i]" content="该路段暂无真实道路数据，显示为直线估算" placement="top">
+                  <span class="leg-badge est-badge">直线估算</span>
+                </el-tooltip>
+                <span v-else class="leg-badge real-badge">真实道路</span>
               </div>
               <div v-for="(leg, i) in o.legs" :key="'h' + i">
                 <div v-if="leg.handoverTarget" class="order-transfer">
@@ -213,6 +225,7 @@
 
 <script setup lang="ts">
 import { Dialog } from '@/components/Dialog'
+import { WarningFilled } from '@element-plus/icons-vue'
 import { loadBaiduMapSdk } from '@/components/Map/src/utils'
 import * as DispatchApi from '@/api/transport/dispatch'
 import * as DriverApi from '@/api/transport/driver'
@@ -406,15 +419,40 @@ const orderLegRoutes = computed<RouteView[]>(() => {
   }).filter((r) => r.points.length >= 2)
 })
 
+/** 订单视角中各 leg 是否使用直线估算（key = leg index，value = true 表示估算） */
+const orderLegEstimates = computed<Record<number, boolean>>(() => {
+  const order = linkOrders.value.find((o) => o.key === selectedOrderKey.value) ?? linkOrders.value[0]
+  if (!order) return {}
+  const result: Record<number, boolean> = {}
+  order.legs.forEach((leg, index) => {
+    const key = legKey(leg)
+    const cached = legRoadCache.value.get(key)
+    const hasNavPoly = (leg.navigationPolyline ?? []).filter((p: any) => p.longitude != null && p.latitude != null).length >= 2
+    const hasCachedRoad = cached && cached.length >= 2
+    // true = still using straight-line estimate
+    result[index] = !hasNavPoly && !hasCachedRoad
+  })
+  return result
+})
+
+/** 订单视角中是否至少有一段使用直线估算 */
+const hasEstimatedLegs = computed(() => Object.values(orderLegEstimates.value).some(Boolean))
+
 /** 订单分段道路缓存（key = 起终点坐标）与"正在请求"标记，避免重复请求 */
 const legRoadCache = ref<Map<string, { lng: number; lat: number }[]>>(new Map())
 const legRoadPending = new Set<string>()
+/** Tracks when a leg road request last failed, for retry cooldown */
+const legRoadFailed = ref<Map<string, number>>(new Map())
+const LEG_ROAD_RETRY_MS = 30_000 // 30s cooldown before retrying a failed leg
 const legKey = (leg: TopologyApi.TopologyLeg) =>
   `${leg.fromLongitude},${leg.fromLatitude}->${leg.toLongitude},${leg.toLatitude}`
 
-/** 按需补取真实道路轨迹（失败静默：保持直连兜底，不阻塞页面） */
+/** 按需补取真实道路轨迹；失败后进入冷却期，冷却期过后自动重试 */
 const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLng: number, toLat: number) => {
   if (legRoadCache.value.has(key) || legRoadPending.has(key)) return
+  // Respect retry cooldown after a previous failure
+  const failedAt = legRoadFailed.value.get(key)
+  if (failedAt && Date.now() - failedAt < LEG_ROAD_RETRY_MS) return
   legRoadPending.add(key)
   try {
     const points = await DispatchApi.getRoadBetween({
@@ -426,10 +464,25 @@ const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLn
         .filter((p) => p.longitude != null && p.latitude != null)
         .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) })))
       legRoadCache.value = next
+      // Clear failure record on success
+      const nextFailed = new Map(legRoadFailed.value)
+      nextFailed.delete(key)
+      legRoadFailed.value = nextFailed
       redraw()
+    } else {
+      // API returned empty/insufficient data — record failure for retry
+      const nextFailed = new Map(legRoadFailed.value)
+      nextFailed.set(key, Date.now())
+      legRoadFailed.value = nextFailed
+      setTimeout(() => redraw(), LEG_ROAD_RETRY_MS + 1000)
     }
   } catch (e) {
-    /* 高德不可用：保持直连兜底 */
+    // Record failure timestamp so computed re-evaluation triggers a retry after cooldown
+    const nextFailed = new Map(legRoadFailed.value)
+    nextFailed.set(key, Date.now())
+    legRoadFailed.value = nextFailed
+    // Schedule a redraw after retry cooldown so the next computed evaluation retries
+    setTimeout(() => redraw(), LEG_ROAD_RETRY_MS + 1000)
   } finally {
     legRoadPending.delete(key)
   }
@@ -493,6 +546,38 @@ const linkOrders = computed(() => {
       }
     })
 })
+
+/** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
+
+/** 转接站信息：站点名称 → 转接目标描述（用于车辆视角地图标注 & route-card 显示） */
+const handoverStationMap = computed(() => {
+  const map = new Map<string, { toDriverName?: string; toPlateNo?: string; fromDriverName?: string; fromPlateNo?: string }>()
+  topologies.value.forEach((t) => {
+    (t.handovers ?? []).forEach((h) => {
+      if (h.stationName) {
+        map.set(h.stationName, {
+          toDriverName: h.toDriverName,
+          toPlateNo: h.toPlateNo,
+          fromDriverName: h.fromDriverName,
+          fromPlateNo: h.fromPlateNo
+        })
+      }
+    })
+  })
+  return map
+})
+
+/** 判断站点是否为转接站，并返回转接描述文本 */
+const handoverInfoFor = (stationId?: number, stationNameStr?: string): string => {
+  const name = stationNameStr || stationName(stationId)
+  if (!name) return ''
+  const h = handoverStationMap.value.get(name)
+  if (!h) return ''
+  const target = h.toDriverName
+    ? `${h.toDriverName}${h.toPlateNo ? `（${h.toPlateNo}）` : ''}`
+    : (h.toPlateNo ? `车辆 ${h.toPlateNo}` : '转运站点工作人员')
+  return `交给 ${target}`
+}
 
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
@@ -695,6 +780,39 @@ const drawMap = () => {
       })
       map.addOverlay(label)
       overlays.value.push(label)
+
+      // 转接站标注：如果该站点是转接点，额外绘制醒目菱形标记
+      const stopName = stop.stationName || stationName(stop.stationId)
+      const _handover = stopName ? handoverStationMap.value.get(stopName) : undefined
+      if (_handover) {
+        const hoTarget = _handover.toDriverName
+          ? `交给 ${_handover.toDriverName}${_handover.toPlateNo ? `(${_handover.toPlateNo})` : ''}`
+          : (_handover.toPlateNo ? `交给 ${_handover.toPlateNo}` : '交给转运站点')
+        // 橙色菱形标记
+        const hoIcon = new BMapGL.Icon(handoverIconUrl(), new BMapGL.Size(28, 28), {
+          anchor: new BMapGL.Size(14, 14)
+        })
+        const hoMarker = new BMapGL.Marker(new BMapGL.Point(bd.lng, bd.lat), { icon: hoIcon, offset: new BMapGL.Size(0, -18) })
+        map.addOverlay(hoMarker)
+        overlays.value.push(hoMarker)
+        // 转接信息标签
+        const hoLabel = new BMapGL.Label(
+          `🔄 ${hoTarget}`,
+          { position: point, offset: new BMapGL.Size(12, -44) }
+        )
+        hoLabel.setStyle({
+          color: '#e6a23c',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          border: '1px solid #e6a23c',
+          padding: '2px 8px',
+          background: '#fff8e1',
+          borderRadius: '4px'
+        })
+        map.addOverlay(hoLabel)
+        overlays.value.push(hoLabel)
+      }
+
     })
     // 方向箭头：沿轨迹等距放 2 个箭头（含真实道路时更直观看出行驶方向）
     directionArrows(route).forEach((arrow) => {
@@ -721,6 +839,15 @@ const drawMap = () => {
   if (allPoints.length) {
     map.setViewport(allPoints)
   }
+
+}
+/** 转接站菱形图标（橙色，带"转"字） */
+const handoverIconUrl = () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <polygon points="16,2 30,16 16,30 2,16" fill="#e6a23c" stroke="#ffffff" stroke-width="2"/>
+    <text x="16" y="20" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="bold">转</text>
+  </svg>`
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
 }
 
 /** 箭头图标（SVG data URI，颜色随线路） */
@@ -1230,6 +1357,41 @@ onBeforeUnmount(stopPlay)
   font-size: 12px;
   padding: 2px 0;
 }
+.leg-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.est-badge {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border: 1px solid #faecd8;
+}
+.real-badge {
+  background: #ecf5ff;
+  color: #409eff;
+  border: 1px solid #d9ecff;
+}
+.order-est-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #e6a23c;
+  line-height: 1.5;
+  .el-icon {
+    flex-shrink: 0;
+  }
+}
 .leg-color {
   width: 10px;
   height: 10px;
@@ -1391,5 +1553,24 @@ onBeforeUnmount(stopPlay)
 }
 .stop-act.act-seat {
   color: var(--el-color-primary);
+}
+
+.stop-handover {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 0 4px 26px;
+  color: #e6a23c;
+  background: #fff8e1;
+  margin: 2px 0;
+  border-radius: 4px;
+  border-left: 3px solid #e6a23c;
+}
+.stop-handover-icon {
+  font-size: 14px;
+}
+.stop-handover-text {
+  font-weight: 600;
 }
 </style>
