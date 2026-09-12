@@ -158,3 +158,155 @@ FROM transport_order o
 JOIN transport_station ps ON ps.id = o.pickup_station_id
 JOIN transport_station ds ON ds.id = o.delivery_station_id
 WHERE o.id = 211;
+
+-- ============================================
+-- 无站点场景示例：用户在**路口/路边**（自填地址或地图选点）寄取，体现"小范围绕行"
+--
+-- 业务前提：车辆本职按线路跑、每站都停，只允许按订单做**小范围绕行**。
+--   距离最近可服务站点 ≤300m → 服务方式 DOOR_PICKUP（司机就近绕行交接）；
+--   300m~1km            → SAFE_ROADSIDE（在安全路边点交接）；
+--   更远                → NEAREST_STATION（客户送到最近站点交接）。
+-- 下面两单分别演示"路边取货"与"路边送达"，起终点仍是真实站点/真实路网，
+-- 用户原始地址与坐标单独留痕（original_address / original_latitude / original_longitude）。
+-- ============================================
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (212, 'TPDEMO7', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (213, 'TPDEMO8', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    order_no = VALUES(order_no),
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    status = 8, deleted = b'0';
+
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode, service_point_station_id,
+     receiver_name, receiver_mobile, receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    -- 212：用户在明志苑门口（路边，非站点）寄件 → 司机在最近站点附近小范围绕行取货（DOOR_PICKUP）
+    (212, 212, '日用品', b'0', 1, 2.00, 0.0100, '明志苑门口的快递纸箱', '路边取货（非站点），司机就近绕行',
+     1, 1, 'DOOR_PICKUP', 'STATION_TO_STATION',
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) c),
+     '袁同学', '13900000012', '重庆邮电大学明志苑2舍门口（路边）',
+     '重庆邮电大学明志苑2舍门口（崇文路路边）', 29.5312000, 106.6052000, 0, '1', NOW(), '1', NOW(), b'0'),
+    -- 213：寄到学生公寓路口（路边，非站点）→ 司机在安全路边点交接（SAFE_ROADSIDE）
+    (213, 213, '文件票据', b'0', 1, 1.00, 0.0040, '录取通知书', '路边送达（非站点），司机在安全点交接',
+     1, 1, 'STATION_TO_STATION', 'SAFE_ROADSIDE',
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) c),
+     '王同学', '13900000013', '重庆邮电大学学生公寓路口（南山路辅路路边）',
+     '重庆邮电大学学生公寓路口（南山路辅路路边）', 29.5305000, 106.6065000, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    goods_name = VALUES(goods_name),
+    goods_note = VALUES(goods_note),
+    pickup_service_mode = VALUES(pickup_service_mode),
+    delivery_service_mode = VALUES(delivery_service_mode),
+    service_point_station_id = VALUES(service_point_station_id),
+    original_address = VALUES(original_address),
+    original_latitude = VALUES(original_latitude),
+    original_longitude = VALUES(original_longitude),
+    deleted = b'0';
+
+SELECT o.id, o.order_no, ps.station_name AS pickup_station, ds.station_name AS delivery_station,
+       c.pickup_service_mode, c.delivery_service_mode, c.original_address
+FROM transport_order o
+JOIN transport_station ps ON ps.id = o.pickup_station_id
+JOIN transport_station ds ON ds.id = o.delivery_station_id
+JOIN transport_cargo_order c ON c.order_id = o.id
+WHERE o.id BETWEEN 212 AND 213
+ORDER BY o.id;
+
+-- ============================================
+-- 订单池补充：把"符合可运条件（承运审核通过 → 待入池）"的各种情形都放进来，便于一键调度演示
+--   214 邮快件：邮电大学 → 四公里交通换乘枢纽站（邮包，件数计价）
+--   215 货运：南坪站 → 龙洲湾枢纽站（远端，通常需要换乘联运）
+--   216 货运：海棠溪 → 南坪站（短途直达）
+--   217 货运：四公里交通换乘枢纽站 → 南山站（返程方向）
+--   218 货运：重邮明志苑驿站（自建站）→ 四公里交通换乘枢纽站（自建线路直达）
+--   219 货运：南山 → 海棠溪（景区线，顺路带走）
+-- 均为 status=8 待入池 + review_status=1 审核通过，可直接"一键归集 → 智能调度"。
+-- ============================================
+INSERT INTO transport_order
+    (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
+     status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (214, 'TPDEMO9', 3,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 9.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (215, 'TPDEMO10', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南坪站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '龙洲湾枢纽站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (216, 'TPDEMO11', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '海棠溪' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南坪站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 8.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (217, 'TPDEMO12', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南山站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 10.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (218, 'TPDEMO13', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮明志苑驿站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 11.00, 0, '1', NOW(), '1', NOW(), b'0'),
+    (219, 'TPDEMO14', 2,
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南山站' ORDER BY id LIMIT 1) a),
+     (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '海棠溪' ORDER BY id LIMIT 1) b),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 13.00, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    order_no = VALUES(order_no),
+    pickup_station_id = VALUES(pickup_station_id),
+    delivery_station_id = VALUES(delivery_station_id),
+    status = 8, deleted = b'0';
+
+INSERT INTO transport_cargo_order
+    (id, order_id, cargo_category, fresh_flag, item_count, weight_kg, volume_m3, goods_name, goods_note,
+     audit_status, review_status, pickup_service_mode, delivery_service_mode,
+     receiver_name, receiver_mobile, receiver_address, original_address, original_latitude, original_longitude,
+     tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (215, 215, '日用品', b'0', 2, 6.00, 0.0300, '南坪寄往龙洲湾的生活用品', '跨片区，预计需换乘联运',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '龙洲湾收件人', '13900000015', '重庆市巴南区龙洲湾',
+     '重庆市南岸区南坪', 29.5292000, 106.5711000, 0, '1', NOW(), '1', NOW(), b'0'),
+    (216, 216, '农产品', b'0', 1, 3.00, 0.0150, '海棠溪应季蔬菜', '短途直达',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '南坪收件人', '13900000016', '重庆市南岸区南坪',
+     '重庆市南岸区海棠溪', 29.5425000, 106.5885000, 0, '1', NOW(), '1', NOW(), b'0'),
+    (217, 217, '日用品', b'0', 3, 8.00, 0.0400, '四公里寄往南山的日用品', '返程方向（车从南山返场时捎带）',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '南山收件人', '13900000017', '重庆市南岸区南山',
+     '重庆市南岸区四公里', 29.5194000, 106.5778000, 0, '1', NOW(), '1', NOW(), b'0'),
+    (218, 218, '日用品', b'0', 1, 2.00, 0.0100, '明志苑驿站寄出的生活用品', '自建线路直达（客货邮自建站点）',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '四公里收件人', '13900000018', '重庆市南岸区四公里',
+     '重庆邮电大学明志苑2舍', 29.5310000, 106.6055000, 0, '1', NOW(), '1', NOW(), b'0'),
+    (219, 219, '生鲜果蔬', b'0', 1, 5.00, 0.0200, '南山新鲜果蔬', '景区线顺路带走（非冷链）',
+     1, 1, 'STATION_TO_STATION', 'STATION_TO_STATION', '海棠溪收件人', '13900000019', '重庆市南岸区海棠溪',
+     '重庆市南岸区南山', 29.5554000, 106.6280000, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    goods_name = VALUES(goods_name), goods_note = VALUES(goods_note),
+    item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), deleted = b'0';
+
+-- 邮包单（order_type=3）需要 postal 子表行，否则小程序/后台查不到快递单号与取件码
+INSERT INTO transport_postal_order
+    (id, order_id, mail_no, carrier_code, item_count, weight_kg, receiver_name, receiver_mobile,
+     receiver_address, pickup_code, pickup_status, tenant_id, creator, create_time, updater, update_time, deleted)
+VALUES
+    (214, 214, 'SF2026091201', 'SF', 2, 3.00, '四公里收件人', '13900000014',
+     '重庆市南岸区四公里', '8614', 0, 0, '1', NOW(), '1', NOW(), b'0')
+ON DUPLICATE KEY UPDATE
+    mail_no = VALUES(mail_no), item_count = VALUES(item_count), weight_kg = VALUES(weight_kg), deleted = b'0';
+
+SELECT o.id, o.order_no, o.order_type, ps.station_name AS pickup, ds.station_name AS delivery
+FROM transport_order o
+JOIN transport_station ps ON ps.id = o.pickup_station_id
+JOIN transport_station ds ON ds.id = o.delivery_station_id
+WHERE o.id BETWEEN 214 AND 219
+ORDER BY o.id;

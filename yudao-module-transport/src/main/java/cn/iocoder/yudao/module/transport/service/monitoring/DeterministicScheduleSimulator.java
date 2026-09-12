@@ -196,8 +196,24 @@ public class DeterministicScheduleSimulator {
         if (points == null || points.isEmpty()) {
             return null;
         }
+        // 班次窗口按"一个往返"配置（去程 + 返程）；单程时长 = 窗口的一半
         int duration = durationMinutes(shift);
+        int trip = Math.max(1, duration / 2);
         long elapsed = elapsedMinutes(shift, now);
+        Point firstOrig = points.get(0);
+        Point lastOrig = points.get(points.size() - 1);
+        // 站序计划分钟 → 单程时长（班次窗口按往返配置，单程 = 窗口一半）：
+        // 线路站序分钟表是"一趟全程"的口径，这里按比例缩放到单程时长，保证去程准点到达终点站。
+        int profileTotal = Math.max(1, lastOrig.minutes());
+        if (profileTotal != trip) {
+            double scale = (double) trip / profileTotal;
+            List<Point> scaled = new ArrayList<>(points.size());
+            for (Point p : points) {
+                scaled.add(new Point(p.stationId(), p.name(), p.lon(), p.lat(),
+                        Math.max(0, (int) Math.round(p.minutes() * scale))));
+            }
+            points = scaled;
+        }
         Point first = points.get(0);
         Point last = points.get(points.size() - 1);
         VehicleLocationSnapshot.VehicleLocationSnapshotBuilder builder = base(vehicle, shift, route);
@@ -210,52 +226,79 @@ public class DeterministicScheduleSimulator {
                     .nextStationId(first.stationId()).nextStationName(first.name())
                     .etaToNextStationMinutes((double) Math.max(0, -elapsed)).build();
         }
-        // 2) 已过计划结束：收车，停终点站（不继续伪造行驶）
-        if (elapsed > duration) {
-            return builder.status(STATUS_IDLE).progress(100).speedKmh(0.0)
-                    .longitude(last.lon()).latitude(last.lat())
-                    .currentStationId(last.stationId()).currentStationName(last.name())
-                    .build();
+        /*
+         * 业务：公交/大巴本职是按所属线路跑（每站都停），空闲运力顺路带货。
+         * 因此班次窗口 = 去程 + 返程（同一班次内跑一个往返），返程就是"逆向再来一遍"：
+         * 终点站 → 沿途各站 → 起点站，途中同样可以取货/派货。
+         * 实现：elapsed > duration 时把时间轴折回（phase = 2*duration - elapsed），
+         * 位置取"去程在 phase 时刻的位置"，但前进方向相反（当前站/下一站互换）。
+         */
+        boolean returning = false;
+        long phase = elapsed;
+        if (elapsed > trip) {
+            long back = elapsed - trip;
+            if (back > trip) {
+                // 往返跑完：收车，停起点站（不继续伪造行驶）
+                return builder.status(STATUS_IDLE).progress(100).speedKmh(0.0)
+                        .longitude(first.lon()).latitude(first.lat())
+                        .currentStationId(first.stationId()).currentStationName(first.name())
+                        .build();
+            }
+            returning = true;
+            phase = 2L * trip - elapsed; // 折回：0=起点，trip=终点
         }
         // 3) 在途：定位当前区间并线性插值
-        int progress = (int) Math.min(100, elapsed * 100 / Math.max(1, duration));
-        double speedKmh = route.getDistanceKm() != null && duration > 0
-                ? Math.round(route.getDistanceKm().doubleValue() * 60.0 / duration * 10) / 10.0 : 0.0;
+        int progress = returning
+                ? (int) Math.max(0, 100 - (phase * 100 / Math.max(1, trip)))
+                : (int) Math.min(100, phase * 100 / Math.max(1, trip));
+        double speedKmh = route.getDistanceKm() != null && trip > 0
+                ? Math.round(route.getDistanceKm().doubleValue() * 60.0 / trip * 10) / 10.0 : 0.0;
         Point prev = first;
         for (int i = 1; i < points.size(); i++) {
             Point next = points.get(i);
-            if (elapsed <= next.minutes()) {
+            if (phase <= next.minutes()) {
                 int span = next.minutes() - prev.minutes();
-                double ratio = span > 0 ? (double) (elapsed - prev.minutes()) / span : 0;
+                double ratio = span > 0 ? (double) (phase - prev.minutes()) / span : 0;
                 // 真实道路优先：沿「上一站→下一站」的道路轨迹按里程比例取点；无道路几何则两点直线
-                double[] onRoad = pointOnRoad(geometryProvider, prev, next, ratio);
-                double lon = onRoad != null ? onRoad[0] : prev.lon() + (next.lon() - prev.lon()) * ratio;
-                double lat = onRoad != null ? onRoad[1] : prev.lat() + (next.lat() - prev.lat()) * ratio;
-                if (elapsed == next.minutes()) { // 恰好到站：当前站即该站，下一站取其后一站
-                    Point after = i + 1 < points.size() ? points.get(i + 1) : null;
+                // 返程时方向相反：从 next 开往 prev，所以行进比例取 1-ratio
+                double moveRatio = returning ? 1 - ratio : ratio;
+                double[] onRoad = pointOnRoad(geometryProvider, returning ? next : prev, returning ? prev : next, moveRatio);
+                Point from = returning ? next : prev;
+                Point to = returning ? prev : next;
+                double lon = onRoad != null ? onRoad[0] : from.lon() + (to.lon() - from.lon()) * moveRatio;
+                double lat = onRoad != null ? onRoad[1] : from.lat() + (to.lat() - from.lat()) * moveRatio;
+                // 前进方向上的"下一站"：去程是 i+1，返程是 i-1（逆向开回起点）
+                Point after = returning
+                        ? (i - 1 >= 0 ? points.get(i - 1) : null)
+                        : (i + 1 < points.size() ? points.get(i + 1) : null);
+                // 距下一站分钟：去程 = 下一站分钟 - 当前时间；返程 = 当前时间 - 下一站分钟
+                Double etaToAfter = after == null ? null
+                        : (double) (returning ? (phase - after.minutes()) : (after.minutes() - phase));
+                if (phase == next.minutes()) { // 恰好到站：当前站即该站，下一站取前进方向的后一站
                     return builder.status(STATUS_IN_TRANSIT).progress(progress).speedKmh(0.0)
                             .longitude(next.lon()).latitude(next.lat())
                             .currentStationId(next.stationId()).currentStationName(next.name())
                             .nextStationId(after == null ? null : after.stationId())
                             .nextStationName(after == null ? null : after.name())
-                            .etaToNextStationMinutes(after == null ? null : (double) (after.minutes() - elapsed))
+                            .etaToNextStationMinutes(etaToAfter)
                             .build();
                 }
                 return builder.status(STATUS_IN_TRANSIT).progress(progress).speedKmh(speedKmh)
                         .longitude(round7(lon)).latitude(round7(lat))
-                        .currentStationId(prev.stationId()).currentStationName(prev.name())
-                        .nextStationId(next.stationId()).nextStationName(next.name())
+                        .currentStationId(from.stationId()).currentStationName(from.name())
+                        .nextStationId(to.stationId()).nextStationName(to.name())
                         .distanceToNextStation(round2(GeoDistanceUtil.haversineKm(
-                                lon, lat, next.lon(), next.lat())))
-                        .etaToNextStationMinutes((double) (next.minutes() - elapsed))
+                                lon, lat, to.lon(), to.lat())))
+                        .etaToNextStationMinutes(etaToAfter)
                         .build();
             }
             prev = next;
         }
-        // 4) 已到终点（区间循环未命中）：停终点站
-        return builder.status(STATUS_IN_TRANSIT).progress(100).speedKmh(0.0)
-                .longitude(last.lon()).latitude(last.lat())
-                .currentStationId(last.stationId()).currentStationName(last.name())
+        // 4) 已到终点（区间循环未命中）：停终点站（返程阶段则停在起点站）
+        Point end = returning ? first : last;
+        return builder.status(STATUS_IN_TRANSIT).progress(returning ? 0 : 100).speedKmh(0.0)
+                .longitude(end.lon()).latitude(end.lat())
+                .currentStationId(end.stationId()).currentStationName(end.name())
                 .build();
     }
 

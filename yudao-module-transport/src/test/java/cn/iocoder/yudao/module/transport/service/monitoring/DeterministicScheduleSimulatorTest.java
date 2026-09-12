@@ -72,7 +72,8 @@ class DeterministicScheduleSimulatorTest {
     @Test
     void compute_inTransit_interpolatesBetweenStationsWithFullContext() {
         // 固定时刻（不用 LocalTime.now()）：避免临近午夜时 +N 分钟跨日回绕导致用例抖动
-        LocalTime now = LocalTime.of(10, 0);
+        // 班次窗口 = 一个往返（60 分钟）→ 单程 30 分钟；09:45 时刚好走到单程一半
+        LocalTime now = LocalTime.of(9, 45);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
                 .plannedDepartureTime(LocalTime.of(9, 30)).plannedDurationMinutes(60).status(0).build();
 
@@ -91,10 +92,34 @@ class DeterministicScheduleSimulatorTest {
         assertEquals("县城客运中心", snapshot.getCurrentStationName());
         assertEquals("青山镇站", snapshot.getNextStationName());
         assertEquals(50, snapshot.getProgress().intValue());
-        assertEquals(20.0, snapshot.getSpeedKmh(), 0.01); // 20km / 60min
+        assertEquals(40.0, snapshot.getSpeedKmh(), 0.01); // 20km / 30min（单程）
         // 半程位置：104.05 / 30.05（固定时刻后可精确断言）
         assertEquals(104.05, snapshot.getLongitude(), 1e-9);
         assertEquals(30.05, snapshot.getLatitude(), 1e-9);
+    }
+
+    /**
+     * 返程（逆向）阶段：到达终点站后按站序倒着开回起点，途中同样停靠各站、可继续取货派货。
+     * 业务前提：公交/大巴本职是按线路跑一个往返，空闲运力顺路带货。
+     */
+    @Test
+    void compute_returnTrip_runsBackwardsAlongStations() {
+        LocalTime now = LocalTime.of(10, 15); // 09:30 发车 + 单程 30 分钟到终点 → 返程已走 15 分钟
+        ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
+                .plannedDepartureTime(LocalTime.of(9, 30)).plannedDurationMinutes(60).status(0).build();
+
+        VehicleLocationSnapshot snapshot =
+                DeterministicScheduleSimulator.compute(VEHICLE, shift, ROUTE, ROUTE_STATIONS, STATIONS, now);
+
+        assertNotNull(snapshot);
+        assertEquals(1, snapshot.getStatus()); // 返程也是在途
+        // 前进方向反过来：当前站是终点站一侧，下一站是起点站
+        assertEquals("青山镇站", snapshot.getCurrentStationName());
+        assertEquals("县城客运中心", snapshot.getNextStationName());
+        assertEquals(50, snapshot.getProgress().intValue()); // 往返进度：去程 50% 处
+        assertEquals(104.05, snapshot.getLongitude(), 1e-9);
+        assertEquals(30.05, snapshot.getLatitude(), 1e-9);
+        assertEquals(15.0, snapshot.getEtaToNextStationMinutes(), 1e-9);
     }
 
     @Test
@@ -114,7 +139,7 @@ class DeterministicScheduleSimulatorTest {
     }
 
     @Test
-    void compute_afterSchedule_parksAtLastStationWithoutFakeDriving() {
+    void compute_afterSchedule_parksAtOriginAfterRoundTrip() {
         LocalTime now = LocalTime.of(12, 0);
         ShiftDO shift = ShiftDO.builder().id(1L).shiftCode("SH001").routeId(1L)
                 .plannedDepartureTime(LocalTime.of(10, 0)).plannedDurationMinutes(60).build();
@@ -125,8 +150,9 @@ class DeterministicScheduleSimulatorTest {
         assertNotNull(snapshot);
         assertEquals(0, snapshot.getStatus()); // 收车空闲，不继续伪造行驶
         assertEquals(100, snapshot.getProgress().intValue());
-        assertEquals(104.1, snapshot.getLongitude());
-        assertEquals(30.1, snapshot.getLatitude());
+        // 一个往返跑完后回到起点站
+        assertEquals(104.0, snapshot.getLongitude());
+        assertEquals(30.0, snapshot.getLatitude());
         assertNull(snapshot.getNextStationName());
     }
 
