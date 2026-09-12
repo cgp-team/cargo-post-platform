@@ -94,6 +94,13 @@ public class DispatchController {
         return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude));
     }
 
+    @PostMapping("/demo/recycle-pool")
+    @Operation(summary = "演示态：把方案订单放回待入池（方便反复一键演示；生产环境关闭开关后为空操作）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")
+    public CommonResult<Integer> recycleDemoPool(@RequestBody(required = false) java.util.List<Long> planIds) {
+        return success(dispatchService.recyclePlanOrdersToPool(planIds));
+    }
+
     @PutMapping("/plan/review")
     @Operation(summary = "调度方案审核")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")

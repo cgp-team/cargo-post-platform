@@ -25,7 +25,15 @@
         <el-table-column label="商品名称" prop="name" align="center" min-width="140" />
         <el-table-column label="商品图" align="center" width="80">
           <template #default="scope">
-            <span style="font-size: 28px">{{ scope.row.image }}</span>
+            <el-image
+              v-if="scope.row.imageUrl"
+              :src="scope.row.imageUrl"
+              :preview-src-list="[scope.row.imageUrl]"
+              preview-teleported
+              fit="cover"
+              style="width: 44px; height: 44px; border-radius: 6px"
+            />
+            <span v-else style="font-size: 28px">{{ scope.row.image || '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="产地村庄" prop="fromVillage" align="center" width="110" />

@@ -139,6 +139,18 @@ public class AppBusNearbyRespVO {
         @Schema(description = "距用户直线距离(km)")
         private Double distanceKm;
 
+        @Schema(description = "距用户最近、且本车还会经过的站点名（用户在这一站等车最方便）")
+        private String nearestStationName;
+
+        @Schema(description = "预计到达「用户最近站点」的分钟数（在途且该站仍在前方时给出；待发/已过站为 null）")
+        private Integer nearestStationEtaMinutes;
+
+        @Schema(description = "距离「用户最近站点」还有几站（不含当前所处区间）")
+        private Integer stopsToNearestStation;
+
+        @Schema(description = "「用户最近站点」距用户直线距离(km)")
+        private Double nearestStationDistanceKm;
+
     }
 
     @Schema(description = "附近站点关联线路")
