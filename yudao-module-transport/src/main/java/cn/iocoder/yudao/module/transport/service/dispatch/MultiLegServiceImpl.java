@@ -32,6 +32,12 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanItemMapper;
 
+import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
+
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportHandoverDO;
+
+import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportHandoverMapper;
+
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
@@ -130,6 +136,10 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
 
+    /** 换乘交接（P0-A 作废旧方案未执行段时需要连带清理其交接记录） */
+
+    @Resource private TransportHandoverMapper handoverMapper;
+
     @Resource private AlgorithmClient algorithmClient;
 
     @Resource private OrderEventService orderEventService;
@@ -182,11 +192,28 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        List<TransportLegDO> existing = legMapper.selectListByOrderId(orderId);
+        // P0-A：幂等维度是「方案」而不是订单。历史上这里只按 order_id 查，
+        // 导致新方案直接复用旧方案的段（新方案在 transport_leg 里 0 行、聚合字段却来自旧段，
+        // 司机端 current-leg 指向的段不属于当前方案）。
+
+        List<TransportLegDO> existing = planId != null
+
+                ? legMapper.selectListByPlanIdAndOrderId(planId, orderId)
+
+                : legMapper.selectListByOrderId(orderId);
 
         if (!existing.isEmpty()) {
 
-            return existing; // 幂等：重复调度不重复拆段
+            return existing; // 幂等：同一方案重复调度不重复拆段
+
+        }
+
+        // 本方案还没有该订单的段：先作废该订单在「其它方案」下尚未开始执行的段，
+        // 避免同时存在两套有效段（旧段会被查询/司机端误用）。货物已在途（段已开始执行）时不重复拆段。
+
+        if (planId != null && !voidStaleLegsOfOtherPlans(orderId, planId)) {
+
+            return List.of();
 
         }
 
@@ -283,6 +310,100 @@ public class MultiLegServiceImpl implements MultiLegService {
 
 
         return legs;
+
+    }
+
+
+
+    /**
+
+     * P0-A：作废该订单在「其它方案」下尚未开始执行的运输段。
+
+     *
+
+     * 背景：运输段的幂等维度必须是「方案」。同一份货物被重新调度后，旧方案的段不能继续有效，
+
+     * 否则新方案聚合字段（段数/转接数/解释）取自旧段，司机端 current-leg 拿到的是旧任务
+
+     * ——实测方案 31/32/33 全是这种错位。
+
+     *
+
+     * 规则：
+
+     * 1) 已完成(11)/异常(99) 的段是历史事实，保留不动；
+
+     * 2) 已开始执行（司机已接单 2 之后）的段说明货物已在路上，本次不为该订单重复拆段，
+
+     *    返回 false 让调用方跳过（绝不把别的方案的段挂到新方案上）；
+
+     * 3) 未开始执行的段（已规划 0/已分配 1/司机已接单 2）连同引用它的换乘交接一并作废。
+
+     *
+
+     * @return true=可为新方案拆段；false=该订单已在途，本次跳过
+
+     */
+
+    private boolean voidStaleLegsOfOtherPlans(Long orderId, Long planId) {
+
+        List<TransportLegDO> stale = new ArrayList<>();
+
+        for (TransportLegDO leg : legMapper.selectListByOrderId(orderId)) {
+
+            if (Objects.equals(leg.getPlanId(), planId)) {
+
+                continue; // 本方案的段（上一步已返回，这里防御）
+
+            }
+
+            Integer status = leg.getStatus();
+
+            if (Objects.equals(status, TransportLegStatusEnum.COMPLETED.getStatus())
+
+                    || Objects.equals(status, TransportLegStatusEnum.EXCEPTION.getStatus())) {
+
+                continue; // 已完成/异常是历史事实，保留
+
+            }
+
+            if (status != null && status > TransportLegStatusEnum.DRIVER_ACCEPTED.getStatus()) {
+
+                log.warn("[planLegs] 订单 {} 第 {} 段（方案 {}）已开始执行，本次不重复拆段",
+
+                        orderId, leg.getLegSequence(), leg.getPlanId());
+
+                return false;
+
+            }
+
+            stale.add(leg);
+
+        }
+
+        stale.forEach(this::voidStaleLeg);
+
+        return true;
+
+    }
+
+
+
+    /** 作废单个未执行段：先删引用它的换乘交接（leg_from/leg_to），再删段本身 */
+
+    private void voidStaleLeg(TransportLegDO leg) {
+
+        handoverMapper.delete(new LambdaQueryWrapperX<TransportHandoverDO>()
+
+                .and(w -> w.eq(TransportHandoverDO::getLegFromId, leg.getId())
+
+                        .or().eq(TransportHandoverDO::getLegToId, leg.getId())));
+
+        legMapper.deleteById(leg.getId());
+
+        log.warn("[planLegs] 订单 {} 在旧方案 {} 的未执行段 {} 已作废（新方案接管）",
+
+                leg.getOrderId(), leg.getPlanId(), leg.getId());
 
     }
 
