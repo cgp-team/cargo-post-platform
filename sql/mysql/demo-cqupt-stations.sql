@@ -4,6 +4,7 @@
 --       有真实可用的站点数据（项目原有演示站点都在成都附近，距离几百公里，演示不真实）。
 --
 -- 说明：这里只是**补两行真实站点/线路数据**，代码里没有任何"重庆邮电大学"硬编码；
+-- 订单时间窗：最晚送达 = NOW() + 2 小时（一个任务段时间内调度完，不再给 8 小时的当天达窗口）。
 --       换城市只需换这段数据。坐标均为 GCJ-02（与地图/高德/小程序一致）。
 -- 幂等：INSERT ... ON DUPLICATE KEY UPDATE。
 --
@@ -95,9 +96,9 @@ INSERT INTO transport_order
     (id, order_no, order_type, pickup_station_id, delivery_station_id, earliest_pickup_time, latest_delivery_time,
      status, total_amount, tenant_id, creator, create_time, updater, update_time, deleted)
 VALUES
-    (201, 'TPCQ0001', 2, 101, 102, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 40 MINUTE), '1', NOW(), b'0'),
-    (202, 'TPCQ0002', 2, 103, 101, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 9.50, 0, '1', DATE_SUB(NOW(), INTERVAL 30 MINUTE), '1', NOW(), b'0'),
-    (203, 'TPCQ0003', 2, 101, 103, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 8 HOUR), 8, 15.00, 0, '1', DATE_SUB(NOW(), INTERVAL 20 MINUTE), '1', NOW(), b'0')
+    (201, 'TPCQ0001', 2, 101, 102, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 12.00, 0, '1', DATE_SUB(NOW(), INTERVAL 40 MINUTE), '1', NOW(), b'0'),
+    (202, 'TPCQ0002', 2, 103, 101, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 9.50, 0, '1', DATE_SUB(NOW(), INTERVAL 30 MINUTE), '1', NOW(), b'0'),
+    (203, 'TPCQ0003', 2, 101, 103, DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 15.00, 0, '1', DATE_SUB(NOW(), INTERVAL 20 MINUTE), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),

@@ -1,5 +1,7 @@
 -- 演示订单改为"高德真实公交站点之间"的真实行程（配合 demo-real-bus-network.sql）
 -- 版本：2026-09-11（含跨区订单 TPDEMO4 邮电大学→重大A区、TPDEMO5 邮电大学→七公里/重庆交通大学门口）
+-- 时间窗口径（2026-09-13 调整）：按"同一任务段时间内调度"给窗口——最早取货时间已过（立即可取），
+--   最晚送达 = NOW() + 2 小时（原先 8~10 小时会让订单被排成一整天的任务，与"一车一时段任务段"不符）。
 --
 -- 真实线网（由 tools/gen_bus_network_sql.py 从高德抓取）：
 --   347路区间（老厂—上海城）：邮电大学 → 海棠溪 → …
@@ -64,7 +66,7 @@ VALUES
     (209, 'TPDEMO4', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重大A区' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0')
+     DATE_SUB(NOW(), INTERVAL 1 HOUR), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
@@ -94,7 +96,7 @@ VALUES
     (210, 'TPDEMO5', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '七公里' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 18.00, 0, '1', NOW(), '1', NOW(), b'0')
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 18.00, 0, '1', NOW(), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     pickup_station_id = VALUES(pickup_station_id),
     delivery_station_id = VALUES(delivery_station_id),
@@ -137,7 +139,7 @@ VALUES
     (211, 'TPDEMO6', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '龙洲湾枢纽站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 22.00, 0, '1', NOW(), '1', NOW(), b'0')
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 22.00, 0, '1', NOW(), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
@@ -182,11 +184,11 @@ VALUES
     (212, 'TPDEMO7', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (213, 'TPDEMO8', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮南门货运站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0')
+     DATE_SUB(NOW(), INTERVAL 30 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 12.00, 0, '1', NOW(), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
@@ -250,27 +252,27 @@ VALUES
     (214, 'TPDEMO9', 3,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '邮电大学' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 9.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 9.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (215, 'TPDEMO10', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南坪站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '龙洲湾枢纽站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 26.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (216, 'TPDEMO11', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '海棠溪' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南坪站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 8.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 8.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (217, 'TPDEMO12', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南山站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 10.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 10.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (218, 'TPDEMO13', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '重邮明志苑驿站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '四公里交通换乘枢纽站' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 11.00, 0, '1', NOW(), '1', NOW(), b'0'),
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 11.00, 0, '1', NOW(), '1', NOW(), b'0'),
     (219, 'TPDEMO14', 2,
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '南山站' ORDER BY id LIMIT 1) a),
      (SELECT id FROM (SELECT id FROM transport_station WHERE station_name = '海棠溪' ORDER BY id LIMIT 1) b),
-     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 10 HOUR), 8, 13.00, 0, '1', NOW(), '1', NOW(), b'0')
+     DATE_SUB(NOW(), INTERVAL 20 MINUTE), DATE_ADD(NOW(), INTERVAL 2 HOUR), 8, 13.00, 0, '1', NOW(), '1', NOW(), b'0')
 ON DUPLICATE KEY UPDATE
     order_no = VALUES(order_no),
     pickup_station_id = VALUES(pickup_station_id),
