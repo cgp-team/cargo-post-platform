@@ -82,3 +82,30 @@ DDL：`sql/incremental/V018__multi_leg_framework.sql`（人工执行入口）；
 - 后台"多段调度可视化"（DispatchVisualDialog）暂未叠加分段视角。
 - 异常处理：司机迟到检测、换乘超时检测、车辆故障重调度、偏航完善（P3）。
 - 真实道路分段里程/时长（当前段估时用 Haversine ÷ 均速，可接 `/api/v1/route` 换成高德路网）。
+
+## 10. 派单约束：任务窗口 / 一条线路一辆车 / 不折返（2026-09-13 补充）
+
+调度不是"收到单就让车掉头去取"，而是**给某个时间段排任务、用闲置运力顺路带货**。三条硬口径：
+
+### 10.1 任务窗口
+
+- 入参：`DispatchSmartPlanReqVO.windowStart / windowEnd`（当天时刻，例 `08:00~10:00`）；不传 = 当前时刻起一个班次。
+- 作用：①按订单 `[最早取货, 最晚送达]` 与窗口求交集，取不到/已过期的本批不派（原因写进方案解释）；
+  ②窗口直接作为算法的 `batchStart/batchEnd`；③窗口内无单可派时报 `DISPATCH_TASK_WINDOW_EMPTY`。
+
+### 10.2 一条真实线路一辆车
+
+- `AutoDispatchPlanner.selectVehiclesByLineCoverage`：先按订单的**联运拆段结果**推导需要哪几条线路
+  （每段起终点都被该线路覆盖，命中段数多的优先），再退化为"线路覆盖本批站点"打分。
+- **同一 `routeId` 只出一辆车**（同线路多台绑定取 ID 最小者）——原来按运力排序挑车，会把 347 路的车派去送 320 路的货。
+
+### 10.3 不折返（已开过的站不再派取货）
+
+- `OperatingLineTimeline`（纯函数）按「线路站序计划分钟 + 班次发车时间/时长」算出窗口开始时车辆位置：
+  沿当前行驶方向**还会依次经过哪些站**（`travelOrder`）、**已经开过哪些站**（`passedStations`）。
+  口径与 `DeterministicScheduleSimulator` 一致（班次 = 一个往返，单程 = 窗口一半）。
+- `travelOrder` 作为该车**自己的算法骨架**（`AlgorithmVehicleDTO.skeleton`）：货运任务只能插进骨架间隙，
+  按线路顺序、有先后地取派；并按窗口结束时刻截断，避免"整条线跑完的时间"撞窗口上限。
+- 派单前：取货站被所有候选车开过 → 本批不派该单（`DISPATCH_NO_BACKTRACKING`）。
+- 算法返回后：安全网 `findBacktrackingViolations` 再查一遍，有车被派去已开过的站取货就判不可用并说明原因。
+- 没班次 / 未发车 / 当天班次已跑完 → 按"整条线都在前方"处理，不把线路误判成已开过。

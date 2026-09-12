@@ -95,6 +95,15 @@ export interface DispatchSmartPlanReqVO {
   depotStationId?: number
   vehicleIds?: number[]
   algorithmConfig?: Record<string, any>
+  /**
+   * 任务窗口（当天时刻，如 08:00:00 ~ 10:00:00）。
+   *
+   * 本批只排"这个时间段"的任务：①时间窗与窗口无交集的订单本批不派；
+   * ②窗口开始时车辆已经开过的站，不会再派它掉头回去取货（只在顺路的前方站点取派）。
+   * 留空 = 用后端默认批次窗口（当前时刻起一个班次）。
+   */
+  windowStart?: string
+  windowEnd?: string
 }
 
 /** 智能派单前约束校验请求 */
@@ -181,6 +190,15 @@ export const createSmartPlan = (data: DispatchSmartPlanReqVO): Promise<number> =
   return request.post({ url: '/transport/dispatch/plan/smart', data })
 }
 
+/**
+ * 预热真实道路轨迹：订单池订单的取送站点对 + 今日方案运输段起终点对，
+ * 逐对调用高德并把取到的轨迹落库（transport_leg.navigation_polyline）。
+ * 高德配额恢复后调用一次，调度可视化就不会再出现"两站直线相连"。
+ */
+export const prefetchRoadGeometry = (): Promise<number> => {
+  return request.post({ url: '/transport/dispatch/plan/prefetch-road' })
+}
+
 /** 智能派单前约束校验（订单统计/运力预警/站点标记/时序检查） */
 export const validateDispatch = (data: DispatchValidateReqVO): Promise<DispatchValidateRespVO> => {
   return request.post({ url: '/transport/dispatch/validate', data })
@@ -250,15 +268,6 @@ export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
  */
 export const recycleDemoPool = (planIds?: number[]) => {
   return request.post({ url: '/transport/dispatch/demo/recycle-pool', data: planIds || [] })
-}
-
-/**
- * 预热真实道路轨迹：订单池订单的取送站点对 + 今日方案运输段起终点对，
- * 逐对调用高德并把取到的轨迹落库（transport_leg.navigation_polyline）。
- * 高德配额恢复后调用一次，调度可视化就不会再出现"两站直线相连"。
- */
-export const prefetchRoadGeometry = (): Promise<number> => {
-  return request.post({ url: '/transport/dispatch/plan/prefetch-road' })
 }
 
 /** 发车核验 */

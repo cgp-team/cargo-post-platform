@@ -52,11 +52,15 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 
+import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
+
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
+
+import cn.iocoder.yudao.module.transport.service.monitoring.DeterministicScheduleSimulator;
 
 import cn.iocoder.yudao.module.transport.enums.dispatch.*;
 
@@ -103,6 +107,8 @@ import java.math.BigDecimal;
 import java.time.Duration;
 
 import java.time.LocalDateTime;
+
+import java.time.LocalTime;
 
 import java.time.ZoneOffset;
 
@@ -195,6 +201,8 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private ShiftMapper shiftMapper;
 
     @Resource private RouteStationMapper routeStationMapper;
+
+    @Resource private RouteMapper routeMapper;
 
     @Resource private VehicleMapper vehicleMapper;
 
@@ -449,7 +457,7 @@ public class DispatchServiceImpl implements DispatchService {
 
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, Collections.singletonList(vehicle), orders,
 
-                null, SCENARIO_MANUAL, null);
+                null, SCENARIO_MANUAL, Map.of(), currentBatch());
 
         AlgorithmPlanRespDTO algorithmResp = AlgorithmPlanRespDTO.builder()
 
@@ -547,11 +555,26 @@ public class DispatchServiceImpl implements DispatchService {
 
         }
 
+        // ============ 任务窗口（例：早上 8-10 点这一班） ============
+        // 业务口径：调度是给"某个时间段"排任务，而不是"收到单就让车掉头去取"。
+        // ① 时间窗与本窗口无交集的订单本批不派（留给下一班次）；
+        // ② 窗口开始时每台车已经开到线路哪一站，由 OperatingLineTimeline 算出来，
+        //    已经开过的站不再派它去取货（见下方 buildVehicleTimelines / validateNoBacktracking）。
+        LocalDateTime[] taskWindow = resolveTaskWindow(reqVO);
+        List<String> windowReasons = new ArrayList<>();
+        pooledOrders = filterByTaskWindow(pooledOrders, taskWindow[0], taskWindow[1], windowReasons);
+        if (pooledOrders.isEmpty()) {
+            throw exception(DISPATCH_TASK_WINDOW_EMPTY, formatWindow(taskWindow), String.join("、", windowReasons));
+        }
+
         // 一键智能调度（auto=true）：后端自动选场站 + 自动挑候选车辆（实际车辆数由算法决定）
 
         StationDO depot;
 
         List<VehicleDO> vehicles;
+
+        // 车辆在本任务窗口内的线路行程（哪一站已经开过 / 窗口内还会依次经过哪些站）；仅自动模式填充
+        Map<Long, VehicleWindow> vehicleWindows = new LinkedHashMap<>();
 
         if (Boolean.TRUE.equals(reqVO.getAuto())) {
 
@@ -587,13 +610,42 @@ public class DispatchServiceImpl implements DispatchService {
 
             Set<Long> busyVehicleIds = busyVehicleIds();
 
-            vehicles = AutoDispatchPlanner.selectVehicles(allVehicles, MAX_ALGORITHM_VEHICLES, busyVehicleIds);
+            List<DriverVehicleDO> bindings = driverVehicleMapper == null
+                    ? List.of() : driverVehicleMapper.selectActiveBindings();
+
+            Map<Long, List<RouteStationDO>> routeStationMap = loadRouteStationMap(bindings);
+
+            Map<Long, List<Long>> routeStations = stationIdsByRoute(routeStationMap);
+
+            // 候选线路：优先按"订单的联运拆段结果"（MultiLegPlanner）推——每个运输段的起终点都要有本线路的车跑。
+            // 例：「重邮 → 重庆交通大学」会被拆成 347 路 邮电大学→南坪站、303 路 南坪站→七公里，
+            // 候选线路自然就是这两条（+ 覆盖最多运输段的线路），而不是按运力乱挑。
+            Set<Long> neededRoutes = neededRouteIdsByLegs(pooledOrders, bindings, routeStations);
+
+            // 默认口径：**一条运营线路只跑一辆公交车**（同线路多台绑定取 ID 最小者）
+            vehicles = selectLineVehicles(neededRoutes, pooledOrders, allVehicles, bindings, routeStations,
+                    MAX_ALGORITHM_VEHICLES, busyVehicleIds);
 
             if (vehicles.isEmpty()) {
 
-                // 全部车辆都在执行别的方案 → 退回不排除（保证能出方案，由调度员人工取舍）
+                // 覆盖本批站点的车都在跑别的方案 → 退回不避让（保证能出方案，由调度员人工取舍）
 
-                vehicles = AutoDispatchPlanner.selectVehicles(allVehicles, MAX_ALGORITHM_VEHICLES);
+                vehicles = selectLineVehicles(neededRoutes, pooledOrders, allVehicles, bindings, routeStations,
+                        MAX_ALGORITHM_VEHICLES, Set.of());
+
+            }
+
+            if (vehicles.isEmpty()) {
+
+                // 本地没有"线路覆盖本批站点"的车（自建片区 / 站点未挂线路）→ 退回原运力口径兜底
+
+                vehicles = AutoDispatchPlanner.selectVehicles(allVehicles, MAX_ALGORITHM_VEHICLES, busyVehicleIds);
+
+                if (vehicles.isEmpty()) {
+
+                    vehicles = AutoDispatchPlanner.selectVehicles(allVehicles, MAX_ALGORITHM_VEHICLES);
+
+                }
 
             }
 
@@ -602,6 +654,9 @@ public class DispatchServiceImpl implements DispatchService {
                 throw exception(VEHICLE_NOT_EXISTS);
 
             }
+
+            // 每台车在本窗口的线路行程：已开过的站不能取货（不折返），窗口内还会经过的站作为算法骨架（顺路带货、有先后）
+            vehicleWindows = buildVehicleWindows(vehicles, bindings, routeStationMap, taskWindow);
 
         } else {
 
@@ -631,7 +686,15 @@ public class DispatchServiceImpl implements DispatchService {
 
         List<Long> pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
 
-
+        // 不折返：取货站必须是某台候选车"本窗口还会经过"的站。所有候选车都已经开过这个站 →
+        // 本批不派这单（留给下一班次或改派其他线路），而不是让已经开过去的车掉头回来取。
+        if (!vehicleWindows.isEmpty()) {
+            pooledOrders = filterByNoBacktracking(pooledOrders, vehicleWindows, windowReasons);
+            if (pooledOrders.isEmpty()) {
+                throw exception(DISPATCH_NO_BACKTRACKING, String.join("、", windowReasons));
+            }
+            pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
+        }
 
         // 先构建快照并做规模预检（只读，不占单）：无效输入快速失败，避免先 CAS 抢占后再抛错需要回滚。
 
@@ -639,9 +702,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         List<String> skeleton = resolveSkeleton(reqVO.getShiftId(), depot.getId());
 
+        // 骨架（= 车辆"必须按序经停"的站，货物只能在骨架间隙里顺路插进去）：
+        // 指定班次时全部车辆按该班次的线路站序（原行为）；否则按"每台车自己运营线路在本窗口的行程"分别给，
+        // 这样每台车只在自己这条线上带货、站点顺序与行驶方向一致 → 天然不会掉头取货。
+        Map<Long, List<String>> vehicleSkeletons = skeleton != null
+                ? vehicles.stream().collect(Collectors.toMap(VehicleDO::getId, v -> skeleton,
+                        (a, b) -> a, LinkedHashMap::new))
+                : buildVehicleSkeletons(vehicles, vehicleWindows, pooledOrders);
+
         AlgorithmPlanReqDTO algorithmReq = buildPlanRequest(depot, vehicles, pooledOrders,
 
-                AutoDispatchPlanner.mergeAlgorithmConfig(reqVO.getAlgorithmConfig()), reqVO.getScenario(), skeleton);
+                AutoDispatchPlanner.mergeAlgorithmConfig(reqVO.getAlgorithmConfig()), reqVO.getScenario(),
+                vehicleSkeletons, taskWindow);
 
         // 规模上限预检：客运按人数拆单后可能超 25 单，超限直接报错而非等算法 413
 
@@ -685,7 +757,8 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-        LocalDateTime[] batch = currentBatch();
+        // 任务窗口（可显式指定，如早上 8-10 点）：任务/方案/运输段的时间口径一律用本次派单的窗口
+        LocalDateTime[] batch = taskWindow;
 
         String taskNo = generateTaskNo();
 
@@ -757,7 +830,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         }
 
-
+        // 安全网（不折返）：已经明确告诉算法"这些车本窗口沿途会经过哪些站"，若算法仍把某台车
+        // 派到它本窗口已经开过的站取货（= 让公交车掉头），直接判该方案不可用并说明原因。
+        if (!vehicleWindows.isEmpty()) {
+            List<String> backtracking = findBacktrackingViolations(result, vehicleWindows);
+            if (!backtracking.isEmpty()) {
+                task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
+                task.setErrorMessage("车辆已驶过站点，不能掉头取货");
+                dispatchTaskMapper.updateById(task);
+                releaseClaimedOrders(pooledIds);
+                throw exception(DISPATCH_NO_BACKTRACKING, String.join("、", backtracking));
+            }
+        }
 
         // 可行：任务置成功，方案与经停明细落库（订单已在 CAS 抢占时置为已分配）
 
@@ -829,6 +913,15 @@ public class DispatchServiceImpl implements DispatchService {
         List<TransportLegDO> allLegs = new ArrayList<>();
 
         List<String> reasons = new ArrayList<>();
+
+        // 方案解释先写"任务窗口 + 每台车这一班的线路行程"：调度员/答辩时一眼看清
+        // "这一批是给哪个时间段排的、每台车跑到哪一站了、后面还会经过哪些站"。
+        reasons.add("任务窗口 " + formatWindow(taskWindow));
+        for (VehicleWindow window : vehicleWindows.values()) {
+            reasons.add(window.label() + " 这一班在 " + window.currentStationName() + " 站之后，"
+                    + "本窗口还会依次经过 " + window.stations().size() + " 站（已开过的站不派取货）");
+        }
+        reasons.addAll(windowReasons);
 
         // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
 
@@ -1702,8 +1795,6 @@ public class DispatchServiceImpl implements DispatchService {
 
                 List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
 
-                boolean fetchedNow = false;
-
                 if (road == null) {
 
                     road = roadPolylineService.route(
@@ -1712,17 +1803,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                             to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
 
-                    fetchedNow = true;
-
                 }
 
                 boolean real = road != null && road.size() >= 2;
-
-                // 取到真实道路即落库（transport_leg.navigation_polyline）：高德配额有限、服务重启/缓存过期后
-                // 仍能画出真实路线，不必二次请求，也不会退回两点直线。
-                if (fetchedNow && real) {
-                    persistLegPolyline(leg, road);
-                }
 
                 if (real) {
 
@@ -1792,81 +1875,27 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
-
-    private static List<double[]> parseNavigationPolyline(String polyline) {
-
-        if (StrUtil.isBlank(polyline)) {
-
-            return null;
-
-        }
-
-        List<double[]> points = new ArrayList<>();
-
-        for (String pair : polyline.split(";")) {
-
-            String[] lonLat = pair.split(",");
-
-            if (lonLat.length < 2) {
-
-                continue;
-
-            }
-
-            try {
-
-                points.add(new double[]{Double.parseDouble(lonLat[0].trim()), Double.parseDouble(lonLat[1].trim())});
-
-            } catch (NumberFormatException ignored) {
-
-                return null; // 脏数据：宁可补一次路网，也不要画出错误轨迹
-
-            }
-
-        }
-
-        return points.size() >= 2 ? points : null;
-
-    }
-
-
-
     /**
-     * 两点之间的真实道路轨迹：调度可视化「按订单视角」绘制线路用。
-     * 运输段落库时若高德不可用会退化成两点直线，这里按需补一次真实路网（服务端有 10 分钟缓存）。
+     * 预热真实道路轨迹（高德配额恢复后跑一次即可）。
+     *
+     * <p>口径 = 演示会看到的那批路线：订单池（待入池/已入池）的取送站点对 + 今天方案里运输段的起终点对。
+     * 逐对调高德，取到就<b>落库</b>到运输段（transport_leg.navigation_polyline，幂等），
+     * 之后打开「调度结果可视化」直接就是真实道路轨迹，不用再等临时缓存，也不会出现两点直线。</p>
+     *
+     * @return 本次成功取到并落库/预热的站点对数（高德不可用时返回 0，如实反映，不伪造）
      */
-    @Override
-    public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
-                                                          Double toLongitude, Double toLatitude) {
-        if (fromLongitude == null || fromLatitude == null || toLongitude == null || toLatitude == null) {
-            return List.of();
-        }
-        List<double[]> road = roadPolylineService.route(fromLongitude, fromLatitude, toLongitude, toLatitude);
-        if (road == null || road.size() < 2) {
-            return List.of();
-        }
-        return road.stream().map(p -> {
-            DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
-            point.setLongitude(p[0]);
-            point.setLatitude(p[1]);
-            return point;
-        }).toList();
-    }
-
     @Override
     public int prefetchRoadGeometry() {
         if (roadPolylineService == null || !roadPolylineService.available() || stationMapper == null) {
             return 0;
         }
-        // 目标口径 = 演示会看到的那批路线：订单池（待入池/已入池）的取送站点对 + 今天方案运输段的起终点对
         List<TransportOrderDO> poolOrders = orderMapper == null ? List.of()
                 : orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
-                        .in(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus(),
-                                TransportOrderStatusEnum.POOLED.getStatus()));
+                .in(TransportOrderDO::getStatus, TransportOrderStatusEnum.READY_FOR_POOL.getStatus(),
+                        TransportOrderStatusEnum.POOLED.getStatus()));
         List<TransportLegDO> todayLegs = legMapper == null ? List.of()
                 : legMapper.selectList(new LambdaQueryWrapperX<TransportLegDO>()
-                        .ge(TransportLegDO::getCreateTime, java.time.LocalDate.now().atStartOfDay()));
+                .ge(TransportLegDO::getCreateTime, java.time.LocalDate.now().atStartOfDay()));
 
         Set<Long> stationIds = new LinkedHashSet<>();
         poolOrders.forEach(order -> {
@@ -1893,7 +1922,7 @@ public class DispatchServiceImpl implements DispatchService {
                 .collect(Collectors.toMap(StationDO::getId, station -> station, (a, b) -> a));
 
         int fetched = 0;
-        // 1) 今天的运输段：逐段取真实轨迹并落库（与可视化同一口径，取到即持久化，重启/过期后无需重取）
+        // 1) 今天的运输段：逐段取真实轨迹并落库（与可视化同一口径；取到即持久化，重启/缓存过期后无需重取）
         for (TransportLegDO leg : todayLegs) {
             StationDO from = stationMap.get(leg.getFromStationId());
             StationDO to = stationMap.get(leg.getToStationId());
@@ -1967,6 +1996,67 @@ public class DispatchServiceImpl implements DispatchService {
                     .append(String.format(java.util.Locale.ROOT, "%.6f", p[1]));
         }
         return sb.toString();
+    }
+
+    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
+    private static List<double[]> parseNavigationPolyline(String polyline) {
+
+        if (StrUtil.isBlank(polyline)) {
+
+            return null;
+
+        }
+
+        List<double[]> points = new ArrayList<>();
+
+        for (String pair : polyline.split(";")) {
+
+            String[] lonLat = pair.split(",");
+
+            if (lonLat.length < 2) {
+
+                continue;
+
+            }
+
+            try {
+
+                points.add(new double[]{Double.parseDouble(lonLat[0].trim()), Double.parseDouble(lonLat[1].trim())});
+
+            } catch (NumberFormatException ignored) {
+
+                return null; // 脏数据：宁可补一次路网，也不要画出错误轨迹
+
+            }
+
+        }
+
+        return points.size() >= 2 ? points : null;
+
+    }
+
+
+
+    /**
+     * 两点之间的真实道路轨迹：调度可视化「按订单视角」绘制线路用。
+     * 运输段落库时若高德不可用会退化成两点直线，这里按需补一次真实路网（服务端有 10 分钟缓存）。
+     */
+    @Override
+    public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
+                                                          Double toLongitude, Double toLatitude) {
+        if (fromLongitude == null || fromLatitude == null || toLongitude == null || toLatitude == null) {
+            return List.of();
+        }
+        List<double[]> road = roadPolylineService.route(fromLongitude, fromLatitude, toLongitude, toLatitude);
+        if (road == null || road.size() < 2) {
+            return List.of();
+        }
+        return road.stream().map(p -> {
+            DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
+            point.setLongitude(p[0]);
+            point.setLatitude(p[1]);
+            return point;
+        }).toList();
     }
 
     /**
@@ -2557,7 +2647,10 @@ public class DispatchServiceImpl implements DispatchService {
 
         int stationCount = algorithmReq.getStations() != null ? algorithmReq.getStations().size() : 0;
 
-        int orderCount = algorithmReq.getOrders() != null ? algorithmReq.getOrders().size() : 0;
+        // 任务数 = 单向订单 + 配对货运单（一个 shipment 展开成 PICKUP + DELIVERY 两个节点，
+        // 与算法契约"客运+包裹订单合计不超过 25"同一口径）
+        int orderCount = (algorithmReq.getOrders() != null ? algorithmReq.getOrders().size() : 0)
+                + (algorithmReq.getShipments() != null ? algorithmReq.getShipments().size() : 0);
 
         int vehicleCount = algorithmReq.getVehicles() != null ? algorithmReq.getVehicles().size() : 0;
 
@@ -2849,7 +2942,15 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-    /** 构建算法规划请求快照：站点 = 场站 + 订单引用站点去重；skeleton 非空时该批车辆按公交骨架经停（联合调度） */
+    /**
+     * 构建算法规划请求快照：站点 = 场站 + 订单引用站点去重。
+     *
+     * <p>{@code vehicleSkeletons} 是**每台车各自**的骨架（该车在本任务窗口内沿途依次经过的站）：
+     * 算法只会在骨架间隙里插货运任务，车辆按自己的线路顺序走 → 顺路带货、有先后、不会掉头。
+     * 骨架里不属于本批请求的站会被剔除（算法只认请求里的站点），保持请求规模可控。</p>
+     *
+     * @param window 任务窗口（同时作为算法的 batchStart/batchEnd）
+     */
 
     private AlgorithmPlanReqDTO buildPlanRequest(StationDO depot, List<VehicleDO> vehicles,
 
@@ -2857,7 +2958,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                                                  Map<String, Object> algorithmConfig, String scenario,
 
-                                                 List<String> skeleton) {
+                                                 Map<Long, List<String>> vehicleSkeletons,
+
+                                                 LocalDateTime[] window) {
 
         Set<Long> stationIds = new LinkedHashSet<>();
 
@@ -2893,9 +2996,10 @@ public class DispatchServiceImpl implements DispatchService {
 
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
 
-                        // 公交骨架（Mandatory Passenger Service）：指定班次时该车辆按线路站点经停
+                        // 公交骨架（Mandatory Passenger Service）：该车辆按"自己这条线在本窗口的站序"经停，
+                        // 货运任务只能插进骨架间隙 → 顺路带货、有先后、不会掉头取货
 
-                        .skeleton(skeleton)
+                        .skeleton(filterSkeleton(vehicleSkeletons.get(vehicle.getId()), stationIds, depot.getId()))
 
                         .build())
 
@@ -2909,21 +3013,23 @@ public class DispatchServiceImpl implements DispatchService {
 
         Map<Long, PostalOrderDO> postalMap = preloadPostalOrders(orders);
 
+        // 配对货运单收集器（取货站 → 送达站，两端都不是场站的完整链路，见 toAlgorithmOrders）
+        List<AlgorithmShipmentDTO> shipmentDTOs = new ArrayList<>();
+
         List<AlgorithmOrderDTO> orderDTOs = orders.stream()
 
-                .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap))
+                .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap,
+                        shipmentDTOs))
 
                 .flatMap(List::stream).collect(Collectors.toList());
 
 
 
-        LocalDateTime[] batch = currentBatch();
-
         return AlgorithmPlanReqDTO.builder()
 
-                .batchStart(batch[0].atOffset(BATCH_ZONE_OFFSET))
+                .batchStart(window[0].atOffset(BATCH_ZONE_OFFSET))
 
-                .batchEnd(batch[1].atOffset(BATCH_ZONE_OFFSET))
+                .batchEnd(window[1].atOffset(BATCH_ZONE_OFFSET))
 
                 .depot(depotDTO)
 
@@ -2932,6 +3038,10 @@ public class DispatchServiceImpl implements DispatchService {
                 .vehicles(vehicleDTOs)
 
                 .orders(orderDTOs)
+
+                // 配对货运单（取货站 → 送达站，两端都不是场站的完整链路）：
+                // 算法展开为同一辆车的 PICKUP + DELIVERY 两个节点，并保证"先取后送"。
+                .shipments(shipmentDTOs)
 
                 .algorithmConfig(algorithmConfig)
 
@@ -2969,7 +3079,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                                                       Map<Long, CargoOrderDO> cargoMap,
 
-                                                      Map<Long, PostalOrderDO> postalMap) {
+                                                      Map<Long, PostalOrderDO> postalMap,
+
+                                                      List<AlgorithmShipmentDTO> shipments) {
 
         if (Objects.equals(order.getOrderType(), 1)) { // 客运
 
@@ -3015,17 +3127,48 @@ public class DispatchServiceImpl implements DispatchService {
 
         // 派送：场站→村
 
-        return Collections.singletonList(AlgorithmOrderDTO.builder()
+        if (depotStationId != null && Objects.equals(order.getPickupStationId(), depotStationId)) {
 
-                .orderId(String.valueOf(order.getId()))
+            return Collections.singletonList(AlgorithmOrderDTO.builder()
 
-                .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
+                    .orderId(String.valueOf(order.getId()))
 
-                .stationId(String.valueOf(order.getDeliveryStationId()))
+                    .orderType(AlgorithmOrderDTO.TYPE_DELIVERY)
 
-                .itemCount(getItemCount(order, cargoMap, postalMap))
+                    .stationId(String.valueOf(order.getDeliveryStationId()))
+
+                    .itemCount(getItemCount(order, cargoMap, postalMap))
+
+                    .build());
+
+        }
+
+        // 完整链路：取货站 → 送达站（两端都不是场站）→ 发「配对货运单」。
+        //
+        // 为什么必须配对（PDPTW 口径，Li & Lim 2001）：取货点与送货点必须同一辆车承运、且先取后送。
+        // 历史实现这里退化成"只在送达站发一个 DELIVERY 节点 + 丢掉取货站"，等于货物凭空出现在送达站：
+        // 既看不出先后顺序，也没法约束同车与取送顺序，站点清单里也就看不到揽收点。
+        // 现在按 PlanShipment 下发，算法展开为 PICKUP + DELIVERY 两个节点（同车 + 顺序约束由算法保证），
+        // 后端 AlgorithmResultValidator 已支持按 shipmentId 校验配对完整性。
+        CargoOrderDO cargo = Objects.equals(order.getOrderType(), 2) ? cargoMap.get(order.getId()) : null;
+
+        shipments.add(AlgorithmShipmentDTO.builder()
+
+                .shipmentId(String.valueOf(order.getId()))
+
+                .pickupStationId(String.valueOf(order.getPickupStationId()))
+
+                .deliveryStationId(String.valueOf(order.getDeliveryStationId()))
+
+                .quantity(getItemCount(order, cargoMap, postalMap))
+
+                .weightKg(cargo != null && cargo.getWeightKg() != null ? cargo.getWeightKg().doubleValue() : null)
+
+                .volumeM3(cargo != null && cargo.getVolumeM3() != null ? cargo.getVolumeM3().doubleValue() : null)
 
                 .build());
+
+        return Collections.emptyList();
 
     }
 
@@ -3490,6 +3633,434 @@ public class DispatchServiceImpl implements DispatchService {
 
         return new LocalDateTime[]{start, start.plusMinutes(batchMinutes)};
 
+    }
+
+    // ==================== 任务窗口 + 线路行程（不折返） ====================
+
+    /**
+     * 单车在本任务窗口内的线路行程：窗口开始时在哪一站、已经开过哪些站、窗口内还会依次经过哪些站。
+     *
+     * @param label              展示文案（车牌 · 线路名），写进方案解释
+     * @param currentStationName 窗口开始时所处的站名
+     * @param position           线路位置（含"已经开过、本班不会再经过"的站集合）
+     * @param stations           窗口内还会依次经过的站（有序，算法骨架用）
+     * @param stationsSet        上面的集合形式（不折返判定用）
+     */
+    private record VehicleWindow(String label, String currentStationName,
+                                 OperatingLineTimeline.Position position,
+                                 List<Long> stations, Set<Long> stationsSet) {
+    }
+
+    /**
+     * 任务窗口：显式指定（当天 08:00~10:00）优先；否则沿用系统默认批次窗口（当前时刻起一个班次）。
+     * 只传一端、或开始不早于结束的非法输入一律忽略，回退默认窗口（不因参数问题卡住演示）。
+     */
+    private LocalDateTime[] resolveTaskWindow(DispatchSmartPlanReqVO reqVO) {
+        LocalTime start = reqVO == null ? null : reqVO.getWindowStart();
+        LocalTime end = reqVO == null ? null : reqVO.getWindowEnd();
+        if (start != null && end != null && start.isBefore(end)) {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            return new LocalDateTime[]{LocalDateTime.of(today, start), LocalDateTime.of(today, end)};
+        }
+        return currentBatch();
+    }
+
+    /** 窗口文案（HH:mm-HH:mm） */
+    private static String formatWindow(LocalDateTime[] window) {
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm");
+        return window[0].format(fmt) + "-" + window[1].format(fmt);
+    }
+
+    /**
+     * 任务窗口过滤：订单的 [最早取货, 最晚送达] 与任务窗口有交集才纳入本批。
+     * 太晚（窗口结束前取不到货）或已过期（窗口开始前就该送到）的订单本批不派，留给下一班次。
+     */
+    private static List<TransportOrderDO> filterByTaskWindow(List<TransportOrderDO> orders,
+                                                             LocalDateTime windowStart, LocalDateTime windowEnd,
+                                                             List<String> reasons) {
+        List<TransportOrderDO> kept = new ArrayList<>();
+        for (TransportOrderDO order : orders) {
+            boolean tooLate = order.getEarliestPickupTime() != null
+                    && order.getEarliestPickupTime().isAfter(windowEnd);
+            boolean expired = order.getLatestDeliveryTime() != null
+                    && order.getLatestDeliveryTime().isBefore(windowStart);
+            if (tooLate || expired) {
+                reasons.add(order.getOrderNo() + (tooLate ? "（取货时间晚于窗口结束）" : "（送达时限早于窗口开始）"));
+                continue;
+            }
+            kept.add(order);
+        }
+        return kept;
+    }
+
+    /** 人车绑定的运营线路 → 该线路站点（含站序与计划分钟，算车辆位置要用） */
+    private Map<Long, List<RouteStationDO>> loadRouteStationMap(List<DriverVehicleDO> bindings) {
+        if (bindings == null || bindings.isEmpty() || routeStationMapper == null) {
+            return Map.of();
+        }
+        List<Long> routeIds = bindings.stream().map(DriverVehicleDO::getRouteId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (routeIds.isEmpty()) {
+            return Map.of();
+        }
+        return routeStationMapper.selectListByRouteIds(routeIds).stream()
+                .filter(rs -> rs != null && rs.getRouteId() != null && rs.getStationId() != null)
+                .collect(Collectors.groupingBy(RouteStationDO::getRouteId, LinkedHashMap::new, Collectors.toList()));
+    }
+
+    /** 运营线路 → 站点编号序列（按站序） */
+    private static Map<Long, List<Long>> stationIdsByRoute(Map<Long, List<RouteStationDO>> routeStationMap) {
+        Map<Long, List<Long>> result = new LinkedHashMap<>();
+        routeStationMap.forEach((routeId, stations) -> result.put(routeId,
+                OperatingLineTimeline.orderedStations(stations).stream()
+                        .map(RouteStationDO::getStationId).toList()));
+        return result;
+    }
+
+    /**
+     * 从"订单的联运拆段结果"推导本次派单**需要哪些运营线路**。
+     *
+     * <p>怎么算：对每张订单跑一次 {@link MultiLegService#preview(Long)} 拿到运输段
+     * （直达=1 段；跨线路=2~3 段，例如「重邮 → 重庆交通大学」拆成 347 路 邮电大学→南坪站、
+     * 303 路 南坪站→七公里），再把"起终点都在这条线路上"的线路记一次命中；
+     * 按命中运输段数降序返回（同分按线路编号升序，保证结果确定）。</p>
+     *
+     * <p>这样挑车才是"这批货要走哪几条线路，就派哪几条线路的车"，
+     * 而不是按运力把不相干的线路派进来。</p>
+     */
+    private Set<Long> neededRouteIdsByLegs(List<TransportOrderDO> orders, List<DriverVehicleDO> bindings,
+                                           Map<Long, List<Long>> routeStations) {
+        Map<Long, Integer> hits = new LinkedHashMap<>();
+        if (multiLegService == null || orders == null || orders.isEmpty()
+                || bindings == null || bindings.isEmpty()) {
+            return new LinkedHashSet<>();
+        }
+        for (TransportOrderDO order : orders) {
+            if (order.getId() == null) {
+                continue;
+            }
+            MultiLegPlanner.PlanResult preview;
+            try {
+                preview = multiLegService.preview(order.getId());
+            } catch (RuntimeException ex) {
+                // 拆段失败不影响挑车：后面还有"线路覆盖分"兜底
+                log.warn("[createSmartPlan] 订单 {} 拆段预览失败：{}", order.getId(), ex.getMessage());
+                continue;
+            }
+            if (preview == null || preview.legs() == null) {
+                continue;
+            }
+            for (MultiLegPlanner.LegDraft leg : preview.legs()) {
+                if (leg == null || leg.fromStationId() == null || leg.toStationId() == null) {
+                    continue;
+                }
+                for (DriverVehicleDO binding : bindings) {
+                    if (binding == null || binding.getRouteId() == null) {
+                        continue;
+                    }
+                    List<Long> stations = routeStations.get(binding.getRouteId());
+                    if (stations == null) {
+                        continue;
+                    }
+                    if (stations.contains(leg.fromStationId()) && stations.contains(leg.toStationId())) {
+                        hits.merge(binding.getRouteId(), 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        return hits.entrySet().stream()
+                .sorted(Map.Entry.<Long, Integer>comparingByValue().reversed()
+                        .thenComparing(Map.Entry::getKey))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    /**
+     * 挑候选车辆：先按"需要的线路"（联运拆段结果）每条线取一辆车，不够再用"线路覆盖分"补齐；
+     * 仍为空时由调用方退回运力口径兜底。**一条运营线路只出一辆车**。
+     */
+    private List<VehicleDO> selectLineVehicles(Set<Long> neededRoutes, List<TransportOrderDO> orders,
+                                               List<VehicleDO> allVehicles, List<DriverVehicleDO> bindings,
+                                               Map<Long, List<Long>> routeStations, int max,
+                                               Set<Long> excludedVehicleIds) {
+        List<VehicleDO> picked = new ArrayList<>();
+        if (allVehicles == null || allVehicles.isEmpty() || max <= 0) {
+            return picked;
+        }
+        Set<Long> excluded = excludedVehicleIds == null ? Set.of() : excludedVehicleIds;
+        Map<Long, VehicleDO> vehicleMap = allVehicles.stream().filter(v -> v.getId() != null)
+                .collect(Collectors.toMap(VehicleDO::getId, v -> v, (a, b) -> a));
+
+        // 1) 联运拆段需要的线路：每条线取绑定 ID 最小的那台车
+        if (neededRoutes != null && bindings != null) {
+            for (Long routeId : neededRoutes) {
+                if (picked.size() >= max) {
+                    break;
+                }
+                DriverVehicleDO best = null;
+                for (DriverVehicleDO binding : bindings) {
+                    if (binding == null || !routeId.equals(binding.getRouteId()) || binding.getVehicleId() == null) {
+                        continue;
+                    }
+                    if (!vehicleMap.containsKey(binding.getVehicleId()) || excluded.contains(binding.getVehicleId())) {
+                        continue;
+                    }
+                    if (best == null || (binding.getId() != null && best.getId() != null
+                            && binding.getId() < best.getId())) {
+                        best = binding;
+                    }
+                }
+                if (best != null) {
+                    picked.add(vehicleMap.get(best.getVehicleId()));
+                }
+            }
+        }
+
+        // 2) 不够再用"线路覆盖分"补齐（拆段结果缺失 / 需要的线路没有车时兜底）
+        if (picked.size() < max) {
+            for (VehicleDO candidate : AutoDispatchPlanner.selectVehiclesByLineCoverage(
+                    orders, allVehicles, bindings, routeStations, max, excluded)) {
+                if (picked.size() >= max) {
+                    break;
+                }
+                if (picked.stream().anyMatch(v -> Objects.equals(v.getId(), candidate.getId()))) {
+                    continue;
+                }
+                picked.add(candidate);
+            }
+        }
+        return picked;
+    }
+
+    /**
+     * 逐车计算"本任务窗口内的线路行程"。
+     *
+     * <p>班次口径与实时公交模拟器一致：同一路线取"窗口开始时正在跑的那一班"；
+     * 找不到班次的线路按"还没发车"处理（整条线都在前方），保证演示数据缺班次时不会误判成"已开过"。</p>
+     */
+    private Map<Long, VehicleWindow> buildVehicleWindows(List<VehicleDO> vehicles,
+                                                         List<DriverVehicleDO> bindings,
+                                                         Map<Long, List<RouteStationDO>> routeStationMap,
+                                                         LocalDateTime[] window) {
+        if (vehicles == null || vehicles.isEmpty() || bindings == null || bindings.isEmpty()
+                || routeStationMap.isEmpty() || window == null) {
+            return Map.of();
+        }
+        // 一条线路一辆车：同一线路多台绑定取绑定 ID 最小者（与挑车口径一致，结果确定）
+        Map<Long, DriverVehicleDO> vehicleRoute = new LinkedHashMap<>();
+        for (DriverVehicleDO binding : bindings) {
+            if (binding == null || binding.getVehicleId() == null || binding.getRouteId() == null
+                    || !routeStationMap.containsKey(binding.getRouteId())) {
+                continue;
+            }
+            vehicleRoute.merge(binding.getVehicleId(), binding,
+                    (a, b) -> a.getId() != null && b.getId() != null && b.getId() < a.getId() ? b : a);
+        }
+        if (vehicleRoute.isEmpty()) {
+            return Map.of();
+        }
+
+        // 每个路线取"窗口开始时正在跑的那一班"
+        LocalTime at = window[0].toLocalTime();
+        LocalTime until = window[1].toLocalTime();
+        Map<Long, ShiftDO> shiftByRoute = new HashMap<>();
+        if (shiftMapper != null) {
+            Map<Long, List<ShiftDO>> grouped = shiftMapper.selectList().stream()
+                    .filter(s -> s.getRouteId() != null && s.getPlannedDepartureTime() != null)
+                    .filter(s -> s.getStatus() == null || s.getStatus() == 0)
+                    .collect(Collectors.groupingBy(ShiftDO::getRouteId));
+            grouped.forEach((routeId, shifts) -> shiftByRoute.put(routeId,
+                    DeterministicScheduleSimulator.selectCurrentShift(shifts, at)));
+        }
+
+        Map<Long, VehicleWindow> result = new LinkedHashMap<>();
+        for (VehicleDO vehicle : vehicles) {
+            DriverVehicleDO binding = vehicleRoute.get(vehicle.getId());
+            if (binding == null) {
+                continue;
+            }
+            List<RouteStationDO> lineStations = routeStationMap.get(binding.getRouteId());
+            ShiftDO shift = shiftByRoute.get(binding.getRouteId());
+            List<Long> stations = null;
+            OperatingLineTimeline.Position position = null;
+            // 只有"窗口开始时这台车正在跑某一班"才谈得上"哪一站已经开过"；
+            // 没班次 / 班次还没发车 / 当天班次已跑完，都按"整条线都在前方"处理
+            // （不把线路误判成已开过，避免演示数据班次覆盖不全时订单被全部过滤）。
+            if (shift != null && shift.getPlannedDepartureTime() != null) {
+                int duration = shift.getPlannedDurationMinutes() != null && shift.getPlannedDurationMinutes() > 0
+                        ? shift.getPlannedDurationMinutes() : OperatingLineTimeline.DEFAULT_DURATION_MINUTES;
+                long elapsed = java.time.Duration.between(shift.getPlannedDepartureTime(), at).toMinutes();
+                if (elapsed >= 0 && elapsed <= duration) {
+                    position = OperatingLineTimeline.at(lineStations, shift, at);
+                    stations = OperatingLineTimeline.windowStations(lineStations, shift, at, until);
+                }
+            }
+            if (position == null || stations == null) {
+                stations = OperatingLineTimeline.orderedStations(lineStations).stream()
+                        .map(RouteStationDO::getStationId).toList();
+                position = new OperatingLineTimeline.Position(OperatingLineTimeline.Direction.FORWARD,
+                        stations.isEmpty() ? null : stations.get(0), stations, List.of());
+            }
+            result.put(vehicle.getId(), new VehicleWindow(
+                    vehicleLabel(vehicle.getId(), binding.getRouteId()),
+                    stationNameOf(position.currentStationId()),
+                    position, stations, new LinkedHashSet<>(stations)));
+        }
+        return result;
+    }
+
+    /** 车牌 · 线路名（方案解释用） */
+    private String vehicleLabel(Long vehicleId, Long routeId) {
+        String plate = "车辆#" + vehicleId;
+        if (vehicleMapper != null && vehicleId != null) {
+            var vehicle = vehicleMapper.selectById(vehicleId);
+            if (vehicle != null && vehicle.getPlateNo() != null) {
+                plate = vehicle.getPlateNo();
+            }
+        }
+        if (routeMapper != null && routeId != null) {
+            var route = routeMapper.selectById(routeId);
+            if (route != null && route.getRouteName() != null) {
+                return plate + " · " + route.getRouteName();
+            }
+        }
+        return plate;
+    }
+
+    /** 站名（查不到给 #id） */
+    private String stationNameOf(Long stationId) {
+        if (stationId == null || stationMapper == null) {
+            return "—";
+        }
+        var station = stationMapper.selectById(stationId);
+        return station == null || station.getStationName() == null
+                ? "#" + stationId : station.getStationName();
+    }
+
+    /**
+     * 不折返预过滤：取货站必须是**某台候选车本窗口还会经过**的站。
+     * 所有候选车都已经开过这个站 → 本批不派这单，而不是让已经开过去的公交车掉头回去取货。
+     */
+    private static List<TransportOrderDO> filterByNoBacktracking(List<TransportOrderDO> orders,
+                                                                 Map<Long, VehicleWindow> windows,
+                                                                 List<String> reasons) {
+        Set<Long> reachable = new LinkedHashSet<>();
+        windows.values().forEach(window -> reachable.addAll(window.stationsSet()));
+        List<TransportOrderDO> kept = new ArrayList<>();
+        for (TransportOrderDO order : orders) {
+            if (order.getPickupStationId() != null && !reachable.contains(order.getPickupStationId())) {
+                reasons.add(order.getOrderNo() + "（取货站已被车辆开过，不能掉头取货）");
+                continue;
+            }
+            kept.add(order);
+        }
+        return kept;
+    }
+
+    /** 算法骨架：每台车"本窗口还会依次经过"的站（只保留本批订单涉及的站，保序） */
+    private static Map<Long, List<String>> buildVehicleSkeletons(List<VehicleDO> vehicles,
+                                                                 Map<Long, VehicleWindow> windows,
+                                                                 List<TransportOrderDO> orders) {
+        if (vehicles == null || vehicles.isEmpty() || windows == null || windows.isEmpty()) {
+            return Map.of();
+        }
+        Set<Long> orderStations = new LinkedHashSet<>();
+        if (orders != null) {
+            orders.forEach(order -> {
+                if (order.getPickupStationId() != null) {
+                    orderStations.add(order.getPickupStationId());
+                }
+                if (order.getDeliveryStationId() != null) {
+                    orderStations.add(order.getDeliveryStationId());
+                }
+            });
+        }
+        Map<Long, List<String>> result = new LinkedHashMap<>();
+        for (VehicleDO vehicle : vehicles) {
+            VehicleWindow window = windows.get(vehicle.getId());
+            if (window == null) {
+                continue;
+            }
+            List<String> skeleton = window.stations().stream()
+                    .filter(orderStations::contains)
+                    .map(String::valueOf)
+                    .toList();
+            if (!skeleton.isEmpty()) {
+                result.put(vehicle.getId(), skeleton);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 骨架过滤：只保留本批请求里存在的站点（算法只认请求里的站点；场站不放进骨架）。
+     * 顺手去掉相邻重复站，避免"同一站连着出现两次"这种无意义的骨架。
+     */
+    private static List<String> filterSkeleton(List<String> skeleton, Set<Long> requestStationIds, Long depotId) {
+        if (skeleton == null || skeleton.isEmpty() || requestStationIds == null) {
+            return List.of();
+        }
+        List<String> filtered = new ArrayList<>();
+        for (String stationId : skeleton) {
+            if (stationId == null || (depotId != null && stationId.equals(String.valueOf(depotId)))) {
+                continue;
+            }
+            Long id;
+            try {
+                id = Long.valueOf(stationId);
+            } catch (NumberFormatException ex) {
+                continue;
+            }
+            if (!requestStationIds.contains(id)) {
+                continue;
+            }
+            if (!filtered.isEmpty() && filtered.get(filtered.size() - 1).equals(stationId)) {
+                continue;
+            }
+            filtered.add(stationId);
+        }
+        return filtered;
+    }
+
+    /**
+     * 安全网：算法若把某台车派到"它本班已经开过、之后不会再经过"的站取货（= 让公交车掉头），
+     * 这里判出来并让整单失败（返回可读原因），而不是放任一条掉头路线落库。
+     */
+    private List<String> findBacktrackingViolations(AlgorithmPlanRespDTO result,
+                                                    Map<Long, VehicleWindow> windows) {
+        List<String> violations = new ArrayList<>();
+        if (result == null || result.getVehiclePlans() == null) {
+            return violations;
+        }
+        for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+            if (vehiclePlan == null || vehiclePlan.getVehicleId() == null || vehiclePlan.getStops() == null) {
+                continue;
+            }
+            VehicleWindow window = windows.get(vehiclePlan.getVehicleId());
+            if (window == null || window.position() == null || window.position().passedStations().isEmpty()) {
+                continue;
+            }
+            Set<Long> passed = new LinkedHashSet<>(window.position().passedStations());
+            for (AlgorithmRouteStopDTO stop : vehiclePlan.getStops()) {
+                Long stationId = parseStationId(stop == null ? null : stop.getStationId());
+                if (stationId != null && passed.contains(stationId)) {
+                    violations.add(window.label() + " 已驶过 " + stationNameOf(stationId) + " 站");
+                }
+            }
+        }
+        return violations.stream().distinct().toList();
+    }
+
+    /** 算法契约里的站点编号是字符串，这里转回业务编号（非法值返回 null） */
+    private static Long parseStationId(String stationId) {
+        if (stationId == null || stationId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(stationId.trim());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
 

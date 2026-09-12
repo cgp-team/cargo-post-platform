@@ -6,6 +6,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.ProductOrderPageReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderTraceRespVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.AppProductOrderItemRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
@@ -315,6 +316,10 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         vo.setReceiverName(order.getReceiverName());
         vo.setReceiverMobile(order.getReceiverMobile());
         vo.setReceiverAddress(order.getReceiverAddress());
+        // 订单详情页要用的订单级字段（商品清单/金额/备注/下单时间）：与"我的订单"列表同一份口径
+        vo.setTotalAmount(order.getTotalAmount());
+        vo.setRemark(order.getRemark());
+        vo.setCreateTime(order.getCreateTime());
         // 司机作业凭证（装车拍照 / 妥投凭证）：用户端"司机已到达 + 已装车/已送达"直接展示
         vo.setDriverName(driverNameOf(order.getDriverId()));
         vo.setDriverMobile(driverMobileOf(order.getDriverId()));
@@ -329,6 +334,8 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         if (!items.isEmpty()) {
             vo.setProductName(items.get(0).getProductName());
         }
+        vo.setItems(cn.iocoder.yudao.framework.common.util.object.BeanUtils.toBean(
+                items, AppProductOrderItemRespVO.class));
         // 未关联承运车辆（未发货/发货未填承运）：返回空语义，小程序据此显示「商品还未发车」
         if (order.getVehicleId() == null) {
             return vo;
