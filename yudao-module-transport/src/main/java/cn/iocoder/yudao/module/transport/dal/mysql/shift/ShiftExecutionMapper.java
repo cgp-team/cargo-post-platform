@@ -37,4 +37,14 @@ public interface ShiftExecutionMapper extends BaseMapperX<ShiftExecutionDO> {
                 .eq(ShiftExecutionDO::getExecDate, execDate)
                 .orderByDesc(ShiftExecutionDO::getId));
     }
+
+    /**
+     * 按车辆集合查询班次执行记录（智能派单时给每辆车解析它自己的公交线路骨架用）。
+     * 同一辆车可能有多条历史执行记录，这里按 id 倒序取最新（当前正执行的班次优先）。
+     */
+    default List<ShiftExecutionDO> selectListByVehicleIds(Collection<Long> vehicleIds) {
+        return selectList(new LambdaQueryWrapperX<ShiftExecutionDO>()
+                .inIfPresent(ShiftExecutionDO::getVehicleId, vehicleIds)
+                .orderByDesc(ShiftExecutionDO::getId));
+    }
 }

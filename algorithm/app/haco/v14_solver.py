@@ -80,6 +80,8 @@ class SolveOutcome:
     parameter_version: str = PARAMETER_VERSION
     warnings: list[str] = field(default_factory=list)
     iteration_stats: list[dict] = field(default_factory=list)
+    # 绕行硬约束/覆盖不足时未分配的订单编号（后端交给多段联运 MultiLegPlanner）
+    unassigned_order_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -299,6 +301,7 @@ def solve(
                     passenger_capacities, cargo_capacities,
                     initial_passenger_loads, initial_cargo_loads,
                     station_map, matrix, deadline,
+                    max_detour_km=config.max_detour_km,
                 )
                 if ant_routes is None:
                     continue
@@ -503,6 +506,7 @@ def solve(
             f"LOCAL_SEARCH_MS={round(sum(s.get('local_search_ms', 0) for s in iteration_stats), 1)}"
         )
 
+    missing_tasks = _missing_tasks(best_routes, tasks)
     return SolveOutcome(
         status="feasible",
         vehicle_plans=vehicle_plans,
@@ -513,6 +517,7 @@ def solve(
         parameter_version=PARAMETER_VERSION,
         warnings=warnings,
         iteration_stats=iteration_stats,
+        unassigned_order_ids=[oid for t in missing_tasks for oid in t.order_ids],
     )
 
 
@@ -582,6 +587,7 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
+            max_detour_km=config.max_detour_km,
         )
         if repaired is not None and _routes_feasible(
             repaired, tasks_by_id, engine,
@@ -628,6 +634,7 @@ def _generate_initial_solutions(
             passenger_capacities, cargo_capacities,
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix, deadline,
+            max_detour_km=config.max_detour_km,
         )
         if routes is None:
             continue
@@ -723,8 +730,13 @@ def _repair_unassigned(
     initial_passenger_loads, initial_cargo_loads,
     station_map, matrix,
     deadline: SearchDeadline | None = None,
+    max_detour_km: float | None = None,
 ) -> list[RouteGenome] | None:
-    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。"""
+    """把 ACO 构造中遗漏的任务贪心补插回去；仍插不回则返回 None。
+
+    绕行硬约束（max_detour_km）下，偏离运营路线过远的订单补插失败是预期行为——
+    这些订单留给多段联运，不强行塞给某条线路绕远。
+    """
     placed = {
         tid for r in routes for tid in r.placements
     }
@@ -748,8 +760,13 @@ def _repair_unassigned(
             initial_passenger_loads,
             initial_cargo_loads,
             candidate_size=1,
+            max_detour_km=max_detour_km,
         )
         if not candidates:
+            # 货运订单（DELIVERY/PICKUP/SHIPMENT）绕行超限 → 跳过，留给多段联运；
+            # 乘客订单必须完整覆盖（无联运概念）→ 插不进即该解不可用，交由上层归类无解原因。
+            if task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT):
+                continue
             return None
         cand = candidates[0]
         routes[cand.vehicle_index].insert_task(
