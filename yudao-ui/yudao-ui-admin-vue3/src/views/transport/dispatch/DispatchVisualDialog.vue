@@ -336,7 +336,6 @@ interface RouteView {
   /** 任务时间窗（该方案内该车最早离站 ~ 最晚到达）：一套方案 = 一个任务时间窗 */
   windowText?: string
   /** 归属方案：分组时同一天的多套方案不合并，避免被当成"一台车跑了一整天" */
-  planId?: number
   /** 该车车牌（运输段分组口径） */
   plateNo?: string
 }
