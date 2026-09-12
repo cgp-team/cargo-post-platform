@@ -84,6 +84,8 @@ class SolveOutcome:
     parameter_version: str = PARAMETER_VERSION
     warnings: list[str] = field(default_factory=list)
     iteration_stats: list[dict] = field(default_factory=list)
+    # 绕行硬约束/覆盖不足时未分配的订单编号（后端交给多段联运 MultiLegPlanner）
+    unassigned_order_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -518,14 +520,15 @@ def solve(
         best_obj = best_complete_obj
         warnings.append("OUTPUT_FALLBACK_TO_LAST_COMPLETE_SOLUTION")
     else:
-        missing = sorted(_missing_tasks(best_routes, tasks))
+        missing_tasks = _missing_tasks(best_routes, tasks)
         return SolveOutcome(
             status="infeasible",
             reason_code="INCOMPLETE_SOLUTION",
             warnings=[
                 "NO_COMPLETE_V14_SOLUTION",
-                "UNASSIGNED_TASKS=" + ",".join(missing),
+                "UNASSIGNED_TASKS=" + ",".join(sorted(t.task_id for t in missing_tasks)),
             ],
+            unassigned_order_ids=sorted({oid for t in missing_tasks for oid in t.order_ids}),
         )
 
     vehicle_plans = _routes_to_vehicle_plans(

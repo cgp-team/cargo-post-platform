@@ -116,7 +116,9 @@ def build_result(request: PlanRequest) -> PlanResult:
             warnings.append("路网距离不可用，已降级直线距离")
     outcome = solve(request, matrix)
     # 合并 solver 产生的 warnings（如 HACO_FALLBACK_TO_BASELINE）
-    warnings.extend(outcome.warnings)
+    # 各求解器（baseline / HACO-1.4 / hybrid）返回的 SolveOutcome 字段集不完全一致，
+    # 统一按「缺失即默认」读取，避免某个求解器少一个字段就把 200 打成 500。
+    warnings.extend(getattr(outcome, "warnings", None) or [])
     distance_unit = "km" if matrix is not None else "degree"
     if outcome.status == "infeasible":
         return PlanResult(
@@ -124,21 +126,22 @@ def build_result(request: PlanRequest) -> PlanResult:
             status="infeasible",
             reasonCode=outcome.reason_code,
             warnings=warnings,
-            algorithmVersion=outcome.algorithm_version,
-            parameterVersion=outcome.parameter_version,
+            algorithmVersion=getattr(outcome, "algorithm_version", ALGORITHM_VERSION),
+            parameterVersion=getattr(outcome, "parameter_version", PARAMETER_VERSION),
             distanceUnit=distance_unit,
+            unassignedOrderIds=getattr(outcome, "unassigned_order_ids", None) or [],
             computedAt=now(),
         )
     return PlanResult(
         requestId=request.requestId,
         status="feasible",
         warnings=warnings,
-        algorithmVersion=outcome.algorithm_version,
-        parameterVersion=outcome.parameter_version,
+        algorithmVersion=getattr(outcome, "algorithm_version", ALGORITHM_VERSION),
+        parameterVersion=getattr(outcome, "parameter_version", PARAMETER_VERSION),
         distanceUnit=distance_unit,
-        totalDistance=outcome.total_distance,
-        vehiclePlans=outcome.vehicle_plans,
-        unassignedOrderIds=outcome.unassigned_order_ids,
+        totalDistance=getattr(outcome, "total_distance", 0.0),
+        vehiclePlans=getattr(outcome, "vehicle_plans", None) or [],
+        unassignedOrderIds=getattr(outcome, "unassigned_order_ids", None) or [],
         computedAt=now(),
     )
 
