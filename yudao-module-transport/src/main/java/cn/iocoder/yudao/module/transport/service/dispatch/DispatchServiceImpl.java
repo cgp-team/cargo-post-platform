@@ -1433,6 +1433,18 @@ public class DispatchServiceImpl implements DispatchService {
 
         validatePlanExists(id);
 
+        // P0-B：多段联运方案必须「车辆视角 = 订单视角」。运输段（transport_leg）才是车辆真实的行驶轨迹：
+        // 订单视角是 v3→v101→v5 接力，而算法的单车经停明细会让同一台车跨片区「南岸→重大→再回来」。
+        // 本方案的段存在时，一律按「leg.vehicleId + 段序」出段（plan item 只保留站点与作业）。
+
+        List<TransportLegDO> planLegs = legMapper == null ? List.of() : legMapper.selectListByPlanId(id);
+
+        if (!planLegs.isEmpty()) {
+
+            return buildLegRoadmap(id, planLegs);
+
+        }
+
         List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
 
                 .eq(DispatchPlanItemDO::getPlanId, id)
@@ -1446,6 +1458,8 @@ public class DispatchServiceImpl implements DispatchService {
         respVO.setPlanId(id);
 
         if (items.isEmpty()) {
+
+            respVO.setSource("ITEM");
 
             respVO.setProvider("EUCLIDEAN");
 
@@ -1571,9 +1585,216 @@ public class DispatchServiceImpl implements DispatchService {
 
         respVO.setSegments(segments);
 
+        respVO.setSource("ITEM"); // 无运输段（手工方案/历史数据）：退化口径，前端按经停明细绘图
+
         respVO.setProvider(anyReal && anyFallback ? "MIXED" : (anyReal ? "AMAP" : "EUCLIDEAN"));
 
         return respVO;
+
+    }
+
+
+
+    /**
+
+     * P0-B：按「本方案的运输段」出段（车辆视角 = 订单视角）。
+
+     *
+
+     * 每台车在本方案内的段按「预计出发时间 → 订单内段序 → 订单编号」排序，段序号从 1 递增
+
+     * （前端用它做「该车第 N 段」的轨迹 key）；段上已缓存的高德轨迹直接用，缺轨迹时才按需补一次路网
+
+     * （同时省掉前端 30 秒冷却重试）。
+
+     */
+
+    private DispatchRoadmapRespVO buildLegRoadmap(Long planId, List<TransportLegDO> legs) {
+
+        DispatchRoadmapRespVO respVO = new DispatchRoadmapRespVO();
+
+        respVO.setPlanId(planId);
+
+        respVO.setSource("LEG");
+
+        Set<Long> stationIds = legs.stream()
+
+                .flatMap(leg -> java.util.stream.Stream.of(leg.getFromStationId(), leg.getToStationId()))
+
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+
+        Map<Long, StationDO> stationMap = stationIds.isEmpty() ? Map.of()
+
+                : stationMapper.selectBatchIds(stationIds).stream()
+
+                        .collect(Collectors.toMap(StationDO::getId, s -> s, (a, b) -> a));
+
+        // 按车辆分组（车辆为空归到 0，前端同样按 0 兜底）
+        Map<Long, List<TransportLegDO>> byVehicle = new LinkedHashMap<>();
+
+        for (TransportLegDO leg : legs) {
+
+            byVehicle.computeIfAbsent(leg.getVehicleId() == null ? 0L : leg.getVehicleId(),
+
+                    k -> new ArrayList<>()).add(leg);
+
+        }
+
+        List<DispatchRoadmapRespVO.Segment> segments = new ArrayList<>();
+
+        boolean anyReal = false;
+
+        boolean anyFallback = false;
+
+        for (Map.Entry<Long, List<TransportLegDO>> entry : byVehicle.entrySet()) {
+
+            List<TransportLegDO> vehicleLegs = entry.getValue();
+
+            vehicleLegs.sort(Comparator
+
+                    .comparing(TransportLegDO::getEstimatedDeparture,
+
+                            Comparator.nullsLast(Comparator.naturalOrder()))
+
+                    .thenComparing(TransportLegDO::getLegSequence, Comparator.nullsLast(Comparator.naturalOrder()))
+
+                    .thenComparing(TransportLegDO::getOrderId, Comparator.nullsLast(Comparator.naturalOrder())));
+
+            int sequence = 0; // 只对"能画出轨迹"的段计数，保证与前端跳过的无效冲点一致
+
+            for (TransportLegDO leg : vehicleLegs) {
+
+                StationDO from = leg.getFromStationId() == null ? null : stationMap.get(leg.getFromStationId());
+
+                StationDO to = leg.getToStationId() == null ? null : stationMap.get(leg.getToStationId());
+
+                if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+
+                        || to.getLongitude() == null || to.getLatitude() == null) {
+
+                    continue;
+
+                }
+
+                sequence++;
+
+                List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
+
+                if (road == null) {
+
+                    road = roadPolylineService.route(
+
+                            from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
+
+                            to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+
+                }
+
+                boolean real = road != null && road.size() >= 2;
+
+                if (real) {
+
+                    anyReal = true;
+
+                } else {
+
+                    anyFallback = true;
+
+                }
+
+                List<double[]> points = real ? road : List.of(
+
+                        new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
+
+                        new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
+
+                DispatchRoadmapRespVO.Segment segment = new DispatchRoadmapRespVO.Segment();
+
+                segment.setVehicleId(entry.getKey() == 0L ? leg.getVehicleId() : entry.getKey());
+
+                segment.setVisitSequence(sequence);
+
+                segment.setLegId(leg.getId());
+
+                segment.setOrderId(leg.getOrderId());
+
+                segment.setLegSequence(leg.getLegSequence());
+
+                segment.setHandoverRequired(leg.getHandoverRequired());
+
+                segment.setFromStationId(from.getId());
+
+                segment.setToStationId(to.getId());
+
+                segment.setFromStationName(from.getStationName());
+
+                segment.setToStationName(to.getStationName());
+
+                segment.setProvider(real ? "AMAP" : "EUCLIDEAN");
+
+                segment.setPoints(points.stream().map(p -> {
+
+                    DispatchRoadmapRespVO.Point point = new DispatchRoadmapRespVO.Point();
+
+                    point.setLongitude(p[0]);
+
+                    point.setLatitude(p[1]);
+
+                    return point;
+
+                }).toList());
+
+                segments.add(segment);
+
+            }
+
+        }
+
+        respVO.setSegments(segments);
+
+        respVO.setProvider(anyReal && anyFallback ? "MIXED" : (anyReal ? "AMAP" : "EUCLIDEAN"));
+
+        return respVO;
+
+    }
+
+
+
+    /** 解析运输段上缓存的高德轨迹（"lon,lat;lon,lat;..."）；无/不合法返回 null（由调用方按需补路网） */
+
+    private static List<double[]> parseNavigationPolyline(String polyline) {
+
+        if (StrUtil.isBlank(polyline)) {
+
+            return null;
+
+        }
+
+        List<double[]> points = new ArrayList<>();
+
+        for (String pair : polyline.split(";")) {
+
+            String[] lonLat = pair.split(",");
+
+            if (lonLat.length < 2) {
+
+                continue;
+
+            }
+
+            try {
+
+                points.add(new double[]{Double.parseDouble(lonLat[0].trim()), Double.parseDouble(lonLat[1].trim())});
+
+            } catch (NumberFormatException ignored) {
+
+                return null; // 脏数据：宁可补一次路网，也不要画出错误轨迹
+
+            }
+
+        }
+
+        return points.size() >= 2 ? points : null;
 
     }
 
