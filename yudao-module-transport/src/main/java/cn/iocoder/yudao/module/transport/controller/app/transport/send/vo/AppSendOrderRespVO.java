@@ -90,6 +90,8 @@ public class AppSendOrderRespVO {
     private LocalDateTime estimatedArrivalTime;
     @Schema(description = "预计到达剩余分钟数（仅未来时间有值）")
     private Integer etaMinutes;
+    @Schema(description = "ETA 口径来源：REALTIME 实时位置 / SIMULATED 模拟位置 / PLANNED 计划经停时间（优先级：实时>模拟>计划）")
+    private String etaSource;
 
     // ========== 车来取货/送货提醒（承运车辆实时位置，未发车/未上报时为 null） ==========
     @Schema(description = "承运车辆最新经度(GCJ-02)")
@@ -102,8 +104,10 @@ public class AppSendOrderRespVO {
     private Integer carrierEtaMinutes;
     @Schema(description = "承运车辆位置来源：REAL_FRESH 真实上报 / REAL_STALE 位置可能过期 / SIMULATED 模拟演示（班次插值或模拟引擎）")
     private String carrierLocationSource;
-    @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟）：前端据此高亮并提示\"车快到了\"")
+    @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟 或距离分级命中）：前端据此高亮并提示\"车快到了\"")
     private Boolean carrierApproaching;
+    @Schema(description = "接近目标站点距离分级：NEAR_2KM / NEAR_1KM / ARRIVING（未进入 2km 内为 null），前端据此换文案/图标")
+    private String carrierApproachStage;
 
     // ========== 司机到站/作业进度（后端为源：派单经停明细状态；未派单时为 null） ==========
     @Schema(description = "司机是否已到达本单交接站点（已到达/已完成作业），前端提示\"司机已到达\"")
