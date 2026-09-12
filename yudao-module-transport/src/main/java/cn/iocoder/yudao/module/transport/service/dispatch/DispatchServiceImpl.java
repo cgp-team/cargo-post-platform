@@ -28,6 +28,8 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 
+import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftExecutionDO;
+
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -53,6 +55,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
@@ -138,13 +142,24 @@ public class DispatchServiceImpl implements DispatchService {
 
     private static final String SCENARIO_MANUAL = "MANUAL";
 
-    /** 算法规模上限（与算法服务 app.py 契约一致）：30 站点 / 25 订单 / 3 车 */
-
-    private static final int MAX_ALGORITHM_STATIONS = 30;
+    /** 算法规模上限（与算法服务 app.py 契约一致）：100 站点 / 25 订单 / 3 车。
+     *  站点上限从 30 放宽到 100：联合调度（公交线路骨架 + 货运绕行）时骨架站点
+     *  （每条真实公交线路 18~20 站）会并入 station 快照，3 条线路 + 订单站点轻松 70~80 站，
+     *  旧的 30 站上限会把"车辆按各自公交线路运行"整批拒掉。 */
+    private static final int MAX_ALGORITHM_STATIONS = 100;
 
     private static final int MAX_ALGORITHM_ORDERS = 25;
 
     private static final int MAX_ALGORITHM_VEHICLES = 3;
+
+    /**
+     * 一键调度「单批」订单上限（P1-1）：算法单次最多 {@value #MAX_ALGORITHM_VEHICLES} 辆车、
+     * 批次窗口 {@value #BATCH_MINUTES} 分钟。若一批塞满 25 单（MAX_ALGORITHM_ORDERS），
+     * 3 台车每台要跑 8~9 单，2 小时窗口必然超时 → 算法判 TIME_WINDOW_EXCEEDED（实测 25/26 单必现）。
+     * 因此自动模式按「3 台车 × 每车 4 单」左右的规模分批，让单车在窗口内能跑完；
+     * 其余订单留在池里，由前端「一键演示/一键调度」多轮自动成下一套方案（跨片区订单同样靠这个分批）。
+     */
+    private static final int AUTO_BATCH_MAX_ORDERS = 12;
 
     /**
 
@@ -173,6 +188,8 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private ShiftMapper shiftMapper;
 
     @Resource private RouteStationMapper routeStationMapper;
+
+    @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Resource private VehicleMapper vehicleMapper;
 
@@ -547,7 +564,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 其余片区留在池里，再次点击「一键调度」自动成下一套方案。
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, MAX_ALGORITHM_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, AUTO_BATCH_MAX_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -1923,7 +1940,7 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 与 createSmartPlan 同一批次口径：校验看到的订单数就是本次真正会被调度的订单数
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, MAX_ALGORITHM_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, AUTO_BATCH_MAX_ORDERS);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -2708,13 +2725,60 @@ public class DispatchServiceImpl implements DispatchService {
 
         ShiftDO shift = shiftMapper.selectById(shiftId);
 
-        if (shift == null || shift.getRouteId() == null) {
+        if (shift == null) {
 
             return null;
 
         }
 
-        List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(shift.getRouteId()));
+        return skeletonOfRoute(shift.getRouteId(), depotStationId);
+
+    }
+
+    /**
+     * 按车辆解析它自己的公交线路骨架（联合调度）：vehicle → shift_execution → shift → route。
+     * 智能派单（auto）时每辆车不再统一从场站出发往返，而是沿自己绑定的公交线路（始发站→终点站）运行，
+     * 线路附近的货运订单作为小范围绕行插入；没有班次/线路的车辆返回 null（纯 VRP，从场站出发的货运车）。
+     */
+    private List<String> resolveSkeletonByVehicle(Long vehicleId, Long depotStationId) {
+
+        if (vehicleId == null) {
+
+            return null;
+
+        }
+
+        List<ShiftExecutionDO> executions = shiftExecutionMapper.selectListByVehicleIds(List.of(vehicleId));
+
+        if (executions.isEmpty() || executions.get(0).getShiftId() == null) {
+
+            return null;
+
+        }
+
+        // 同一辆车可能有多条执行记录，取最新一条（id 倒序）对应的班次
+        ShiftDO shift = shiftMapper.selectById(executions.get(0).getShiftId());
+
+        if (shift == null) {
+
+            return null;
+
+        }
+
+        return skeletonOfRoute(shift.getRouteId(), depotStationId);
+
+    }
+
+    /** 线路 → 按 sequenceNo 排序的站点编号列表（去掉场站）；线路无站点返回 null */
+    private List<String> skeletonOfRoute(Long routeId, Long depotStationId) {
+
+        if (routeId == null) {
+
+            return null;
+
+        }
+
+        List<RouteStationDO> routeStations = routeStationMapper.selectListByRouteIds(List.of(routeId));
 
         if (routeStations.isEmpty()) {
 
@@ -2748,6 +2812,19 @@ public class DispatchServiceImpl implements DispatchService {
 
                                                  List<String> skeleton) {
 
+        // 每辆车的公交骨架：手动指定班次时所有车按同一线路经停；智能派单（auto）时按车辆绑定的线路解析
+        Map<Long, List<String>> vehicleSkeletons = new LinkedHashMap<>();
+
+        for (VehicleDO vehicle : vehicles) {
+
+            List<String> vs = (skeleton != null && !skeleton.isEmpty()) ? skeleton
+
+                    : resolveSkeletonByVehicle(vehicle.getId(), depot.getId());
+
+            vehicleSkeletons.put(vehicle.getId(), vs);
+
+        }
+
         Set<Long> stationIds = new LinkedHashSet<>();
 
         orders.forEach(order -> {
@@ -2755,6 +2832,17 @@ public class DispatchServiceImpl implements DispatchService {
             stationIds.add(order.getPickupStationId());
 
             stationIds.add(order.getDeliveryStationId());
+
+        });
+
+        // 骨架站点也必须进 station 快照，否则算法 solver 因"未知站点"KeyError 崩溃（INTERNAL_ERROR）
+        vehicleSkeletons.values().forEach(sk -> {
+
+            if (sk != null) {
+
+                sk.forEach(sid -> stationIds.add(Long.valueOf(sid)));
+
+            }
 
         });
 
@@ -2782,9 +2870,9 @@ public class DispatchServiceImpl implements DispatchService {
 
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
 
-                        // 公交骨架（Mandatory Passenger Service）：指定班次时该车辆按线路站点经停
+                        // 公交骨架（联合调度）：每辆车自己的线路骨架，缺线路的车为纯 VRP
 
-                        .skeleton(skeleton)
+                        .skeleton(vehicleSkeletons.get(vehicle.getId()))
 
                         .build())
 

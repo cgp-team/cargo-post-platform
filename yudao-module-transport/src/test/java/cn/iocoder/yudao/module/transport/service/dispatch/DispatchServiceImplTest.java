@@ -16,6 +16,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.*;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverVehicleMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteStationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
+import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftExecutionMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.CargoOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
@@ -74,6 +75,7 @@ class DispatchServiceImplTest {
     @Mock private TransportLegMapper transportLegMapper;
     @Mock private DepartureCheckMapper departureCheckMapper;
     @Mock private ShiftMapper shiftMapper;
+    @Mock private ShiftExecutionMapper shiftExecutionMapper;
     @Mock private RouteStationMapper routeStationMapper;
     @Mock private AlgorithmAdapter algorithmAdapter;
     @Mock private DispatchEstimationService dispatchEstimationService;
@@ -99,6 +101,7 @@ class DispatchServiceImplTest {
         ReflectionTestUtils.setField(dispatchService, "legMapper", transportLegMapper);
         ReflectionTestUtils.setField(dispatchService, "departureCheckMapper", departureCheckMapper);
         ReflectionTestUtils.setField(dispatchService, "shiftMapper", shiftMapper);
+        ReflectionTestUtils.setField(dispatchService, "shiftExecutionMapper", shiftExecutionMapper);
         ReflectionTestUtils.setField(dispatchService, "routeStationMapper", routeStationMapper);
         ReflectionTestUtils.setField(dispatchService, "algorithmAdapter", algorithmAdapter);
         ReflectionTestUtils.setField(dispatchService, "dispatchEstimationService", dispatchEstimationService);
