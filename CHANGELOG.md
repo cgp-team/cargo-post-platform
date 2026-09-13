@@ -13,9 +13,14 @@
   - 接入四处：`MultiLegServiceImpl`（运输段落库几何）、`DispatchServiceImpl` 的 roadmap（车辆视角两段：
     按经停明细/按运输段）与 `prefetchRoadGeometry`（"预热真实路线"顺带纠正历史轨迹）、
     `DriverAppServiceImpl`（司机端导航站间几何）。**走廊优先**，取不到再回退原点对点逻辑。
-- **演示数据纳入自动部署**：`.github/workflows/deploy-dev.yml` 迁移清单补
-  `demo-cqu-a-link` / `demo-vehicle-system-split` / `demo-line346-orders`（幂等，按依赖顺序），
-  部署即可把演示订单池刷成"当天可派 + 含 346 主线 / 重邮→重庆交通大学 / 重庆大学A区"。
+- **346 演示数据并入"已在部署清单里的"脚本**：`demo-line346-orders.sql` 的内容整体并入
+  `demo-real-orders.sql` 末尾（该文件每次部署都会执行），于是**部署后这批订单直接出现在
+  后台「调度中心 → 订单池」**（状态=待入池）：重庆工商大学站与 320 路补站、346/347/303/318 的
+  车辆·司机·人车绑定·班次、订单 A~E + 重邮→重庆交通大学 + 重庆大学A区订单，以及"演示单时间窗=当天全天"。
+  独立的 `demo-line346-orders.sql` 改为说明文件（它不在部署清单里，单独执行不再建单），
+  DEMO_GUIDE 的脚本表与说明同步更新。
+  （背景：工作流文件 `deploy-dev.yml` 的改动需要 token 带 `workflow` 权限，当前 CI token 没有，
+   SSH 22 端口在本机被拒；把数据并入已在清单内的脚本可以绕开这个限制。）
 
 验证：后端 `yudao-module-transport` **330 个测试通过**（新增走廊切片 4 例）；
 本地 MySQL 真跑整条演示脚本链通过，28 张演示单在 08:40-12:40 窗口全部可派。
