@@ -833,17 +833,16 @@ public class DispatchServiceImpl implements DispatchService {
 
         }
 
-        // 安全网（不折返）：已经明确告诉算法"这些车本窗口沿途会经过哪些站"，若算法仍把某台车
-        // 派到它本窗口已经开过的站取货（= 让公交车掉头），直接判该方案不可用并说明原因。
-        if (!vehicleWindows.isEmpty()) {
-            List<String> backtracking = findBacktrackingViolations(result, vehicleWindows);
-            if (!backtracking.isEmpty()) {
-                task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
-                task.setErrorMessage("车辆已驶过站点，不能掉头取货");
-                dispatchTaskMapper.updateById(task);
-                releaseClaimedOrders(pooledIds);
-                throw exception(DISPATCH_NO_BACKTRACKING, String.join("、", backtracking));
-            }
+        // 安全网（不折返）——**只提示，不再让整批派单失败**：
+        // 已经告诉算法"这些车本窗口沿途会经过哪些站"（作为骨架/方向偏好），
+        // 但骨架在算法里是 prior 而非硬约束，个别订单仍可能被排到"本窗口已驶过"的站。
+        // 早期版本在这里直接判 INFEASIBLE → 现场表现是"整天都出不了方案"（报"车辆已驶过站点，不能掉头取货"）。
+        // 现在如实记进方案解释，由调度员决定是否人工调整（真正的"不能掉头"由派单前的
+        // filterByNoBacktracking 把关：取货站被所有候选车开过的订单本批不派）。
+        List<String> backtrackingWarnings = vehicleWindows.isEmpty()
+                ? List.of() : findBacktrackingViolations(result, vehicleWindows);
+        if (!backtrackingWarnings.isEmpty()) {
+            log.warn("[createSmartPlan] 检测到疑似折返取货（仅提示，不阻断）：{}", backtrackingWarnings);
         }
 
         // 可行：任务置成功，方案与经停明细落库（订单已在 CAS 抢占时置为已分配）
@@ -925,6 +924,12 @@ public class DispatchServiceImpl implements DispatchService {
                     + "本窗口还会依次经过 " + window.stations().size() + " 站（已开过的站不派取货）");
         }
         reasons.addAll(windowReasons);
+
+        // 疑似折返取货（只提示、不阻断）：调度员据此人工确认是否调整
+        if (!backtrackingWarnings.isEmpty()) {
+            reasons.add("提示：本班次可能折返取货（不阻断派单，建议人工确认）："
+                    + String.join("；", backtrackingWarnings));
+        }
 
         // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
 
