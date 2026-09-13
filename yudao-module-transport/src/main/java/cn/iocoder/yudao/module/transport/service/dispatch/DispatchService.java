@@ -96,6 +96,16 @@ public interface DispatchService {
                                                              Double toLongitude, Double toLatitude, Long legId);
 
     /**
+     * 订单池手动取消：把"待入池/已入池"的订单置为已取消（其它订单不受影响）。
+     *
+     * <p>只允许取消尚未进入方案执行的订单（已分配/已发车/在途的订单不能在这里取消，
+     * 避免把已经跑在路上的货取消掉）。</p>
+     *
+     * @return 实际取消的订单数
+     */
+    int cancelPoolOrders(java.util.List<Long> orderIds);
+
+    /**
      * 预热真实道路轨迹（高德配额恢复后跑一次）：订单池订单的取送站点对 + 今天方案里运输段的起终点对，
      * 逐对调用高德并把取到的轨迹落库到对应运输段（transport_leg.navigation_polyline）。
      *

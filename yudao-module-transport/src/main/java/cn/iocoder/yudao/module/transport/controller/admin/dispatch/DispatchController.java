@@ -39,6 +39,14 @@ public class DispatchController {
         return success(dispatchService.collectOrders(reqVO));
     }
 
+    @PutMapping("/order-pool/cancel")
+    @Operation(summary = "订单池手动取消订单（只影响选中的订单，其它订单不变）")
+    @Parameter(name = "orderIds", description = "订单编号列表", required = true)
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:collect')")
+    public CommonResult<Integer> cancelPoolOrders(@RequestBody java.util.List<Long> orderIds) {
+        return success(dispatchService.cancelPoolOrders(orderIds));
+    }
+
     @PostMapping("/plan/manual")
     @Operation(summary = "手工派单")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:manual-plan')")

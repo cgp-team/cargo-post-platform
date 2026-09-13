@@ -227,6 +227,7 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private DispatchEstimationService dispatchEstimationService;
 
     @Resource private MultiLegService multiLegService;
+    @Resource private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
 
     @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
 
@@ -565,9 +566,14 @@ public class DispatchServiceImpl implements DispatchService {
         //    已经开过的站不再派它去取货（见下方 buildVehicleTimelines / validateNoBacktracking）。
         LocalDateTime[] taskWindow = resolveTaskWindow(reqVO);
         List<String> windowReasons = new ArrayList<>();
-        pooledOrders = filterByTaskWindow(pooledOrders, taskWindow[0], taskWindow[1], windowReasons);
-        if (pooledOrders.isEmpty()) {
-            throw exception(DISPATCH_TASK_WINDOW_EMPTY, formatWindow(taskWindow), String.join("、", windowReasons));
+        List<TransportOrderDO> inWindow = filterByTaskWindow(pooledOrders, taskWindow[0], taskWindow[1], windowReasons);
+        if (inWindow.isEmpty()) {
+            // 全部订单的时间窗都与本批次窗口无交集（现场常见：自建订单写了早于窗口的送达时限，
+            // 或演示窗口与订单窗口没重叠）→ 早期实现直接报"没有可派订单"，演示时点一次什么都出不来。
+            // 现在兜底：按"不限时间窗"把订单池全部订单交给算法，并把提示写进方案解释，由调度员判断。
+            windowReasons.add("全部订单时间窗与本批次窗口无交集，已按「不限时间窗」兜底派单（请核对送达时限）");
+        } else {
+            pooledOrders = inWindow;
         }
 
         // 一键智能调度（auto=true）：后端自动选场站 + 自动挑候选车辆（实际车辆数由算法决定）
@@ -2128,6 +2134,46 @@ public class DispatchServiceImpl implements DispatchService {
     public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
                                                           Double toLongitude, Double toLatitude) {
         return routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude, null);
+    }
+
+    /**
+     * 订单池手动取消：只取消还在池里的单（待入池/已入池），不影响其它订单，
+     * 也不动已进入方案执行的单（那种要走改派/回收，避免把在途货物取消掉）。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int cancelPoolOrders(List<Long> orderIds) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return 0;
+        }
+        List<TransportOrderDO> orders = orderMapper.selectBatchIds(orderIds);
+        if (orders == null || orders.isEmpty()) {
+            return 0;
+        }
+        List<Long> cancellable = orders.stream()
+                .filter(order -> Objects.equals(order.getStatus(), TransportOrderStatusEnum.POOLED.getStatus())
+                        || Objects.equals(order.getStatus(), TransportOrderStatusEnum.READY_FOR_POOL.getStatus()))
+                .map(TransportOrderDO::getId)
+                .toList();
+        if (cancellable.isEmpty()) {
+            return 0;
+        }
+        TransportOrderDO update = new TransportOrderDO();
+        update.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
+        int updated = orderMapper.update(update, new LambdaQueryWrapperX<TransportOrderDO>()
+                .in(TransportOrderDO::getId, cancellable)
+                .in(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus(),
+                        TransportOrderStatusEnum.READY_FOR_POOL.getStatus()));
+        cancellable.forEach(orderId -> {
+            try {
+                orderEventService.record(orderId, TransportOrderEventTypeEnum.CANCELLED,
+                        "调度订单池手动取消", null);
+            } catch (Exception ex) {
+                log.debug("[dispatch] 订单 {} 取消事件记录失败：{}", orderId, ex.getMessage());
+            }
+        });
+        log.info("[dispatch] 订单池手动取消 {} 单：{}", updated, cancellable);
+        return updated;
     }
 
     /**
