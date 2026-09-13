@@ -323,6 +323,62 @@ public class AutoDispatchPlanner {
         return batch;
     }
 
+    /**
+     * 运力预算：候选车队里"最大 {@code maxVehicles} 台车"的货仓件数合计。
+     *
+     * <p>算法预检口径（`hybrid_optimizer._precheck`）是：
+     * {@code pickups ≤ Σ cargoCapacity} 且 {@code deliveries ≤ Σ cargoCapacity}，
+     * 超出直接返回 OVER_CAPACITY（前端文案"运力不足（订单总需求超出可用车辆总容量）"）。
+     * 因此取批时按这个上限带走货量，超出的订单留给下一批（下一轮一键调度成下一套方案）。</p>
+     *
+     * @param vehicles       可用车辆
+     * @param maxVehicles    本次最多用几台车（与 MAX_ALGORITHM_VEHICLES 一致）
+     * @param fallbackCapacity 车辆档案缺货仓件数时的默认值（与算法契约默认 4 一致）
+     */
+    public static int capacityBudget(List<VehicleDO> vehicles, int maxVehicles, int fallbackCapacity) {
+        if (vehicles == null || vehicles.isEmpty() || maxVehicles <= 0) {
+            return 0;
+        }
+        return vehicles.stream()
+                .filter(v -> v.getId() != null)
+                .filter(v -> v.getStatus() == null || v.getStatus() == STATUS_ENABLED)
+                .map(v -> v.getCargoCapacity() == null ? fallbackCapacity : v.getCargoCapacity())
+                .sorted(Comparator.reverseOrder())
+                .limit(maxVehicles)
+                .mapToInt(Integer::intValue)
+                .sum();
+    }
+
+    /**
+     * 按"件数预算"裁剪批次：保持传入顺序（调用方已按最新优先排好），
+     * 逐单累加货量，超过预算的订单留给下一批（不丢单，下一轮会再成方案）。
+     * 首单（锚点）无条件保留，避免出现空批次。
+     */
+    public static List<TransportOrderDO> capByTotalItems(List<TransportOrderDO> orders,
+                                                         Map<Long, Integer> itemsByOrderId,
+                                                         int maxItems) {
+        if (orders == null || orders.isEmpty()) {
+            return List.of();
+        }
+        if (maxItems <= 0) {
+            return List.copyOf(orders);
+        }
+        List<TransportOrderDO> kept = new ArrayList<>();
+        int total = 0;
+        for (TransportOrderDO order : orders) {
+            int items = 0;
+            if (order.getId() != null && itemsByOrderId != null) {
+                items = itemsByOrderId.getOrDefault(order.getId(), 1);
+            }
+            if (!kept.isEmpty() && total + items > maxItems) {
+                continue; // 本单放不下 → 留给下一批
+            }
+            kept.add(order);
+            total += items;
+        }
+        return kept;
+    }
+
     /** 最新优先：创建时间倒序（空值排最后）→ ID 倒序（空值排最后）。 */
     private static int compareNewestFirst(TransportOrderDO left, TransportOrderDO right) {
         LocalDateTime leftTime = left.getCreateTime();

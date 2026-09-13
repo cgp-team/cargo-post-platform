@@ -661,6 +661,23 @@ public class DispatchServiceImpl implements DispatchService {
 
             }
 
+            // 运力预算：按**实际选中的车辆**的总货仓件数裁剪本批订单。
+            // 算法预检口径是 pickups ≤ Σ cargoCapacity 且 deliveries ≤ Σ cargoCapacity，
+            // 超了直接返回 OVER_CAPACITY（前端文案"运力不足（订单总需求超出可用车辆总容量）"）。
+            // 这里把放不下的订单留给下一批（前端一键演示会继续下一轮，自然成下一套方案），不丢单。
+            int cargoBudget = AutoDispatchPlanner.capacityBudget(vehicles, vehicles.size(),
+                    AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY);
+            if (cargoBudget > 0) {
+                Map<Long, Integer> itemCounts = new LinkedHashMap<>();
+                Map<Long, CargoOrderDO> cargoForBatch = preloadCargoOrders(pooledOrders);
+                Map<Long, PostalOrderDO> postalForBatch = preloadPostalOrders(pooledOrders);
+                // 客运单不占货仓（算法按"人数 vs 客位"单独判），不参与件数预算
+                pooledOrders.forEach(order -> itemCounts.put(order.getId(),
+                        Objects.equals(order.getOrderType(), 1) ? 0
+                                : getItemCount(order, cargoForBatch, postalForBatch)));
+                pooledOrders = AutoDispatchPlanner.capByTotalItems(pooledOrders, itemCounts, cargoBudget);
+            }
+
             // 每台车在本窗口的线路行程：已开过的站不能取货（不折返），窗口内还会经过的站作为算法骨架（顺路带货、有先后）
             vehicleWindows = buildVehicleWindows(vehicles, bindings, routeStationMap, taskWindow);
 
