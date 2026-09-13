@@ -537,7 +537,7 @@ const resolveLegRoad = (leg: TopologyApi.TopologyLeg): { lng: number; lat: numbe
   if (cached && cached.length >= 2) return cached
   if (leg.fromLongitude != null && leg.fromLatitude != null
     && leg.toLongitude != null && leg.toLatitude != null) {
-    ensureLegRoad(legKey(leg), leg.fromLongitude, leg.fromLatitude, leg.toLongitude, leg.toLatitude)
+    ensureLegRoad(legKey(leg), leg.id, leg.fromLongitude, leg.fromLatitude, leg.toLongitude, leg.toLatitude)
   }
   return []
 }
@@ -586,10 +586,10 @@ const legRoadPending = new Set<string>()
 const legRoadFailed = ref<Map<string, number>>(new Map())
 const LEG_ROAD_RETRY_MS = 30_000 // 30s cooldown before retrying a failed leg
 const legKey = (leg: TopologyApi.TopologyLeg) =>
-  `${leg.fromLongitude},${leg.fromLatitude}->${leg.toLongitude},${leg.toLatitude}`
+  `${leg.fromLongitude},${leg.fromLatitude}->${leg.toLongitude},${leg.toLatitude}#${leg.id ?? ''}`
 
 /** 按需补取真实道路轨迹；失败后进入冷却期，冷却期过后自动重试 */
-const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLng: number, toLat: number) => {
+const ensureLegRoad = async (key: string, legId: number | undefined, fromLng: number, fromLat: number, toLng: number, toLat: number) => {
   if (legRoadCache.value.has(key) || legRoadPending.has(key)) return
   // Respect retry cooldown after a previous failure
   const failedAt = legRoadFailed.value.get(key)
@@ -597,7 +597,7 @@ const ensureLegRoad = async (key: string, fromLng: number, fromLat: number, toLn
   legRoadPending.add(key)
   try {
     const points = await DispatchApi.getRoadBetween({
-      fromLongitude: fromLng, fromLatitude: fromLat, toLongitude: toLng, toLatitude: toLat
+      legId, fromLongitude: fromLng, fromLatitude: fromLat, toLongitude: toLng, toLatitude: toLat
     })
     if (points && points.length >= 2) {
       const next = new Map(legRoadCache.value)

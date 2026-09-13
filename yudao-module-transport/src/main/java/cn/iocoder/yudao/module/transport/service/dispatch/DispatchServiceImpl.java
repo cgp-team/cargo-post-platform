@@ -852,7 +852,13 @@ public class DispatchServiceImpl implements DispatchService {
 
             releaseClaimedOrders(pooledIds);
 
-            throw exception(DISPATCH_NO_FEASIBLE, reasonCodeText(result.getReasonCode()));
+            // 运力不足最容易"看不懂"：把本批的实际需求与候选车运力一起回给前端，
+            // 现场就能判断是"订单太多"还是"车辆容量太小/车辆选错"，不用再翻日志。
+            String reason = reasonCodeText(result.getReasonCode());
+            if (AlgorithmPlanRespDTO.REASON_OVER_CAPACITY.equals(result.getReasonCode())) {
+                reason = reason + "（" + describeBatchLoad(algorithmReq) + "）";
+            }
+            throw exception(DISPATCH_NO_FEASIBLE, reason);
 
         }
 
@@ -1986,11 +1992,11 @@ public class DispatchServiceImpl implements DispatchService {
             if (from == null || to == null) {
                 continue;
             }
-            // 走廊优先（站间走向跟线路走，避免隧道/掉头）：即使库里已存了旧的点对点轨迹，
-            // 也按线路走向重算并覆盖 → "预热真实路线"这个按钮同时成了"纠正历史轨迹"的修复入口。
-            List<double[]> road = routeCorridorService == null ? null
-                    : routeCorridorService.alongOperatingLine(
-                            leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+                // 走廊优先（站间走向跟线路走，避免隧道/掉头）：即使库里已存了旧的点对点轨迹，
+                // 也按线路走向重算并覆盖 → "预热真实路线"这个按钮同时成了"纠正历史轨迹"的修复入口。
+                List<double[]> road = routeCorridorService == null ? null
+                        : routeCorridorService.resolveForLeg(
+                                leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
             if (road == null) {
                 road = parseNavigationPolyline(leg.getNavigationPolyline());
             }
@@ -2016,6 +2022,19 @@ public class DispatchServiceImpl implements DispatchService {
             if (road != null && road.size() >= 2) {
                 fetched++;
             }
+        }
+        // 3) 运营线路走廊预热：整条线路的真实几何一次落库（transport_route），
+        // 之后"站间切片"直接按线路几何取，不再逐段打高德，司机端/订单视角也不再缺线。
+        Set<Long> warmRouteIds = new LinkedHashSet<>();
+        todayLegs.forEach(leg -> {
+            Long routeId = routeCorridorService == null ? null
+                    : routeCorridorService.operatingRouteId(leg.getVehicleId());
+            if (routeId != null) {
+                warmRouteIds.add(routeId);
+            }
+        });
+        if (!warmRouteIds.isEmpty()) {
+            fetched += routeCorridorService.warmRouteCorridors(warmRouteIds);
         }
         return fetched;
     }
@@ -2108,10 +2127,33 @@ public class DispatchServiceImpl implements DispatchService {
     @Override
     public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
                                                           Double toLongitude, Double toLatitude) {
+        return routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude, null);
+    }
+
+    /**
+     * Two-point road geometry. With a {@code legId} the leg's operating line corridor wins, so the
+     * order view draws the road the bus really drives instead of a point-to-point detour.
+     */
+    @Override
+    public List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
+                                                          Double toLongitude, Double toLatitude, Long legId) {
         if (fromLongitude == null || fromLatitude == null || toLongitude == null || toLatitude == null) {
             return List.of();
         }
-        List<double[]> road = roadPolylineService.route(fromLongitude, fromLatitude, toLongitude, toLatitude);
+        List<double[]> road = null;
+        if (legId != null && legMapper != null && routeCorridorService != null) {
+            TransportLegDO leg = legMapper.selectById(legId);
+            if (leg != null) {
+                road = routeCorridorService.resolveForLeg(leg.getVehicleId(),
+                        leg.getFromStationId(), leg.getToStationId());
+                if (road == null) {
+                    road = parseNavigationPolyline(leg.getNavigationPolyline());
+                }
+            }
+        }
+        if (road == null || road.size() < 2) {
+            road = roadPolylineService.route(fromLongitude, fromLatitude, toLongitude, toLatitude);
+        }
         if (road == null || road.size() < 2) {
             return List.of();
         }
@@ -2840,6 +2882,45 @@ public class DispatchServiceImpl implements DispatchService {
 
 
     /** 无解原因码转可读文案（前端直接展示） */
+    private static String describeBatchLoad(AlgorithmPlanReqDTO req) {
+        if (req == null) {
+            return "本批需求信息缺失";
+        }
+        int algorithmOrders = req.getOrders() == null ? 0 : req.getOrders().size();
+        int passengers = 0;
+        int pickupItems = 0;
+        int deliveryItems = 0;
+        if (req.getOrders() != null) {
+            for (AlgorithmOrderDTO order : req.getOrders()) {
+                if (AlgorithmOrderDTO.TYPE_PASSENGER.equals(order.getOrderType())) {
+                    passengers++;
+                } else if (AlgorithmOrderDTO.TYPE_PICKUP.equals(order.getOrderType())) {
+                    pickupItems += order.getItemCount() == null ? 1 : order.getItemCount();
+                } else if (AlgorithmOrderDTO.TYPE_DELIVERY.equals(order.getOrderType())) {
+                    deliveryItems += order.getItemCount() == null ? 1 : order.getItemCount();
+                }
+            }
+        }
+        int shipmentItems = 0;
+        if (req.getShipments() != null) {
+            for (AlgorithmShipmentDTO shipment : req.getShipments()) {
+                shipmentItems += shipment.getQuantity() == null ? 1 : shipment.getQuantity();
+            }
+        }
+        int vehicleCount = req.getVehicles() == null ? 0 : req.getVehicles().size();
+        int cargoCapacity = 0;
+        int passengerCapacity = 0;
+        if (req.getVehicles() != null) {
+            for (AlgorithmVehicleDTO vehicle : req.getVehicles()) {
+                cargoCapacity += vehicle.getCargoCapacity() == null
+                        ? AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY : vehicle.getCargoCapacity();
+                passengerCapacity += vehicle.getPassengerCapacity() == null ? 0 : vehicle.getPassengerCapacity();
+            }
+        }
+        return "本批 " + algorithmOrders + " 张算法单（取货 " + (pickupItems + shipmentItems) + " 件 / 送达 "
+                + (deliveryItems + shipmentItems) + " 件 / 客运 " + passengers + " 人），候选车 " + vehicleCount
+                + " 台（货仓 " + cargoCapacity + " 件 / 客位 " + passengerCapacity + " 个）";
+    }
 
     private static String reasonCodeText(String reasonCode) {
 
@@ -3819,6 +3900,14 @@ public class DispatchServiceImpl implements DispatchService {
                 if (leg == null || leg.fromStationId() == null || leg.toStationId() == null) {
                     continue;
                 }
+                // A leg may be covered by several lines (city stops are shared between lines).
+                // Count only the *most specific* one - the line that serves both stops with the
+                // fewest stops - so the carrier is the line the pair really belongs to:
+                // 中研所 -> 上新街 is served by 346路 (14 stops), not by a long trunk line that
+                // merely passes both stops. Otherwise long lines win the counting and the demo
+                // ends up with 346-line freight riding another line's bus.
+                Long bestRouteId = null;
+                int bestScopeSize = Integer.MAX_VALUE;
                 for (DriverVehicleDO binding : bindings) {
                     if (binding == null || binding.getRouteId() == null) {
                         continue;
@@ -3827,9 +3916,19 @@ public class DispatchServiceImpl implements DispatchService {
                     if (stations == null) {
                         continue;
                     }
-                    if (stations.contains(leg.fromStationId()) && stations.contains(leg.toStationId())) {
-                        hits.merge(binding.getRouteId(), 1, Integer::sum);
+                    if (!stations.contains(leg.fromStationId()) || !stations.contains(leg.toStationId())) {
+                        continue;
                     }
+                    int scopeSize = stations.size();
+                    if (scopeSize < bestScopeSize
+                            || (scopeSize == bestScopeSize && bestRouteId != null
+                                    && binding.getRouteId() < bestRouteId)) {
+                        bestScopeSize = scopeSize;
+                        bestRouteId = binding.getRouteId();
+                    }
+                }
+                if (bestRouteId != null) {
+                    hits.merge(bestRouteId, 1, Integer::sum);
                 }
             }
         }
