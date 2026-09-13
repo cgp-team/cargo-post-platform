@@ -120,6 +120,59 @@ public class RoadPolylineService {
     }
 
     /**
+     * 沿**已有线路走廊**取两站之间的真实道路轨迹（切片）。
+     *
+     * <p>为什么需要：站间若用"点对点驾车规划"，高德只按最快/最短给一条自由路径——
+     * 站牌在分隔带另一侧、或该点需要下穿/上桥时，就会规划出"进隧道 → 绕远 → 掉头"的走法，
+     * 与公交实际走向（例如 文峰公社 → 文峰正街路口 → 吉祥路口）不符。
+     * 而线路走廊（{@code transport_route.navigation_polyline}，按逐站 waypoints 取的整条线几何）
+     * 本身就是这条线路的真实走向：只要在走廊折线里找到离起讫站最近的顶点，取两者之间的那段即可。</p>
+     *
+     * @param corridor 整条线路的真实道路折线（{@code [lng,lat]} 序列，按线路走向）
+     * @return 起讫站之间的走廊片段；走廊不可用 / 两站重合时返回 {@code null}（调用方回退点对点）
+     */
+    public List<double[]> sliceAlong(List<double[]> corridor,
+                                     double fromLongitude, double fromLatitude,
+                                     double toLongitude, double toLatitude) {
+        if (corridor == null || corridor.size() < 2) {
+            return null;
+        }
+        int start = nearestIndex(corridor, fromLongitude, fromLatitude);
+        int end = nearestIndex(corridor, toLongitude, toLatitude);
+        if (start < 0 || end < 0 || start == end) {
+            return null;
+        }
+        List<double[]> slice = new ArrayList<>();
+        int step = start <= end ? 1 : -1;
+        for (int i = start; ; i += step) {
+            slice.add(corridor.get(i));
+            if (i == end) {
+                break;
+            }
+        }
+        return slice.size() >= 2 ? slice : null;
+    }
+
+    /** 走廊折线里离目标点最近的顶点下标（按球面距离）；空/非法返回 -1 */
+    private static int nearestIndex(List<double[]> corridor, double longitude, double latitude) {
+        int best = -1;
+        double bestKm = Double.MAX_VALUE;
+        for (int i = 0; i < corridor.size(); i++) {
+            double[] p = corridor.get(i);
+            if (p == null || p.length < 2) {
+                continue;
+            }
+            double km = cn.iocoder.yudao.module.transport.util.GeoDistanceUtil
+                    .haversineKm(p[0], p[1], longitude, latitude);
+            if (km < bestKm) {
+                bestKm = km;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /**
      * 多点串联的真实道路轨迹（一次请求可带最多 {@link #MAX_WAYPOINTS} 个途经点）。
      *
      * <p>用途：公交线路 / 调度方案有几十个站，逐段请求既慢（小程序 10s 超时）又费配额；

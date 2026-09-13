@@ -45,18 +45,24 @@ docker compose -f deploy/docker-compose.yml exec -T mysql mysql \
 | 4 | sql/mysql/demo-cqupt-vehicles.sql | 自建线路（CQUPT）车辆/司机/账号 |
 | 5 | sql/mysql/demo-real-bus-network.sql | 真实公交线网（346 路、320 路、347 路区间、318/220/181 路…真实站名/坐标/站序） |
 | 6 | sql/mysql/demo-real-bus-shifts.sql | 真实线路班次（实时公交/模拟车辆位置） |
-| 7 | sql/mysql/demo-real-orders.sql | 演示订单（真实站点之间的寄货单 + 跨区联运单） |
+| 7 | sql/mysql/demo-real-orders.sql | **演示订单池的"总装"脚本**：真实站点之间的寄货单/跨区联运单 + 沙坪坝/重邮跨区线 R104 相关单，**末尾还内含 346 路主线演示数据**（重庆工商大学站、320 路补站、346/347/303/318 车辆与班次绑定、订单 A~E + 重邮→重庆交通大学 + 重庆大学A区订单）与"演示单时间窗统一成当天全天" |
 | 8 | sql/mysql/demo-multi-leg.sql | 多段联运拓扑数据（"按订单"视角的换乘衔接） |
 | 9 | sql/mysql/demo-cqu-a-link.sql | 沙坪坝走廊换乘节点修复 + 自建跨区线 R104（重大A区 ↔ 重邮） |
 | 10 | sql/mysql/demo-vehicle-system-split.sql | 车辆体系分工：渝A 车跑真实线路、CQUPT 车跑自建线路 |
-| 11 | **sql/mysql/demo-line346-orders.sql** | **346 路主线演示单（中研所/黄桷垭/上新街/邮电大学→工商大学/返程单）+ 重邮→重庆交通大学联运单 + 重庆大学A区订单；按"一条线路一辆车"配车（346/347/303/220区间/318）+ 补班次** |
+| 11 | sql/mysql/demo-line346-orders.sql | 仅**说明性文件**：346 主线演示数据已并入第 7 号脚本（本文件不在部署清单里，单独执行不会建单） |
 | 12 | sql/mysql/transport-menu.sql | 后台菜单权限（调度中心、站点管理等） |
 | 13 | sql/mysql/transport-multi-leg-menu.sql | 联运拓扑相关菜单 |
 
 > **提示：** 所有脚本均使用 INSERT IGNORE / ON DUPLICATE KEY UPDATE，可重复执行不会报错。
 
-> **注意：** 脚本 5 会重建 401~415 号线路的站序，脚本 11 会把"重庆工商大学站"插进 320 路（403）站序。
-> 因此每次重置演示库后，请按上表顺序执行；只重跑脚本 11 也是幂等的。
+> **自动部署（重要）：** 部署流水线实际执行的是
+> `demo-cqupt-stations → demo-cqupt-vehicles → demo-multi-leg → demo-real-bus-network → demo-real-bus-shifts → demo-real-orders → transport-multi-leg-menu`。
+> **346 主线演示单（含重邮→重庆交通大学、重庆大学A区）已并入第 7 号 `demo-real-orders.sql`**，
+> 所以每次部署都会自动把它们写进订单池（状态=待入池），在「调度中心 → 订单池」直接可见，无需手工执行。
+> 第 9、10 号（沙坪坝走廊修复、车辆体系分工）与第 11 号（说明文件）不在部署清单里，按需手工执行。
+
+> **注意：** 脚本 5 会重建 401~415 号线路的站序，脚本 7 末尾会把"重庆工商大学站"插进 320 路（403）站序。
+> 两者都在部署清单里、且 5 在 7 之前，重复执行幂等（站序不会越推越大）。
 
 > **重置（每次演示前）：** 执行 `sql/mysql/demo-reset.sql` —— 把上一次演示留下的
 > 已入池/已分配/已发车订单放回"待入池"，并清掉"今天"的调度方案、运输段与交接记录。
