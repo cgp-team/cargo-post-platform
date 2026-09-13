@@ -47,6 +47,19 @@ public class MonitoringMapDataRespVO {
         private Double distanceKm;
         @Schema(description = "途经站点（按访问顺序）")
         private List<Point> points;
+        @Schema(description = "真实道路折线（AMAP；取不到时为空，前端用虚线示意而不是直线冒充路线）")
+        private List<RoadPoint> roadPoints;
+        @Schema(description = "折线来源：AMAP=高德真实道路；空=未取到")
+        private String roadProvider;
+    }
+
+    @Schema(description = "道路折线点（仅经纬度）")
+    @Data
+    public static class RoadPoint {
+        @Schema(description = "经度")
+        private Double longitude;
+        @Schema(description = "纬度")
+        private Double latitude;
     }
 
     @Schema(description = "线路途经点")

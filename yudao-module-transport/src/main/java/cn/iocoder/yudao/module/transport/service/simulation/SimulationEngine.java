@@ -615,7 +615,7 @@ public class SimulationEngine {
         }
         if (simSeconds <= 0) {
             SimSegment first = segments.get(0);
-            double[] p = first.polyline.get(0);
+            double[] p = first.polyline.isEmpty() ? new double[]{0, 0} : first.polyline.get(0);
             return new SimTick(p[0], p[1], STATUS_RUNNING, 0, first.stationName, false, simSeconds);
         }
         // 找到当前行驶段：已驶离其站的段数（到达+作业 ≤ simSeconds 即已驶离），+1 即当前驶向的段
@@ -635,7 +635,7 @@ public class SimulationEngine {
         // 已到站且未过作业期 → ARRIVED（停靠）；末段(RETURN)到达即完成停靠
         long serviceEnd = seg.arrivalSimSeconds + seg.serviceSeconds;
         if (simSeconds >= seg.arrivalSimSeconds) {
-            double[] p = seg.polyline.get(seg.polyline.size() - 1);
+            double[] p = seg.polyline.isEmpty() ? new double[]{0, 0} : seg.polyline.get(seg.polyline.size() - 1);
             boolean arrived = simSeconds < serviceEnd || (seg.terminal && idx == segments.size() - 1);
             return new SimTick(p[0], p[1], STATUS_RUNNING, idx, seg.stationName, arrived, simSeconds);
         }

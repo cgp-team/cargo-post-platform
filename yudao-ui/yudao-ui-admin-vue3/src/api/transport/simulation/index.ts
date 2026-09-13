@@ -38,6 +38,8 @@ export interface SimulationRuntimeVO {
   etaMinutes?: number
   scenarioName?: string
   polyline?: number[][]
+  /** 真实道路折线分组（段间不连续不连线；缺路网的段不出现） */
+  polylines?: number[][][]
   stops?: StopInfo[]
   segmentIndex?: number
 }
