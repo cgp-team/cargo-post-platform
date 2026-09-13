@@ -123,6 +123,12 @@ const mapRef = ref<HTMLDivElement>()
 const mapReady = ref(false)
 let map: any = null
 
+/** 车辆线路配色（与调度可视化弹窗同一套颜色，按车牌稳定分配） */
+const LEG_COLORS = [
+  '#1F5E9E', '#E6A23C', '#2E9E6B', '#D9534F', '#7B5BD6', '#0FA3B1',
+  '#D4801A', '#C2185B', '#4A7C1F', '#5A6ACF', '#8D6E63', '#00838F'
+]
+
 const ORDER_STATUS: Record<number, string> = {
   0: '已创建', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消',
   8: '待入池', 9: '部分完成', 10: '运输中', 11: '换乘中', 12: '派送中', 13: '异常'
@@ -209,6 +215,11 @@ const renderTopology = () => {
   }
   const legs = topology.value.legs || []
   const points: any[] = []
+  // 同一台车一个颜色（按车牌稳定排序分配，与可视化弹窗的车辆配色规则一致）：
+  // 联运换乘时一眼能看出"这几段是同一台车、那几段换了另一台车"。
+  const plates = [...new Set(legs.map((l) => l.plateNo).filter(Boolean))].sort()
+  const colorOf = (plate?: string) =>
+    plate ? LEG_COLORS[plates.indexOf(plate) % LEG_COLORS.length] : LEG_COLORS[0]
   legs.forEach((l) => {
     if (l.fromLongitude == null || l.toLongitude == null) return
     // 真实道路轨迹优先（navigationSource=AMAP）；无则回退站点直连（虚线＝估算，不伪装真实道路）
@@ -218,8 +229,8 @@ const renderTopology = () => {
     const path = road.length >= 2 ? road : [p1, p2]
     points.push(...path)
     const line = new BMapGL.Polyline(path, {
-      // 白色 + 蓝色主题：真实道路实线深蓝，估算段虚线亮蓝
-      strokeColor: l.navigationSource === 'AMAP' ? '#1F5E9E' : '#2E7BBF',
+      // 真实道路实线（按车辆配色），估算段虚线
+      strokeColor: colorOf(l.plateNo),
       strokeWeight: 5,
       strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
     })

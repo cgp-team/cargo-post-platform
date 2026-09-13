@@ -397,6 +397,30 @@ const ROUTE_COLORS = [
   '#00838F'  // 深青
 ]
 
+/** HSL → #RRGGBB（补充色用） */
+const hslToHex = (h: number, s: number, l: number) => {
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = l - c / 2
+  const seg = Math.floor(h / 60) % 6
+  const [r, g, b] = [
+    [c, x, 0, 0, x, c][seg],
+    [x, c, c, x, 0, 0][seg],
+    [0, 0, x, c, c, x][seg]
+  ]
+  const to255 = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0')
+  return `#${to255(r)}${to255(g)}${to255(b)}`
+}
+
+/**
+ * 车队超过调色板长度时按黄金角补充颜色（色相间隔大、肉眼可区分），
+ * 保证"有几台车就有几种线路颜色"，而不是循环回同一个颜色。
+ */
+const colorForVehicleIndex = (index: number) =>
+  index < ROUTE_COLORS.length
+    ? ROUTE_COLORS[index]
+    : hslToHex(Math.round((index * 137.508) % 360), 0.62, 0.45)
+
 const stationName = (id?: number) =>
   id == null ? '' : stations.value.find((s) => s.id === id)?.stationName || ''
 const stationCoord = (id?: number) => stations.value.find((s) => s.id === id)
@@ -658,17 +682,22 @@ const topologyLegs = computed(() => {
 
 /** 车牌 → 车辆线颜色：订单视角与地图保持同一套配色（换车即换色） */
 const plateColorMap = computed(() => {
-  const map = new Map<string, string>()
-  routes.value.forEach((r) => {
-    const plate = vehicles.value.find((v) => v.plateNo && r.title.includes(v.plateNo))?.plateNo
-    if (plate) map.set(plate, r.color)
-  })
-  // 多段联运的换乘车辆（算法单车经停明细里不出现）续用调色板里未被占用的颜色，
-  // 保证「订单视角 / 车辆视角 / 地图」三处同一台车同一种颜色。
+  // 先收集"这批方案里真正出现的车辆"（运输段口径 + 经停明细口径），再按车牌稳定排序分配颜色：
+  //   ① 有几台车就有几种颜色（超出 12 色自动按黄金角补充，不循环撞色）；
+  //   ② 同一台车在「车辆视角 / 订单视角 / 行程链 / 地图 / 图例」永远是同一个颜色（不随打开顺序变化）。
+  const plates = new Set<string>()
   topologyLegs.value.forEach(({ leg }) => {
-    if (leg.plateNo && !map.has(leg.plateNo)) {
-      map.set(leg.plateNo, ROUTE_COLORS[map.size % ROUTE_COLORS.length])
-    }
+    if (leg.plateNo) plates.add(leg.plateNo)
+  })
+  plans.value.forEach((plan) => {
+    ;(plan.items ?? []).forEach((item) => {
+      const plate = vehicles.value.find((v) => v.id === item.vehicleId)?.plateNo
+      if (plate) plates.add(plate)
+    })
+  })
+  const map = new Map<string, string>()
+  ;[...plates].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')).forEach((plate, index) => {
+    map.set(plate, colorForVehicleIndex(index))
   })
   return map
 })
@@ -915,11 +944,20 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       const estimated = road.length < 2
       if (!estimated) {
         realSegments++
+        // 本段起点与上一段终点不重合 → 这台车中间"回了场站/换了个取货点"，
+        // 两段不是连续行驶，必须断开：否则地图上会出现"每个作业点都连回始发站"的折线。
+        const last = current[current.length - 1]
+        const contiguous = last != null
+          && Math.abs(last.lng - road[0].lng) <= 1e-6 && Math.abs(last.lat - road[0].lat) <= 1e-6
+        if (last != null && !contiguous) {
+          if (current.length >= 2) runs.push(current)
+          current = []
+        }
         road.forEach((p, i) => {
           if (i === 0) {
-            // 段与段的衔接点重合：连续时跳过重复首点，避免线头/播放抖动
-            const last = current[current.length - 1]
-            if (!last || Math.abs(last.lng - p.lng) > 1e-9 || Math.abs(last.lat - p.lat) > 1e-9) {
+            // 连续时跳过与上一段重复的首点，避免线头/播放抖动
+            const tail = current[current.length - 1]
+            if (!tail || Math.abs(tail.lng - p.lng) > 1e-9 || Math.abs(tail.lat - p.lat) > 1e-9) {
               current.push(p)
             }
             return
@@ -992,8 +1030,6 @@ const vehicleLegRoutes = computed<RouteView[]>(() => buildLegRoutes())
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 const buildRoutes = () => {
   const list: RouteView[] = []
-  // 颜色在所有方案间全局递增：保证同屏每台车颜色都不同（原来按方案重置，多车会撞色）
-  let colorIndex = 0
   plans.value.forEach((plan) => {
     const byVehicle = new Map<number, RouteStop[]>()
     ;(plan.items ?? []).forEach((item) => {
@@ -1027,6 +1063,15 @@ const buildRoutes = () => {
         const real = roadmapSegments.value.get(key)
         if (real && real.points.length >= 2) {
           realSegments++
+          // 该段起点与上一段终点不重合 → 不连续行驶（回场站/换取货点），断开而不是连一条直线
+          const tail = current[current.length - 1]
+          const contiguous = tail != null
+            && Math.abs(tail.lng - real.points[0].lng) <= 1e-6
+            && Math.abs(tail.lat - real.points[0].lat) <= 1e-6
+          if (tail != null && !contiguous) {
+            if (current.length >= 2) runs.push(current)
+            current = []
+          }
           real.points.forEach((p, i) => {
             // 拼接处去掉与上段末点重复的起点
             if (i === 0) {
@@ -1044,10 +1089,12 @@ const buildRoutes = () => {
       })
       if (current.length >= 2) runs.push(current)
       const points = runs.flat()
+      // 颜色统一走"车牌 → 颜色"映射（与车辆视角/订单视角一致，有几台车就有几种颜色）
+      const plateNo = vehicles.value.find((v) => v.id === vehicleId)?.plateNo
       list.push({
         key: `${plan.id}-${vehicleId}`,
         planId: plan.id,
-        color: ROUTE_COLORS[colorIndex++ % ROUTE_COLORS.length],
+        color: (plateNo ? plateColorMap.value.get(plateNo) : undefined) || '#909399',
         title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
         orderNos,
         orderCount: orderNos.length,
@@ -1367,32 +1414,45 @@ let playTimer: number | undefined
 const positionsAt = (p: number) => {
   const ratio = Math.max(0, Math.min(100, p)) / 100
   return mapRoutes.value.map((route) => {
-    const pts = route.points
-    if (pts.length === 0) return { key: route.key, index: 0, point: null }
-    if (pts.length === 1) return { key: route.key, index: 0, point: pts[0] }
-    const segs: number[] = []
-    let total = 0
-    for (let i = 1; i < pts.length; i++) {
-      const d = Math.hypot(pts[i].lng - pts[i - 1].lng, pts[i].lat - pts[i - 1].lat)
-      segs.push(d)
-      total += d
-    }
+    // 只在"真实道路折线"内部插值：不连续的两段之间不画直线，播放时直接跳到下一段起点，
+    // 免得车头沿着那条"回到始发站"的假线飞回去。
+    const runs = routePolylines(route)
+    if (runs.length === 0) return { key: route.key, index: 0, point: null }
+    const lengths = runs.map((run) => {
+      let sum = 0
+      for (let i = 1; i < run.length; i++) {
+        sum += Math.hypot(run[i].lng - run[i - 1].lng, run[i].lat - run[i - 1].lat)
+      }
+      return sum
+    })
+    const total = lengths.reduce((sum, len) => sum + len, 0)
+    if (total <= 0) return { key: route.key, index: 0, point: runs[0][0] }
     let target = total * ratio
-    for (let i = 0; i < segs.length; i++) {
-      if (target <= segs[i] || i === segs.length - 1) {
-        const t = segs[i] === 0 ? 0 : target / segs[i]
-        return {
-          key: route.key,
-          index: i,
-          point: {
-            lng: pts[i].lng + (pts[i + 1].lng - pts[i].lng) * t,
-            lat: pts[i].lat + (pts[i + 1].lat - pts[i].lat) * t
+    for (let r = 0; r < runs.length; r++) {
+      const run = runs[r]
+      if (target > lengths[r] && r < runs.length - 1) {
+        target -= lengths[r]
+        continue
+      }
+      let travelled = 0
+      for (let i = 1; i < run.length; i++) {
+        const seg = Math.hypot(run[i].lng - run[i - 1].lng, run[i].lat - run[i - 1].lat)
+        if (target <= travelled + seg || i === run.length - 1) {
+          const t = seg === 0 ? 0 : Math.max(0, Math.min(1, (target - travelled) / seg))
+          return {
+            key: route.key,
+            index: i,
+            point: {
+              lng: run[i - 1].lng + (run[i].lng - run[i - 1].lng) * t,
+              lat: run[i - 1].lat + (run[i].lat - run[i - 1].lat) * t
+            }
           }
         }
+        travelled += seg
       }
-      target -= segs[i]
+      return { key: route.key, index: 0, point: run[0] }
     }
-    return { key: route.key, index: 0, point: pts[0] }
+    return { key: route.key, index: 0, point: runs[0][0] }
   })
 }
 
