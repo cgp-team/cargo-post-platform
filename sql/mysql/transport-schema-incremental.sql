@@ -1207,6 +1207,20 @@ PREPARE stmt FROM @ddl;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
+-- ---------- V022b：商品文本列加宽（改商品"描述"报 500 的根因）----------
+-- 现象：后台编辑商品、把描述写长一点（或把图片地址贴进 image 列）就报"服务器错误，请联系管理员"。
+-- 根因：description 只有 varchar(512)、image 只有 varchar(32)，超长时 MySQL 抛
+--      "Data too long for column 'description'"，被全局异常兜成 500（用户看到的是"系统异常"）。
+-- 处理：把这几列加宽到够用（幂等：已加宽时 MODIFY 到同一定义无副作用）；表单侧同时加字数上限提示。
+ALTER TABLE `transport_product`
+    MODIFY COLUMN `description` varchar(2000) NOT NULL DEFAULT '' COMMENT '商品描述',
+    MODIFY COLUMN `image` varchar(255) NOT NULL DEFAULT '' COMMENT '商品图(emoji 或旧图片地址)',
+    MODIFY COLUMN `image_url` varchar(1024) NOT NULL DEFAULT '' COMMENT '商品图片URL(后台上传/粘贴)';
+
+-- 订单明细里的商品图快照同理（可能存的是图片 URL，不是 emoji）
+ALTER TABLE `transport_product_order_item`
+    MODIFY COLUMN `product_image` varchar(512) NOT NULL DEFAULT '' COMMENT '商品图(emoji 或图片地址快照)';
+
 -- 演示商品补图：把有本地实拍图的商品直接指向包内图片（后台仍可随时改）
 -- ---------- V023：线路真实道路轨迹落库（预留真实路线框架）----------
 -- ---------- V024：运输段唯一键改为「方案 + 订单 + 段序」----------
