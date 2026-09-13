@@ -1,3 +1,32 @@
+# 2026-09-13（五）站间走向跟随线路走廊（不再进隧道/掉头）+ 演示数据纳入自动部署
+
+- **站间轨迹改为"沿线路走廊切片"**（新增 `RouteCorridorService`）：
+  现象——订单（例：文峰公社 → 七公里）画出来的道路走向不对：进隧道 → 绕很远 → 掉头回文峰正街路口再去吉祥路口；
+  最优应是从文峰公社直接经文峰正街路口走向吉祥路口。
+  根因——站间几何此前一律用**点对点驾车规划**：站点在道路两侧（同名站分上行/下行）、或该点位需上下桥/下穿时，
+  高德只按"最快/最短"给一条自由路径，与公交实际走向无关。
+  修法——线路本身有一条按"逐站 waypoints"取到的真实走廊几何（`transport_route.navigation_polyline`），
+  在走廊折线上找离起讫站最近的顶点、取两者之间那一段即可，天然贴合上行/下行与路口转向：
+  - 新增 `RouteCorridorService`：`operatingRouteId(vehicleId)` / `alongOperatingLine(vehicleId, from, to)` /
+    `alongRoute(routeId, from, to)`；库里有走廊直接用，没有就按站序现取一次并落库（取不到返回 null，不伪造几何）；
+  - `RoadPolylineService.sliceAlong(...)`：走廊切片（纯函数，含单测 `RoadPolylineSliceTest`）；
+  - 接入四处：`MultiLegServiceImpl`（运输段落库几何）、`DispatchServiceImpl` 的 roadmap（车辆视角两段：
+    按经停明细/按运输段）与 `prefetchRoadGeometry`（"预热真实路线"顺带纠正历史轨迹）、
+    `DriverAppServiceImpl`（司机端导航站间几何）。**走廊优先**，取不到再回退原点对点逻辑。
+- **346 演示数据并入"已在部署清单里的"脚本**：`demo-line346-orders.sql` 的内容整体并入
+  `demo-real-orders.sql` 末尾（该文件每次部署都会执行），于是**部署后这批订单直接出现在
+  后台「调度中心 → 订单池」**（状态=待入池）：重庆工商大学站与 320 路补站、346/347/303/318 的
+  车辆·司机·人车绑定·班次、订单 A~E + 重邮→重庆交通大学 + 重庆大学A区订单，以及"演示单时间窗=当天全天"。
+  独立的 `demo-line346-orders.sql` 改为说明文件（它不在部署清单里，单独执行不再建单），
+  DEMO_GUIDE 的脚本表与说明同步更新。
+  （背景：工作流文件 `deploy-dev.yml` 的改动需要 token 带 `workflow` 权限，当前 CI token 没有，
+   SSH 22 端口在本机被拒；把数据并入已在清单内的脚本可以绕开这个限制。）
+
+验证：后端 `yudao-module-transport` **330 个测试通过**（新增走廊切片 4 例）；
+本地 MySQL 真跑整条演示脚本链通过，28 张演示单在 08:40-12:40 窗口全部可派。
+
+---
+
 # 2026-09-13（四）一屏只看一个任务段 + 货运取送配对（PDPTW）+ stop_level 构造器修复
 
 - **调度可视化默认只显示"一个任务段"**（`DispatchVisualDialog`）：多套方案（去程/返程/另一片区/跨区联运）

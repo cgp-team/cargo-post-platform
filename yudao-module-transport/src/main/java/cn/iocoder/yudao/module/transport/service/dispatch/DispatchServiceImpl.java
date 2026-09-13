@@ -230,6 +230,9 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
 
+    /** 线路走廊：站间轨迹跟随公交线路真实几何（避免点对点路径进隧道/绕远/掉头） */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService routeCorridorService;
+
     @Resource private SocialClientApi socialClientApi;
 
     @Resource private MemberUserApi memberUserApi;
@@ -1640,11 +1643,24 @@ public class DispatchServiceImpl implements DispatchService {
 
                 }
 
-                List<double[]> road = roadPolylineService.route(
+                // 站间走向优先跟随"车辆运营线路走廊"（同一段线路上的两站 → 取线路真实几何的切片）；
+                // 取不到再退回点对点驾车规划。
+
+                List<double[]> road = routeCorridorService == null ? null
+
+                        : routeCorridorService.alongOperatingLine(
+
+                                entry.getKey(), stops.get(i - 1).getStationId(), stops.get(i).getStationId());
+
+                if (road == null || road.size() < 2) {
+
+                    road = roadPolylineService.route(
 
                         from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
 
                         to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+
+                }
 
                 boolean real = road != null && road.size() >= 2;
 
@@ -1793,9 +1809,22 @@ public class DispatchServiceImpl implements DispatchService {
 
                 sequence++;
 
-                List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
+                // 站间走向**优先跟随"车辆运营线路走廊"**：点对点驾车规划在站牌位于道路另一侧、
+                // 或该点需上下桥/下穿时，会规划成"进隧道 → 绕远 → 掉头"，与司机按线路行驶不符；
+                // 库里老方案存的也是那种点对点轨迹，所以这里走廊优先，能把历史方案一起纠正。
+                List<double[]> road = routeCorridorService == null ? null
+
+                        : routeCorridorService.alongOperatingLine(
+
+                                entry.getKey(), leg.getFromStationId(), leg.getToStationId());
 
                 if (road == null) {
+
+                    road = parseNavigationPolyline(leg.getNavigationPolyline());
+
+                }
+
+                if (road == null || road.size() < 2) {
 
                     road = roadPolylineService.route(
 
@@ -1929,7 +1958,14 @@ public class DispatchServiceImpl implements DispatchService {
             if (from == null || to == null) {
                 continue;
             }
-            List<double[]> road = parseNavigationPolyline(leg.getNavigationPolyline());
+            // 走廊优先（站间走向跟线路走，避免隧道/掉头）：即使库里已存了旧的点对点轨迹，
+            // 也按线路走向重算并覆盖 → "预热真实路线"这个按钮同时成了"纠正历史轨迹"的修复入口。
+            List<double[]> road = routeCorridorService == null ? null
+                    : routeCorridorService.alongOperatingLine(
+                            leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+            if (road == null) {
+                road = parseNavigationPolyline(leg.getNavigationPolyline());
+            }
             if (road == null) {
                 road = roadPolylineService.route(from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
                         to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
