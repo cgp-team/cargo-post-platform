@@ -74,6 +74,29 @@ public class RoadPolylineService {
     }
 
     /**
+     * Polyline length in km (sum of haversine legs between consecutive vertices).
+     *
+     * <p>Used when the drawn geometry comes from a line corridor: the distance shown must match
+     * the line that is actually rendered, instead of a point-to-point detour distance.</p>
+     */
+    public static double lengthKm(List<double[]> points) {
+        if (points == null || points.size() < 2) {
+            return 0;
+        }
+        double total = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double[] previous = points.get(i - 1);
+            double[] current = points.get(i);
+            if (previous == null || current == null || previous.length < 2 || current.length < 2) {
+                continue;
+            }
+            total += cn.iocoder.yudao.module.transport.util.GeoDistanceUtil
+                    .haversineKm(previous[0], previous[1], current[0], current[1]);
+        }
+        return total;
+    }
+
+    /**
      * 取两点之间的真实道路轨迹。
      *
      * @return {@code [lng,lat]} 点序列（至少 2 个点，含起终点）；不可用/失败返回 {@code null}

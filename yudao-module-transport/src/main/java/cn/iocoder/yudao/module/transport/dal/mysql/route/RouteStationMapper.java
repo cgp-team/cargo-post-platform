@@ -24,4 +24,11 @@ public interface RouteStationMapper extends BaseMapperX<RouteStationDO> {
                 .eq(RouteStationDO::getRouteId, routeId)
                 .orderByAsc(RouteStationDO::getSequenceNo));
     }
+
+    default List<RouteStationDO> selectListByStationIds(Collection<Long> stationIds) {
+        return selectList(new LambdaQueryWrapperX<RouteStationDO>()
+                .inIfPresent(RouteStationDO::getStationId, stationIds)
+                .orderByAsc(RouteStationDO::getRouteId)
+                .orderByAsc(RouteStationDO::getSequenceNo));
+    }
 }
