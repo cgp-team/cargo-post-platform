@@ -54,7 +54,8 @@ SET @cqu_gongshang_on_320 := (
 UPDATE transport_route_station
 SET sequence_no = sequence_no + 1
 WHERE route_id = 403 AND sequence_no >= 29 AND deleted = b'0'
-  AND @cqu_gongshang_on_320 = 0;
+  AND @cqu_gongshang_on_320 = 0
+ORDER BY sequence_no DESC;
 
 INSERT INTO transport_route_station
     (id, route_id, station_id, sequence_no, planned_minutes, tenant_id, creator, updater, deleted)
@@ -348,12 +349,17 @@ ON DUPLICATE KEY UPDATE
     review_status = VALUES(review_status),
     deleted = b'0';
 
--- 时间窗统一成"当天 06:00~22:00"：演示时不管几点跑、任务窗口选哪一段（例如早上 8-10 点），
--- 这些订单都落在窗口内可派；隔天重跑脚本自动刷新，不依赖脚本执行时刻。
+-- 时间窗统一成"当天全天 00:00~23:59"：调度按任务窗口派单（例：早上 08:40~12:40），
+-- 订单时间窗必须与它有交集才可派；按脚本执行时刻算窗口会导致"几点跑的脚本"决定能不能派，
+-- 现场会出现整批"送达时限早于窗口开始"。统一成当天全天，隔天重跑自动刷新（幂等）。
 UPDATE transport_order
-SET earliest_pickup_time = TIMESTAMP(CURDATE(), '06:00:00'),
-    latest_delivery_time = TIMESTAMP(CURDATE(), '22:00:00')
-WHERE id BETWEEN 231 AND 239;
+SET earliest_pickup_time = TIMESTAMP(CURDATE(), '00:00:00'),
+    latest_delivery_time = TIMESTAMP(CURDATE(), '23:59:59')
+WHERE order_no LIKE 'TPCQ%'
+   OR order_no LIKE 'TPDEMO%'
+   OR order_no LIKE 'TP346%'
+   OR order_no LIKE 'TPJTU%'
+   OR order_no LIKE 'TPCQUA%';
 
 -- ---------------------------------------------------------------------------
 -- 5) 只读校验：订单起终点 + 346 路车辆绑定 + 320 路站序
