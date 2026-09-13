@@ -25,6 +25,17 @@
       <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :disabled="collectDisabled" @click="submitCollectBySelection">
         <Icon icon="ep:download" />归集入池
       </el-button>
+      <!-- 手动取消：只取消勾选的订单，其它订单不受影响（已分配/在途的单不会被取消） -->
+      <el-button
+        type="danger"
+        plain
+        v-hasPermi="['transport:dispatch:collect']"
+        :disabled="cancelDisabled"
+        :loading="cancelLoading"
+        @click="submitCancelBySelection"
+      >
+        <Icon icon="ep:circle-close" />取消所选订单
+      </el-button>
       <el-button type="primary" v-hasPermi="['transport:dispatch:manual-plan']" :disabled="manualSelected.length === 0" @click="openManual">
         <Icon icon="ep:pointer" />手工派单
       </el-button>
@@ -85,6 +96,19 @@
         </el-table-column>
         <el-table-column label="订单金额" prop="totalAmount" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
+        <el-table-column label="操作" align="center" width="110" fixed="right">
+          <template #default="scope">
+            <el-button
+              link
+              type="danger"
+              v-hasPermi="['transport:dispatch:collect']"
+              :disabled="!cancelableStatus(scope.row.status)"
+              @click="submitCancelOne(scope.row)"
+            >
+              取消订单
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <Pagination :total="poolTotal" v-model:page="poolQuery.pageNo" v-model:limit="poolQuery.pageSize" @pagination="getPoolList" />
     </ContentWrap>
@@ -613,6 +637,55 @@ const submitCollectBySelection = async () => {
   } finally {
     collectLoading.value = false
   }
+}
+
+/**
+ * 手动取消订单（订单池）：只取消勾选的订单，其它订单保持不变。
+ * 只有"待入池(8)/已入池(1)"的单可取消；已分配/已发车/在途的单不在这里取消（避免取消在路上走的货）。
+ */
+const cancelLoading = ref(false)
+const cancelableStatus = (status?: number) => status === 8 || status === 1
+const cancelableSelected = computed(() => selectedOrders.value.filter((o) => cancelableStatus(o.status)))
+const cancelDisabled = computed(() => cancelableSelected.value.length === 0)
+
+const doCancel = async (orderIds: number[], tip: string) => {
+  try {
+    await ElMessageBox.confirm(tip, '取消订单', {
+      type: 'warning',
+      confirmButtonText: '确认取消',
+      cancelButtonText: '再想想'
+    })
+  } catch (e) {
+    return
+  }
+  cancelLoading.value = true
+  try {
+    const count = await DispatchApi.cancelPoolOrders(orderIds)
+    if (count > 0) {
+      message.success(`已取消 ${count} 条订单（其它订单未变动）`)
+    } else {
+      message.warning('没有可取消的订单（已分配/已发车/在途的订单不能在这里取消）')
+    }
+    getPoolList()
+  } finally {
+    cancelLoading.value = false
+  }
+}
+
+/** 取消勾选的订单 */
+const submitCancelBySelection = () => {
+  const ids = cancelableSelected.value.map((o) => o.id!).filter(Boolean)
+  if (!ids.length) {
+    message.warning('请先勾选要取消的订单')
+    return
+  }
+  doCancel(ids, `将取消选中的 ${ids.length} 条订单（其余订单不受影响），是否继续？`)
+}
+
+/** 取消单条订单 */
+const submitCancelOne = (row: DispatchApi.DispatchOrderVO) => {
+  if (!row?.id) return
+  doCancel([row.id], `将取消订单 ${row.orderNo || row.id}（其余订单不受影响），是否继续？`)
 }
 
 /** 手工派单 */

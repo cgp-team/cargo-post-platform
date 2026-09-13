@@ -452,10 +452,12 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     private void createCargoOrder(Long orderId, TransportOrderCreateReqVO reqVO) {
-        if (reqVO.getCargoCategory() == null) return;
+        // 管理端/小程序建单时没填"货物类别"也要落一条货运子单：
+        // 子单缺失会让后续「承运审核」直接报"订单不存在"，或让调度拿不到件数/重量，
+        // 现场表现就是"我随便填的单，审核/调度都过不去"。这里给个默认类别兜底。
         CargoOrderDO sub = CargoOrderDO.builder()
                 .orderId(orderId)
-                .cargoCategory(reqVO.getCargoCategory())
+                .cargoCategory(reqVO.getCargoCategory() != null ? reqVO.getCargoCategory() : "普通货物")
                 .freshFlag(reqVO.getFreshFlag() != null && reqVO.getFreshFlag())
                 .itemCount(reqVO.getCargoItemCount() != null ? reqVO.getCargoItemCount() : 1)
                 .weightKg(reqVO.getCargoWeightKg())
