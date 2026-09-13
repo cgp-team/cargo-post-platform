@@ -264,6 +264,14 @@ export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
 }
 
 /**
+ * 订单池手动取消订单：只取消传入的订单，其它订单保持不变。
+ * 仅"待入池/已入池"的订单可取消（已分配/已发车/在途的订单会被后端忽略）。
+ */
+export const cancelPoolOrders = (orderIds: number[]): Promise<number> => {
+  return request.put({ url: '/transport/dispatch/order-pool/cancel', data: orderIds })
+}
+
+/**
  * 演示态：把方案里的订单放回「待入池」，方便反复点「一键演示」。
  * 生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后，本调用为空操作
  * （调度后的订单不再回到订单池，除非显式打回重新派送）。
