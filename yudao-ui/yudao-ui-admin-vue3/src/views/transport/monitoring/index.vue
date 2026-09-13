@@ -201,6 +201,22 @@ const drawStations = (stations: MonitoringStationVO[]) => {
 
 const drawRoute = (route: MonitoringRouteVO, color: string) => {
   const BMapGL = window.BMapGL
+  // 真实道路折线优先（AMAP）：库里预热过的线路直接画真实轨迹；
+  // 没预热过的线路只画"虚线示意"（站点直连），不冒充真实路线，避免演示里出现直线乱跑。
+  const road = (route.roadPoints ?? [])
+    .filter((p) => p.longitude && p.latitude)
+    .map((p) => {
+      const bd = gcj02ToBd09(p.longitude!, p.latitude!)
+      return new BMapGL.Point(bd.lng, bd.lat)
+    })
+  if (road.length >= 2) {
+    map.addOverlay(new BMapGL.Polyline(road, {
+      strokeColor: color,
+      strokeWeight: 4,
+      strokeOpacity: 0.75
+    }))
+    return
+  }
   const path = route.points
     .filter((p) => p.longitude && p.latitude)
     .map((p) => {
@@ -210,9 +226,10 @@ const drawRoute = (route: MonitoringRouteVO, color: string) => {
   if (path.length < 2) return
   map.addOverlay(
     new BMapGL.Polyline(path, {
-      strokeColor: color,
-      strokeWeight: 4,
-      strokeOpacity: 0.75
+      strokeColor: '#C0C4CC',
+      strokeWeight: 2,
+      strokeOpacity: 0.7,
+      strokeStyle: 'dashed'
     })
   )
 }

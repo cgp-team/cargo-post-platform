@@ -370,7 +370,8 @@ const mapReady = ref(false)
 const mapError = ref('')
 let map: any = null
 let vehicleMarker: any = null
-let routePolyline: any = null
+/** 路线折线（可能多条：真实道路分段之间断开） */
+let routePolylineGroup: any[] = []
 let stationMarkers: any[] = []
 
 const initMap = async () => {
@@ -425,18 +426,24 @@ const updateMapWithRuntime = (rt: SimulationRuntimeVO) => {
   }
 
   // 更新路线
-  if (rt.polyline && rt.polyline.length > 1) {
-    if (routePolyline) {
-      map.removeOverlay(routePolyline)
-    }
-    const path = rt.polyline.map((p: number[]) => new BMapGL.Point(p[0], p[1]))
-    routePolyline = new BMapGL.Polyline(path, {
+  // 路线：按"真实道路分段"绘制；分段之间不连续（缺路网/停站）不连线，
+  // 避免出现"两点直线"把两个站硬连起来（演示里那种直线不可靠）。
+  routePolylineGroup.forEach((line: any) => map.removeOverlay(line))
+  routePolylineGroup = []
+  const runs: number[][][] = (rt.polylines && rt.polylines.length
+    ? rt.polylines
+    : (rt.polyline && rt.polyline.length > 1 ? [rt.polyline] : []))
+  runs.forEach((run) => {
+    if (!run || run.length < 2) return
+    const path = run.map((p: number[]) => new BMapGL.Point(p[0], p[1]))
+    const line = new BMapGL.Polyline(path, {
       strokeColor: '#409EFF',
       strokeWeight: 4,
       strokeOpacity: 0.7
     })
-    map.addOverlay(routePolyline)
-  }
+    map.addOverlay(line)
+    routePolylineGroup.push(line)
+  })
 
   // 更新站点标记
   stationMarkers.forEach((m) => map.removeOverlay(m))
@@ -613,10 +620,14 @@ const clearMap = () => {
     if (vehicleMarker._label) map.removeOverlay(vehicleMarker._label)
     vehicleMarker = null
   }
-  if (routePolyline && map) {
-    map.removeOverlay(routePolyline)
-    routePolyline = null
+  if (map) {
+    routePolylineGroup.forEach((line: any) => {
+      try {
+        map.removeOverlay(line)
+      } catch (e) { /* ignore */ }
+    })
   }
+  routePolylineGroup = []
   stationMarkers.forEach((m) => map?.removeOverlay(m))
   stationMarkers = []
 }

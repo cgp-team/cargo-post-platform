@@ -54,6 +54,8 @@ public class SimulationRuntimeRespVO {
     private String scenarioName;
     @Schema(description = "路线polyline(经纬度对)")
     private List<List<Double>> polyline;
+    @Schema(description = "路线折线（按真实道路分段；段间不连续不连线，缺路网的段不出现）")
+    private List<List<List<Double>>> polylines;
     @Schema(description = "经停站点列表")
     private List<StopInfo> stops;
     @Schema(description = "当前所在段索引")

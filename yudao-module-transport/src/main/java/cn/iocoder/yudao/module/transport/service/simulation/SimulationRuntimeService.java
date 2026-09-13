@@ -133,12 +133,50 @@ public class SimulationRuntimeService {
         // 路线polyline
         List<SimulationEngine.SimSegment> segments = run.getSegments();
         List<List<Double>> polyline = new ArrayList<>();
+        // 同时给出"按真实道路分段"的折线：段与段不连续（缺路网/mock 段）时留断口，
+        // 前端按 runs 分别绘制 → 不会出现"两点直线"把两站硬连起来。
+        List<List<List<Double>>> runs = new ArrayList<>();
+        List<List<Double>> currentRun = new ArrayList<>();
         for (SimulationEngine.SimSegment seg : segments) {
+            List<List<Double>> segPoints = new ArrayList<>();
             for (double[] p : seg.getPolyline()) {
-                polyline.add(List.of(p[0], p[1]));
+                List<Double> point = List.of(p[0], p[1]);
+                polyline.add(point);
+                segPoints.add(point);
+            }
+            if (segPoints.size() < 2) {
+                if (currentRun.size() >= 2) {
+                    runs.add(currentRun);
+                }
+                currentRun = new ArrayList<>();
+                continue;
+            }
+            if (!currentRun.isEmpty()) {
+                List<Double> tail = currentRun.get(currentRun.size() - 1);
+                List<Double> head = segPoints.get(0);
+                if (Math.abs(tail.get(0) - head.get(0)) > 1e-6 || Math.abs(tail.get(1) - head.get(1)) > 1e-6) {
+                    if (currentRun.size() >= 2) {
+                        runs.add(currentRun);
+                    }
+                    currentRun = new ArrayList<>();
+                }
+            }
+            for (int i = 0; i < segPoints.size(); i++) {
+                if (i == 0 && !currentRun.isEmpty()) {
+                    List<Double> tailPoint = currentRun.get(currentRun.size() - 1);
+                    if (Math.abs(tailPoint.get(0) - segPoints.get(0).get(0)) <= 1e-9
+                            && Math.abs(tailPoint.get(1) - segPoints.get(0).get(1)) <= 1e-9) {
+                        continue;
+                    }
+                }
+                currentRun.add(segPoints.get(i));
             }
         }
+        if (currentRun.size() >= 2) {
+            runs.add(currentRun);
+        }
         vo.setPolyline(polyline);
+        vo.setPolylines(runs);
 
         // 经停站点
         List<SimulationRuntimeRespVO.StopInfo> stops = new ArrayList<>();

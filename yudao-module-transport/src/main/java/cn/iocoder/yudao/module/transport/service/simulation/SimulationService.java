@@ -40,6 +40,7 @@ public class SimulationService {
     @Resource private AlgorithmClient algorithmClient;
     /** 真实道路几何（高德 Web key 直连，带缓存）：优先于算法服务，避免算法不可用时"模拟路线变直线" */
     @Resource private RoadPolylineService roadPolylineService;
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService routeCorridorService;
 
     /** 启动某方案某车辆的模拟（Start）。simulationEnabled=false 时引擎内 no-op。 */
     public void start(Long planId, Long vehicleId, double multiplier) {
@@ -125,7 +126,7 @@ public class SimulationService {
             DispatchPlanItemDO cur = items.get(i);
             StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
             StationDO to = cur.getStationId() != null ? stationMap.get(cur.getStationId()) : null;
-            List<double[]> polyline = fetchPolyline(from, to);
+            List<double[]> polyline = fetchPolyline(vehicleId, prev.getStationId(), cur.getStationId(), from, to);
             long travelSeconds = cur.getSegmentDurationSeconds() != null
                     ? cur.getSegmentDurationSeconds() : estimateSeconds(from, to);
             cumSeconds += travelSeconds;
@@ -139,10 +140,18 @@ public class SimulationService {
     }
 
     /** 真实道路 polyline：算法 /route 返回坐标点；不可用/失败回退两点直线（明确 euclidean） */
-    private List<double[]> fetchPolyline(StationDO from, StationDO to) {
+    private List<double[]> fetchPolyline(Long vehicleId, Long fromStationId, Long toStationId,
+                                         StationDO from, StationDO to) {
         if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
                 || to.getLongitude() == null || to.getLatitude() == null) {
-            return List.of(new double[]{0, 0}, new double[]{0, 0});
+            return List.of();
+        }
+        // 0) 车辆运营线路走廊（与派单落库/司机端同一份真实几何，优先级最高）
+        if (routeCorridorService != null) {
+            List<double[]> corridor = routeCorridorService.resolveForLeg(vehicleId, fromStationId, toStationId);
+            if (corridor != null && corridor.size() >= 2) {
+                return corridor;
+            }
         }
         // 1) 后端直连高德驾车路网（带 10 分钟缓存，最稳）
         List<double[]> polyline = roadPolylineService == null ? null : roadPolylineService.route(
@@ -157,8 +166,10 @@ public class SimulationService {
                     .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
                             .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
                     .build());
+            // 只认高德真实路网（provider=amap）：算法侧 euclidean 是两点直线兜底，
+            // 直接拿来当"路线"会让模拟运营/可视化出现斜穿城市的直线（演示不允许）。
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
-                    && route.getPolyline().size() >= 2) {
+                    && route.getPolyline().size() >= 2 && "amap".equalsIgnoreCase(route.getProvider())) {
                 polyline = route.getPolyline().stream()
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
@@ -167,11 +178,11 @@ public class SimulationService {
             // 算法不可用：走直线兜底
         }
         }
-        if (polyline == null) {
-            polyline = List.of(new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
-                    new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
+        if (polyline != null && polyline.size() >= 2) {
+            return polyline;
         }
-        return polyline;
+        // 4) 取不到真实路网：只给一个点（模拟时"停在本站"），绝不画/飞两点直线
+        return List.of(new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()});
     }
 
     /** 行驶秒兜底：两点 Haversine 公里 ÷ 25km/h（与计价规则默认均速一致） */

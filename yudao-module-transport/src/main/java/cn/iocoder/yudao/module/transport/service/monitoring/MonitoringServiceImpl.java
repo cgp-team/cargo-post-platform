@@ -101,6 +101,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private AlgorithmClient algorithmClient;
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService routeCorridorService;
 
     @Override
     public MonitoringMapDataRespVO getMapData() {
@@ -130,6 +131,22 @@ public class MonitoringServiceImpl implements MonitoringService {
             item.setRouteName(route.getRouteName());
             item.setDistanceKm(toDouble(route.getDistanceKm()));
             item.setPoints(buildPoints(routeStations.getOrDefault(route.getId(), List.of()), stationMap));
+            // 线路真实道路折线：库里预热过就用真实几何（监控地图不再用"站点直连"冒充路线）；
+            // 没预热过的线路在前端画成虚线示意（明确不是真实轨迹）。
+            if (route.getNavigationPolyline() != null
+                    && "AMAP".equalsIgnoreCase(route.getNavigationSource())) {
+                List<double[]> corridor = cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService
+                        .parse(route.getNavigationPolyline());
+                if (corridor.size() >= 2) {
+                    item.setRoadProvider("AMAP");
+                    item.setRoadPoints(corridor.stream().map(p -> {
+                        MonitoringMapDataRespVO.RoadPoint rp = new MonitoringMapDataRespVO.RoadPoint();
+                        rp.setLongitude(p[0]);
+                        rp.setLatitude(p[1]);
+                        return rp;
+                    }).toList());
+                }
+            }
             return item;
         }).toList());
         return respVO;
@@ -428,7 +445,7 @@ public class MonitoringServiceImpl implements MonitoringService {
             if (i > 0) {
                 DispatchPlanItemDO prev = items.get(i - 1);
                 StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
-                List<double[]> seg = fetchPlanPolyline(from, station);
+                List<double[]> seg = fetchPlanPolyline(vehicleId, prev.getStationId(), item.getStationId(), from, station);
                 if (seg != null) {
                     if (fullPolyline.isEmpty()) {
                         fullPolyline.addAll(seg);
@@ -444,11 +461,23 @@ public class MonitoringServiceImpl implements MonitoringService {
         return vo;
     }
 
-    /** 坐标对 → 真实道路 polyline（算法 /route；不可用回退两点直线，明确 euclidean） */
-    private List<double[]> fetchPlanPolyline(StationDO from, StationDO to) {
+    /**
+     * 坐标对 → 真实道路 polyline。
+     *
+     * <p>优先级：车辆运营线路走廊 → 算法 /route（只认 provider=amap）→ 取不到返回 {@code null}
+     * （调用方断开折线，绝不回退"两点直线"：演示里那种直线既不好看也不可靠）。</p>
+     */
+    private List<double[]> fetchPlanPolyline(Long vehicleId, Long fromStationId, Long toStationId,
+                                             StationDO from, StationDO to) {
         if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
+        }
+        if (routeCorridorService != null) {
+            List<double[]> corridor = routeCorridorService.resolveForLeg(vehicleId, fromStationId, toStationId);
+            if (corridor != null && corridor.size() >= 2) {
+                return corridor;
+            }
         }
         try {
             AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
@@ -458,16 +487,15 @@ public class MonitoringServiceImpl implements MonitoringService {
                             .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
                     .build());
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
-                    && route.getPolyline().size() >= 2) {
+                    && route.getPolyline().size() >= 2 && "amap".equalsIgnoreCase(route.getProvider())) {
                 return route.getPolyline().stream()
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
             }
         } catch (Exception ignored) {
-            // 算法不可用：走直线兜底
+            // 算法不可用：返回 null，由调用方断开折线
         }
-        return List.of(new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
-                new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()});
+        return null;
     }
 
     /** 从 map 按 id 取对象的指定字段（对象缺失返回 null） */
