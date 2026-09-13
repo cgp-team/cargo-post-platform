@@ -354,6 +354,34 @@ WHERE order_no LIKE 'TPCQ%' OR order_no LIKE 'TPDEMO%'
    OR order_no LIKE 'TP346%' OR order_no LIKE 'TPJTU%' OR order_no LIKE 'TPCQUA%'
 ORDER BY order_no;
 
+-- ============================================================
+-- 演示订单池精简：默认只留 15 张核心演示单进「待入池」，其余演示单置为「已创建」（不进订单池）
+--
+-- 为什么：算法预检要求"本批件数 ≤ 实际选中车辆的货仓件数合计"，而单批最多 3 台车、每台 24 件
+-- （≈72 件容量上限）。演示单全量进池（20+ 单）时，一件数就超过 3 台车的运力，
+-- 会直接返回 OVER_CAPACITY（"运力不足（订单总需求超出可用车辆总容量）"）→ 出不了方案。
+-- 留 15 单（约 37 件）既覆盖三条演示主线，又稳稳落在运力内：
+--   346 主线（TP346A~E，各站顺路取派 + 跨区交接）、
+--   跨片区联运（TPJTU1 重邮→重庆交通大学、TPCQ0004/0005 黄桷垭↔南山）、
+--   重庆大学A区（TPCQUA1~3）、真实线路样例（TPDEMO1~4）。
+-- 其余演示单仍是"已创建"状态留在库里（后台订单管理可见），需要时可在订单池页面单独归集入池。
+-- 幂等：可重复执行；不会动本文件之外由用户自建/小程序下单的订单。
+-- ============================================================
+UPDATE transport_order
+SET status = 0
+WHERE (order_no LIKE 'TPCQ%' OR order_no LIKE 'TPDEMO%'
+       OR order_no LIKE 'TP346%' OR order_no LIKE 'TPJTU%' OR order_no LIKE 'TPCQUA%')
+  AND order_no NOT IN ('TP346A', 'TP346B', 'TP346C', 'TP346D', 'TP346E',
+                       'TPJTU1', 'TPCQUA1', 'TPCQUA2', 'TPCQUA3',
+                       'TPCQ0004', 'TPCQ0005', 'TPDEMO1', 'TPDEMO2', 'TPDEMO3', 'TPDEMO4');
+
+-- 只读校验：演示单池应恰好 15 单
+SELECT COUNT(*) AS demo_pool_count
+FROM transport_order
+WHERE status = 8
+  AND (order_no LIKE 'TPCQ%' OR order_no LIKE 'TPDEMO%'
+       OR order_no LIKE 'TP346%' OR order_no LIKE 'TPJTU%' OR order_no LIKE 'TPCQUA%');
+
 
 -- ============================================================================
 -- 346 路主线演示数据（中研所/黄桷垭/上新街/邮电大学→重庆工商大学/返程 + 重邮→重庆交通大学
