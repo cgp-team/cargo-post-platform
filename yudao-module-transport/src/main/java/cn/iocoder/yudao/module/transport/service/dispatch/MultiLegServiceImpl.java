@@ -270,6 +270,14 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
+
+
+        // Assign vehicles first (incl. district re-assignment): the corridor needs the binding.
+
+        assignVehicles(legs, orderId, planId, planVehicleId, planDriverId);
+
+        relayFarLegsToNearbyVehicles(legs);
+
         // 真实道路：逐段取高德路网（距离/时长/polyline），失败保持 ESTIMATED（不伪装真实道路，需求 §73/§141）
 
         enrichWithRoadRoute(legs);
@@ -291,10 +299,6 @@ public class MultiLegServiceImpl implements MultiLegService {
             cursor = leg.getEstimatedArrival().plusMinutes(MultiLegPlanner.HANDOVER_DWELL_MINUTES);
 
         }
-
-        assignVehicles(legs, orderId, planId, planVehicleId, planDriverId);
-
-        relayFarLegsToNearbyVehicles(legs);
 
         for (TransportLegDO leg : legs) {
 
@@ -428,7 +432,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     private void enrichWithRoadRoute(List<TransportLegDO> legs) {
 
-        if (algorithmClient == null || legs.isEmpty()) {
+        if (legs == null || legs.isEmpty()) {
 
             return;
 
@@ -458,9 +462,32 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             }
 
+            // Real road first: the corridor of the line the vehicle operates on, also
+            // reverse-looked-up when both stops are served by one line. Taking it before the
+            // algorithm call keeps leg geometry persisted even when the algorithm service is
+            // briefly unavailable, and it avoids the point-to-point detours (tunnel / long
+            // U-turn) that a bus never drives.
+            List<double[]> corridorRoad = routeCorridorService == null ? null
+                    : routeCorridorService.resolveForLeg(
+                            leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+            if (corridorRoad != null && corridorRoad.size() >= 2) {
+                // Distance/duration follow the corridor length so the drawn line and the
+                // numbers stay consistent.
+                leg.setNavigationPolyline(RouteCorridorService.serialize(corridorRoad));
+                leg.setNavigationSource("AMAP");
+                double corridorKm = cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService
+                        .lengthKm(corridorRoad);
+                if (corridorKm > 0) {
+                    leg.setDistanceKm(BigDecimal.valueOf(Math.round(corridorKm * 100) / 100.0));
+                    leg.setDurationMinutes(MultiLegPlanner.travelMinutes(corridorKm));
+                }
+                continue;
+            }
+
             try {
 
-                AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
+                AlgorithmRouteRespDTO route = algorithmClient == null ? null
+                        : algorithmClient.route(AlgorithmRouteReqDTO.builder()
 
                         .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
 
@@ -476,45 +503,21 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         .build());
 
-                // 站间"怎么走"优先跟随**车辆运营线路的真实走廊**（按线路站序取到的整条线几何上切片）：
-                // 点对点驾车规划在"站牌在路另一侧 / 需上下桥"时会给出进隧道、绕远、掉头的走法，
-                // 与司机按线路行驶的真实路径不符（例：文峰公社 → 应经文峰正街路口 → 吉祥路口）。
-                // 里程/时长仍沿用算法口径，只替换"画线几何"。
-                List<double[]> corridorRoad = routeCorridorService == null ? null
-                        : routeCorridorService.alongOperatingLine(
-                                leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+                // Fallback only (corridor unavailable): point-to-point road route.
 
                 if (route == null || route.getPolyline() == null || route.getPolyline().isEmpty()) {
-
-                    if (corridorRoad != null && corridorRoad.size() >= 2) {
-
-                        leg.setNavigationPolyline(RouteCorridorService.serialize(corridorRoad));
-
-                        leg.setNavigationSource("AMAP");
-
-                    }
 
                     continue;
 
                 }
 
-                if (corridorRoad != null && corridorRoad.size() >= 2) {
+                leg.setNavigationPolyline(route.getPolyline().stream()
 
-                    leg.setNavigationPolyline(RouteCorridorService.serialize(corridorRoad));
+                        .map(p -> p.getLongitude() + "," + p.getLatitude())
 
-                    leg.setNavigationSource("AMAP");
+                        .collect(java.util.stream.Collectors.joining(";")));
 
-                } else {
-
-                    leg.setNavigationPolyline(route.getPolyline().stream()
-
-                            .map(p -> p.getLongitude() + "," + p.getLatitude())
-
-                            .collect(java.util.stream.Collectors.joining(";")));
-
-                    leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
-
-                }
+                leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
 
                 if (route.getDistanceKm() != null) {
 

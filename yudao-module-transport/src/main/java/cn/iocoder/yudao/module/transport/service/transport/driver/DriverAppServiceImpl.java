@@ -196,6 +196,17 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (shifts.isEmpty()) {
             return List.of();
         }
+        // Only the shifts of the line this driver actually operates: picking another line's shift
+        // makes "depart" start on the wrong route and the later "arrive" is rejected as out of order.
+        Long driverRouteId = currentDriverOperatingRouteId();
+        if (driverRouteId != null) {
+            List<ShiftDO> ownRoute = shifts.stream()
+                    .filter(shift -> Objects.equals(shift.getRouteId(), driverRouteId))
+                    .toList();
+            if (!ownRoute.isEmpty()) {
+                shifts = ownRoute;
+            }
+        }
         Map<Long, RouteDO> routeMap = routeMapper.selectList().stream()
                 .collect(Collectors.toMap(RouteDO::getId, Function.identity()));
         Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
@@ -1568,6 +1579,21 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     // ==================== 班次/站点聚合（参照 MonitoringServiceImpl） ====================
+
+    /** Operating line of the signed-in driver's vehicle (null when there is no binding). */
+    private Long currentDriverOperatingRouteId() {
+        DriverDO driver = currentDriverOrNull();
+        if (driver == null || driverVehicleMapper == null) {
+            return null;
+        }
+        return driverVehicleMapper.selectActiveBindings().stream()
+                .filter(binding -> Objects.equals(binding.getDriverId(), driver.getId())
+                        && binding.getRouteId() != null)
+                .min(java.util.Comparator.comparing(
+                        binding -> binding.getId() == null ? Long.MAX_VALUE : binding.getId()))
+                .map(DriverVehicleDO::getRouteId)
+                .orElse(null);
+    }
 
     private List<ShiftDO> listEnabledShifts() {
         return shiftMapper.selectList(new LambdaQueryWrapperX<ShiftDO>()

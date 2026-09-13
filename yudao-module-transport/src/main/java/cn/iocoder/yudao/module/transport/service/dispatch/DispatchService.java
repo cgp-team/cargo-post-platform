@@ -89,6 +89,13 @@ public interface DispatchService {
                                                              Double toLongitude, Double toLatitude);
 
     /**
+     * Two points' real road geometry; when {@code legId} is given the leg's operating line corridor is
+     * used first, so the order view draws the same road the bus actually drives.
+     */
+    java.util.List<DispatchRoadmapRespVO.Point> routeBetween(Double fromLongitude, Double fromLatitude,
+                                                             Double toLongitude, Double toLatitude, Long legId);
+
+    /**
      * 预热真实道路轨迹（高德配额恢复后跑一次）：订单池订单的取送站点对 + 今天方案里运输段的起终点对，
      * 逐对调用高德并把取到的轨迹落库到对应运输段（transport_leg.navigation_polyline）。
      *

@@ -49,6 +49,9 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
     @Resource private DriverMapper driverMapper;
     @Resource private VehicleMapper vehicleMapper;
     @Resource private MultiLegService multiLegService;
+    @Resource private cn.iocoder.yudao.module.transport.dal.mysql.dispatch.TransportLegMapper legMapper;
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService routeCorridorService;
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
     @Resource private HandoverService handoverService;
     @Resource private OrderEventService orderEventService;
 
@@ -104,6 +107,11 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
             vo.setTotalDurationMinutes(plan.getEstDurationMinutes());
             vo.setPlanReason(plan.getPlanReason());
         }
+        // Legs persisted while the algorithm service was unavailable may carry no geometry at all;
+        // resolve it on read (corridor first, point-to-point second) so the order view / driver app
+        // never falls back to a straight line.
+        legs.forEach(leg -> backfillLegGeometry(leg,
+                stations.get(leg.getFromStationId()), stations.get(leg.getToStationId())));
         vo.setLegs(legs.stream().map(l -> toLeg(l, stationNames, stations)).toList());
         // P2-N：totalLegs/transferCount 以「实际运输段」为准（前端曾因方案字段为 0 而靠 legs.length 兜底）。
         // 单订单视角：换乘次数 = 段数 - 1；方案级多订单：段数 - 订单数。
@@ -178,6 +186,53 @@ public class TransportTopologyServiceImpl implements TransportTopologyService {
             }).toList());
         }
         return vo;
+    }
+
+    /**
+     * Best-effort geometry backfill for a leg that has none stored.
+     *
+     * <p>Order: the corridor of the line the vehicle operates on (also reverse-looked-up by
+     * station pair), then the point-to-point road route. The polyline is persisted so the next
+     * read is free; failures are logged and ignored (the view still renders).</p>
+     */
+    private void backfillLegGeometry(TransportLegDO leg, StationDO from, StationDO to) {
+        if (leg == null || (leg.getNavigationPolyline() != null && !leg.getNavigationPolyline().isBlank())) {
+            return;
+        }
+        if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
+                || to.getLongitude() == null || to.getLatitude() == null) {
+            return;
+        }
+        List<double[]> road = null;
+        try {
+            road = routeCorridorService == null ? null : routeCorridorService.resolveForLeg(
+                    leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+            if (road == null && roadPolylineService != null) {
+                road = roadPolylineService.route(from.getLongitude().doubleValue(),
+                        from.getLatitude().doubleValue(),
+                        to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+            }
+        } catch (Exception ex) {
+            log.debug("[topology] order {} leg {} geometry backfill failed: {}",
+                    leg.getOrderId(), leg.getLegSequence(), ex.getMessage());
+        }
+        if (road == null || road.size() < 2) {
+            return;
+        }
+        leg.setNavigationPolyline(cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService.serialize(road));
+        leg.setNavigationSource("AMAP");
+        try {
+            if (legMapper != null && leg.getId() != null) {
+                TransportLegDO update = new TransportLegDO();
+                update.setId(leg.getId());
+                update.setNavigationPolyline(leg.getNavigationPolyline());
+                update.setNavigationSource("AMAP");
+                legMapper.updateById(update);
+            }
+        } catch (Exception ex) {
+            log.debug("[topology] order {} leg {} geometry persist failed: {}",
+                    leg.getOrderId(), leg.getLegSequence(), ex.getMessage());
+        }
     }
 
     private OrderTopologyRespVO.Leg toLeg(TransportLegDO leg, Map<Long, String> stationNames,

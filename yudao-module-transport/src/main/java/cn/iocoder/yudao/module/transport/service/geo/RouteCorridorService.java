@@ -14,9 +14,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 线路走廊服务（RouteCorridorService）：把"站间怎么走"落回**公交线路本身的真实走向**。
@@ -32,6 +35,12 @@ import java.util.Objects;
 @Slf4j
 @Service
 public class RouteCorridorService {
+
+    /** Max candidate routes tried when reverse-lookup by station pair. */
+    private static final int MAX_CANDIDATE_ROUTES = 3;
+
+    /** Max whole-line corridors warmed in one warm-up call (AMap quota friendly). */
+    private static final int MAX_WARM_ROUTES = 8;
 
     @Resource private RouteMapper routeMapper;
     @Resource private RouteStationMapper routeStationMapper;
@@ -58,6 +67,83 @@ public class RouteCorridorService {
     public List<double[]> alongOperatingLine(Long vehicleId, Long fromStationId, Long toStationId) {
         Long routeId = operatingRouteId(vehicleId);
         return routeId == null ? null : alongRoute(routeId, fromStationId, toStationId);
+    }
+
+    /**
+     * Single entry point for building real road geometry between two stops.
+     *
+     * <p>Prefers the corridor of the line bound to the vehicle. When the vehicle has no
+     * bound line yet (dispatch time / demo data), reverse-looks-up every line that serves
+     * both stops and slices along the real corridor of that line. Otherwise point-to-point
+     * driving directions pick detours (tunnel / long U-turn) that the bus never drives.</p>
+     *
+     * @return corridor points, or {@code null} when unavailable (caller falls back)
+     */
+    public List<double[]> resolveForLeg(Long vehicleId, Long fromStationId, Long toStationId) {
+        List<double[]> road = alongOperatingLine(vehicleId, fromStationId, toStationId);
+        if (road != null && road.size() >= 2) {
+            return road;
+        }
+        return alongAnyLine(fromStationId, toStationId);
+    }
+
+    /**
+     * Warm the whole-line corridor of every given route (persisted on transport_route).
+     *
+     * <p>Called from the dispatcher's "warm up real routes" action so that slicing a leg later
+     * needs no extra AMap request; the number of routes handled per call is capped.</p>
+     *
+     * @return how many routes ended up with a usable corridor
+     */
+    public int warmRouteCorridors(Collection<Long> routeIds) {
+        if (routeIds == null || routeIds.isEmpty() || routeStationMapper == null) {
+            return 0;
+        }
+        int ready = 0;
+        int tried = 0;
+        for (Long routeId : routeIds) {
+            if (routeId == null || tried >= MAX_WARM_ROUTES) {
+                continue;
+            }
+            tried++;
+            List<Long> lineStations = routeStationMapper.selectListByRouteId(routeId).stream()
+                    .sorted(Comparator.comparing(RouteStationDO::getSequenceNo,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .map(RouteStationDO::getStationId)
+                    .filter(Objects::nonNull)
+                    .toList();
+            if (lineStations.size() >= 2 && corridor(routeId, lineStations) != null) {
+                ready++;
+            }
+        }
+        return ready;
+    }
+
+    /**
+     * Reverse lookup: real geometry of the line that serves both stops.
+     *
+     * <p>Candidates are tried in ascending route id order and the first usable corridor
+     * wins; the candidate count is capped to keep a single lookup cheap.</p>
+     */
+    public List<double[]> alongAnyLine(Long fromStationId, Long toStationId) {
+        if (fromStationId == null || toStationId == null || routeStationMapper == null) {
+            return null;
+        }
+        Set<Long> fromRoutes = routeStationMapper.selectListByStationIds(List.of(fromStationId)).stream()
+                .map(RouteStationDO::getRouteId).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (fromRoutes.isEmpty()) {
+            return null;
+        }
+        List<Long> candidates = routeStationMapper.selectListByStationIds(List.of(toStationId)).stream()
+                .map(RouteStationDO::getRouteId).filter(Objects::nonNull)
+                .filter(fromRoutes::contains).distinct().sorted().limit(MAX_CANDIDATE_ROUTES).toList();
+        for (Long routeId : candidates) {
+            List<double[]> road = alongRoute(routeId, fromStationId, toStationId);
+            if (road != null && road.size() >= 2) {
+                return road;
+            }
+        }
+        return null;
     }
 
     /** 沿指定线路取两站之间的真实道路轨迹；线路不可用/两站不在线路上返回 null */

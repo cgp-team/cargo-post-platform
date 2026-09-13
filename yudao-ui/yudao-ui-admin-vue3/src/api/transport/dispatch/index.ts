@@ -252,6 +252,8 @@ export const getRoadBetween = (params: {
   fromLatitude: number
   toLongitude: number
   toLatitude: number
+  /** 运输段编号：带上后后端优先按「车辆运营线路走廊」取真实走向（与司机实际行驶一致） */
+  legId?: number
 }): Promise<DispatchRoadmapPoint[]> => {
   return request.get({ url: '/transport/dispatch/plan/route-between', params })
 }
