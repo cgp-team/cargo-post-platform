@@ -556,14 +556,24 @@ const resolveLegRoad = (leg: TopologyApi.TopologyLeg): { lng: number; lat: numbe
   const stored = (leg.navigationPolyline ?? [])
     .filter((p) => p.longitude != null && p.latitude != null)
     .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))
-  if (stored.length >= 2) return stored
+  if (stored.length >= 2 && !isStraightFallback(stored)) return stored
   const cached = legRoadCache.value.get(legKey(leg))
-  if (cached && cached.length >= 2) return cached
+  if (cached && cached.length >= 2 && !isStraightFallback(cached)) return cached
   if (leg.fromLongitude != null && leg.fromLatitude != null
     && leg.toLongitude != null && leg.toLatitude != null) {
     ensureLegRoad(legKey(leg), leg.id, leg.fromLongitude, leg.fromLatitude, leg.toLongitude, leg.toLatitude)
   }
   return []
+}
+
+/**
+ * 是不是"两点直线兜底"：只有 2 个点、且两点相距 >300m，基本可以断定不是逐点路网轨迹
+ * （真实道路折线在 300m 内不会有这么稀疏的点）。这类段宁可不画，也不画一条直线。
+ */
+const isStraightFallback = (points: { lng: number; lat: number }[]) => {
+  if (points.length !== 2) return false
+  const km = Math.hypot((points[0].lng - points[1].lng) * 95.4, (points[0].lat - points[1].lat) * 111.0)
+  return km > 0.3
 }
 
 /** 该段是否有真实道路轨迹（无 = 列表标注"缺路网轨迹"，地图不连线） */
@@ -1061,7 +1071,10 @@ const buildRoutes = () => {
         totalSegments++
         const key = `${plan.id}:${vehicleId}:${located.stop.visitSequence ?? 0}`
         const real = roadmapSegments.value.get(key)
-        if (real && real.points.length >= 2) {
+        // 只认高德真实道路（provider=AMAP）：EUCLIDEAN 是两点直线兜底，
+        // 按订单视角（运输段）本来就把它过滤掉了，车辆视角也必须一致 —— 否则会出现
+        // "按订单视角没有直线、按车辆视角有直线"的不一致。
+        if (real && real.provider === 'AMAP' && real.points.length >= 2 && !isStraightFallback(real.points)) {
           realSegments++
           // 该段起点与上一段终点不重合 → 不连续行驶（回场站/换取货点），断开而不是连一条直线
           const tail = current[current.length - 1]
