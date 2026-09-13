@@ -121,3 +121,19 @@ VALUES
     (104, 101, 7, 70, 0, '1', '1', b'0')   -- 重庆邮电大学站（自建）
 ON DUPLICATE KEY UPDATE
     station_id = VALUES(station_id), planned_minutes = VALUES(planned_minutes), deleted = b'0';
+
+-- ===========================================================================
+-- 人车绑定补全：线上这几台车没绑运营线路 → 规划时这些线路被判成"没有车在跑"，
+-- 联运通道（401/403/404/103/104）整体缺失，只能退到高德建议。此处按演示口径补齐（幂等）。
+-- ===========================================================================
+UPDATE transport_driver_vehicle SET route_id = 401 WHERE vehicle_id = 1   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 403 WHERE vehicle_id = 2   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 404 WHERE vehicle_id = 3   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 402 WHERE vehicle_id = 5   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 405 WHERE vehicle_id = 4   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 415 WHERE vehicle_id = 6   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 414 WHERE vehicle_id = 7   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 407 WHERE vehicle_id = 8   AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 103 WHERE vehicle_id = 101 AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 104 WHERE vehicle_id = 102 AND deleted = b'0';
+UPDATE transport_driver_vehicle SET route_id = 103 WHERE vehicle_id = 103 AND deleted = b'0';
