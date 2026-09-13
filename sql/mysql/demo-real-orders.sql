@@ -382,6 +382,37 @@ WHERE status = 8
   AND (order_no LIKE 'TPCQ%' OR order_no LIKE 'TPDEMO%'
        OR order_no LIKE 'TP346%' OR order_no LIKE 'TPJTU%' OR order_no LIKE 'TPCQUA%');
 
+-- ============================================================
+-- 司机端登录账号（13800138001~13800138004：张建国/李伟民/王守义/赵德柱）
+--
+-- 司机身份判定规则：**登录会员手机号 = transport_driver.mobile**
+-- （`DriverAppServiceImpl.currentDriverOrNull`）。这 4 个账号原本只在 demo-member.sql 里，
+-- 而该脚本不在部署迁移清单 → 线上这 4 位司机会登录失败（实测 code=1004003000 账号或密码不正确）。
+-- 这里并入本文件（部署清单里），保证"可视化里显示哪台车/哪个司机，就能用对应手机号登进司机端"。
+-- 密码统一 123456；幂等（ON DUPLICATE KEY UPDATE，按 mobile 唯一键）。
+-- 注意：自建线司机（13900001001~3）与 346/303/沙坪坝司机（13800138006~9）分别在
+-- demo-cqupt-vehicles.sql 与本文件末尾的 346 区块里创建，不在这里重复。
+-- ============================================================
+INSERT INTO member_user
+    (nickname, name, sex, point, avatar, status, mobile, password, register_ip, creator, updater, tenant_id, deleted)
+VALUES
+    ('张建国', '张建国', 1, 0, '', 0, '13800138001', '$2a$10$b7Zw5dh0ldzG08ReZBVGZenwyyYUwS07iMM/KAZOP6cqjP7..RRzi', '127.0.0.1', '1', '1', 0, b'0'),
+    ('李伟民', '李伟民', 1, 0, '', 0, '13800138002', '$2a$10$b7Zw5dh0ldzG08ReZBVGZenwyyYUwS07iMM/KAZOP6cqjP7..RRzi', '127.0.0.1', '1', '1', 0, b'0'),
+    ('王守义', '王守义', 1, 0, '', 0, '13800138003', '$2a$10$b7Zw5dh0ldzG08ReZBVGZenwyyYUwS07iMM/KAZOP6cqjP7..RRzi', '127.0.0.1', '1', '1', 0, b'0'),
+    ('赵德柱', '赵德柱', 1, 0, '', 0, '13800138004', '$2a$10$b7Zw5dh0ldzG08ReZBVGZenwyyYUwS07iMM/KAZOP6cqjP7..RRzi', '127.0.0.1', '1', '1', 0, b'0')
+ON DUPLICATE KEY UPDATE
+    password = VALUES(password),
+    nickname = VALUES(nickname),
+    status = 0,
+    deleted = b'0';
+
+-- 只读校验：司机端账号（预期 8 行：13800138001~4 + 13800138006~9）
+SELECT id, mobile, nickname, status
+FROM member_user
+WHERE mobile IN ('13800138001','13800138002','13800138003','13800138004',
+                 '13800138006','13800138007','13800138008','13800138009')
+ORDER BY mobile;
+
 
 -- ============================================================================
 -- 346 路主线演示数据（中研所/黄桷垭/上新街/邮电大学→重庆工商大学/返程 + 重邮→重庆交通大学
