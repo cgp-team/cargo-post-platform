@@ -272,6 +272,23 @@ public class AutoDispatchPlanner {
      */
     public static List<TransportOrderDO> selectAutoBatch(List<TransportOrderDO> orders,
                                                         Map<Long, StationDO> stationMap, int max) {
+        return selectAutoBatch(orders, stationMap, max, Integer.MAX_VALUE);
+    }
+
+    /**
+     * 一键调度的「订单批次选择」（带**站点预算**）。
+     *
+     * <p>为什么需要站点预算：算法契约上限是"30 站点 / 25 订单 / 3 车"。只按订单数取批时，
+     * 一批 25 单跨多条线路很容易凑出 40~50 个不同站点 → `validateScaleLimit` 直接抛
+     * DISPATCH_SCALE_OVER_LIMIT，现场表现就是"点了一键调度，没有方案"。
+     * 这里在按片区纳入订单的同时累计站点数，超出预算的订单留给下一批（下一轮一键调度会成下一套方案），
+     * 保证每一批都在算法可解规模内。</p>
+     *
+     * @param maxStations 本批允许的最大站点数（不含场站；调用方传算法上限-1）
+     */
+    public static List<TransportOrderDO> selectAutoBatch(List<TransportOrderDO> orders,
+                                                        Map<Long, StationDO> stationMap, int max,
+                                                        int maxStations) {
         if (orders == null || orders.isEmpty()) {
             return List.of();
         }
@@ -279,14 +296,29 @@ public class AutoDispatchPlanner {
         sorted.sort(AutoDispatchPlanner::compareNewestFirst);
         TransportOrderDO anchor = sorted.get(0);
         int limit = max > 0 ? max : sorted.size();
+        int stationBudget = maxStations > 0 ? maxStations : Integer.MAX_VALUE;
         List<TransportOrderDO> batch = new ArrayList<>();
+        Set<Long> batchStations = new HashSet<>();
         for (TransportOrderDO order : sorted) {
             if (batch.size() >= limit) {
                 break;
             }
-            if (order == anchor || sameRegion(anchor, order, stationMap)) {
-                batch.add(order);
+            if (order != anchor && !sameRegion(anchor, order, stationMap)) {
+                continue;
             }
+            // 站点预算：本单带来的新站点会让本批超限 → 留给下一批（锚点那单必须进批）
+            Set<Long> candidate = new HashSet<>(batchStations);
+            if (order.getPickupStationId() != null) {
+                candidate.add(order.getPickupStationId());
+            }
+            if (order.getDeliveryStationId() != null) {
+                candidate.add(order.getDeliveryStationId());
+            }
+            if (order != anchor && candidate.size() > stationBudget) {
+                continue;
+            }
+            batch.add(order);
+            batchStations = candidate;
         }
         return batch;
     }
