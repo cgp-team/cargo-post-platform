@@ -322,3 +322,34 @@ JOIN transport_station ps ON ps.id = o.pickup_station_id
 JOIN transport_station ds ON ds.id = o.delivery_station_id
 WHERE o.id BETWEEN 214 AND 219
 ORDER BY o.id;
+
+-- ============================================================
+-- 演示单时间窗统一成「当天 00:00 ~ 23:59」
+--
+-- 为什么：调度是**按任务窗口**派单的（调度中心工具栏可选，例：早上 08:40~12:40）。
+-- 后端判定口径是"订单 [最早取货, 最晚送达] 与任务窗口有交集才可派"，
+-- 而上面这些演示单的窗口是按"脚本执行时刻"算的（NOW()-1h ~ NOW()+2h）：
+-- 只要演示时段与脚本执行时刻不重叠（例如上午跑脚本、下午选 08:40-12:40 的窗口），
+-- 整批演示单都会被判"送达时限早于窗口开始"而不可派（现场就会看到"没有可派订单"）。
+-- 这里统一改成"当天全天可服务"：任何当天的任务窗口都与订单时间窗有交集，
+-- 演示不会再因为"几点跑的脚本"而整批失败；订单仍然有明确的可服务范围（仅当天）。
+--
+-- 放在 demo-real-orders.sql 末尾：本文件在部署迁移清单里，且排在
+-- demo-cqupt-stations / demo-multi-leg 之后，能一次性覆盖各脚本定义的演示单（TPCQ*/TPDEMO*/TP346*/TPJTU*/TPCQUA*）。
+-- 幂等：可重复执行。
+-- ============================================================
+UPDATE transport_order
+SET earliest_pickup_time = TIMESTAMP(CURDATE(), '00:00:00'),
+    latest_delivery_time = TIMESTAMP(CURDATE(), '23:59:59')
+WHERE order_no LIKE 'TPCQ%'
+   OR order_no LIKE 'TPDEMO%'
+   OR order_no LIKE 'TP346%'
+   OR order_no LIKE 'TPJTU%'
+   OR order_no LIKE 'TPCQUA%';
+
+-- 只读校验：演示单时间窗（应全部是当天 00:00:00 / 23:59:59）
+SELECT order_no, status, earliest_pickup_time, latest_delivery_time
+FROM transport_order
+WHERE order_no LIKE 'TPCQ%' OR order_no LIKE 'TPDEMO%'
+   OR order_no LIKE 'TP346%' OR order_no LIKE 'TPJTU%' OR order_no LIKE 'TPCQUA%'
+ORDER BY order_no;
