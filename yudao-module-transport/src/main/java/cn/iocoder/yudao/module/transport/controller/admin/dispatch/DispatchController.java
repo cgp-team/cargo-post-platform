@@ -90,8 +90,9 @@ public class DispatchController {
             @RequestParam("fromLongitude") Double fromLongitude,
             @RequestParam("fromLatitude") Double fromLatitude,
             @RequestParam("toLongitude") Double toLongitude,
-            @RequestParam("toLatitude") Double toLatitude) {
-        return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude));
+            @RequestParam("toLatitude") Double toLatitude,
+            @RequestParam(value = "legId", required = false) Long legId) {
+        return success(dispatchService.routeBetween(fromLongitude, fromLatitude, toLongitude, toLatitude, legId));
     }
 
     @PostMapping("/plan/prefetch-road")
