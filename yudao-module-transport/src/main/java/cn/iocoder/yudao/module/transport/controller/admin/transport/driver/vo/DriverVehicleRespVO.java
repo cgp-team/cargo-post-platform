@@ -33,4 +33,10 @@ public class DriverVehicleRespVO {
     @Schema(description = "绑定状态：1 绑定中，0 已解绑")
     private Integer status;
 
+    @Schema(description = "运营线路编号（车辆绑定的公交线路，用于核对运营范围）")
+    private Long routeId;
+
+    @Schema(description = "运营线路名称")
+    private String routeName;
+
 }

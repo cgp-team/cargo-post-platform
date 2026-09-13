@@ -595,7 +595,27 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         java.util.Set<Long> enabledRouteIds = new java.util.HashSet<>(routeMapper.selectEnabledDispatchRouteIds());
 
-        return all.stream().filter(rs -> enabledRouteIds.contains(rs.getRouteId())).toList();
+        // 再只保留"真的有车在跑"的线路（有在职人车绑定）：换乘通道必须是我们自己的运营线路，
+        // 这样规划出的每一段都能派给该线路的车，车辆不会为了跑别人的线而脱离基本公交线路。
+        java.util.Set<Long> operableRouteIds = new java.util.HashSet<>();
+
+        if (driverVehicleMapper != null) {
+
+            driverVehicleMapper.selectActiveBindings().stream()
+
+                    .map(DriverVehicleDO::getRouteId).filter(Objects::nonNull)
+
+                    .forEach(operableRouteIds::add);
+
+        }
+
+        return all.stream()
+
+                .filter(rs -> enabledRouteIds.contains(rs.getRouteId()))
+
+                .filter(rs -> operableRouteIds.isEmpty() || operableRouteIds.contains(rs.getRouteId()))
+
+                .toList();
 
     }
 
@@ -1206,7 +1226,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             // 而"同一辆车在同一时段承运多张订单"正是拼单/共载的正常形态，再判冲突会把共载挡掉。
 
-            if (planned != null && planned.getVehicleId() != null && legs.size() > 1) {
+            if (planned != null && planned.getVehicleId() != null) {
 
                 // 多段联运：算法按"单车满载"给的车可能不在本段运营范围内（跨片区整段派一台车）。
 
@@ -1235,6 +1255,16 @@ public class MultiLegServiceImpl implements MultiLegService {
                     if (scoped == null) {
 
                         scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, true);
+
+                    }
+
+                    if (scoped == null) {
+
+                        // 同体系里没有"线路覆盖本段"的车：宁可用另一体系但**线路覆盖**的车，
+
+                        // 也不让车脱离基本线路（例如自建线 R104 覆盖 小龙坎→重邮，渝A 车并不覆盖）。
+
+                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, false);
 
                     }
 
@@ -1326,14 +1356,24 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         // 分工优先级（业务约定）：
         //   1) 同体系 + 运营线路覆盖本段起终点（自建段用自建车、真实段用渝A车，且车不越界）
-        //   2) 同体系（体系不能混：CQUPT 车不跑真实线路、渝A 车不跑自建线路）
-        //   3) 仅运营范围覆盖（历史数据没绑线路时的兜底）
+        //   2) **仅运营范围覆盖**（宁可用另一体系的车跑它自己的线路，也不让车脱离基本线路：
+        //      典型例子「小龙坎立交 → 重庆邮电大学站」只有自建线 R104 覆盖，若因体系隔离改派
+        //      347 区间车，车就会离开自己的线路 9km）
+        //   3) 同体系（体系不能混：CQUPT 车不跑真实线路、渝A 车不跑自建线路）
         //   4) 全量兜底（保证任何情况下都有人可派，不因新规则卡死）
         DriverVehicleDO inScope = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, true);
 
         if (inScope != null) {
 
             return inScope;
+
+        }
+
+        DriverVehicleDO inScopeAnySystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false);
+
+        if (inScopeAnySystem != null) {
+
+            return inScopeAnySystem;
 
         }
 
@@ -1367,6 +1407,11 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         boolean legSelfBuilt = legIsSelfBuilt(leg);
 
+        // 多台车都覆盖本段时，优先"最贴合这条线"的那台（经停站最少 = 线路最短最贴），
+        // 同分按绑定 ID 升序 → 结果确定：346 的货由 346 的车拉，不会被同站共线的长线抢走。
+        DriverVehicleDO best = null;
+        long bestScore = Long.MAX_VALUE;
+
         for (DriverVehicleDO binding : bindings) {
 
             if (strictUnused && usedVehicles.contains(binding.getVehicleId())) {
@@ -1397,13 +1442,25 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             if (!conflict) {
 
-                return binding;
+                long score = requireInScope ? operatingScopeStations(binding.getRouteId()).size() : 0L;
+
+                long bestId = best == null || best.getId() == null ? Long.MAX_VALUE : best.getId();
+
+                long bindingId = binding.getId() == null ? Long.MAX_VALUE : binding.getId();
+
+                if (best == null || score < bestScore || (score == bestScore && bindingId < bestId)) {
+
+                    best = binding;
+
+                    bestScore = score;
+
+                }
 
             }
 
         }
 
-        return null;
+        return best;
 
     }
 
@@ -1495,7 +1552,8 @@ public class MultiLegServiceImpl implements MultiLegService {
      * </ol>
      */
 
-    private static final double OPERATING_RANGE_KM = 1.5;
+    /** 运营范围：站点到"该线路真实走向（道路折线）"的垂距 2km 以内，仍算没离开这条线 */
+    private static final double OPERATING_RANGE_KM = 2.0;
 
 
 
@@ -1516,10 +1574,74 @@ public class MultiLegServiceImpl implements MultiLegService {
         }
 
         // 地理口径：本段起终点都在该线路站点的运营半径内
+        //（按"线路真实走向（道路折线）的垂距 ≤ 2km"判定，而不是站点方圆 2km）
+        return nearOperatingLine(binding.getRouteId(), leg.getFromStationId())
 
-        return nearRouteStations(binding.getRouteId(), leg.getFromStationId())
+                && nearOperatingLine(binding.getRouteId(), leg.getToStationId());
 
-                && nearRouteStations(binding.getRouteId(), leg.getToStationId());
+    }
+
+
+
+    /**
+
+     * 站点是否落在该线路的运营范围内：① 就是这条线的站点；② 到"线路真实走向折线"的垂距 ≤ 2km。
+
+     * <p>用真实道路走廊（transport_route.navigation_polyline）算垂距，而不是"离最近站点 2km"——
+
+     * 后者在站点稀疏的山城会放进一大片方圆区域，看起来就是"车跑离了公交线路"。</p>
+
+     */
+
+    private boolean nearOperatingLine(Long routeId, Long stationId) {
+
+        if (routeId == null || stationId == null) {
+
+            return false;
+
+        }
+
+        if (operatingScopeStations(routeId).contains(stationId)) {
+
+            return true;
+
+        }
+
+        StationDO station = stationMapper == null ? null : stationMapper.selectById(stationId);
+
+        if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+
+            return false;
+
+        }
+
+        List<double[]> corridor = null;
+
+        if (routeCorridorService != null) {
+
+            List<Long> orderedStationIds = operatingScopeStationsDetailed(routeId).stream()
+
+                    .map(StationDO::getId).filter(Objects::nonNull).toList();
+
+            corridor = routeCorridorService.corridor(routeId, orderedStationIds);
+
+        }
+
+        if (corridor != null && corridor.size() >= 2) {
+
+            double meters = cn.iocoder.yudao.module.transport.util.GeoDistanceUtil
+
+                    .deviationMetersFromPolyline(station.getLongitude().doubleValue(),
+
+                            station.getLatitude().doubleValue(), corridor);
+
+            return meters <= OPERATING_RANGE_KM * 1000;
+
+        }
+
+        // 走廊还没预热（取不到真实走向）：退回站点半径口径，保证不会因为缺几何而误判"不可派"
+
+        return nearRouteStations(routeId, stationId);
 
     }
 
@@ -1699,6 +1821,14 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                 // 体系隔离：改派同样不能串体系（自建段只换自建车、真实段只换渝A车）
                 if (isSelfBuiltBinding(binding) != legIsSelfBuilt(leg)) {
+
+                    continue;
+
+                }
+
+                // 运营范围：改派后的车必须"这条线经过本段起终点"（站点口径或 1.5km 半径），
+                // 否则车会脱离自己的基本公交线路去跑别人的段（用户要求：不能远离基本线路，该联运就联运）。
+                if (binding.getRouteId() != null && !withinOperatingScope(binding, leg)) {
 
                     continue;
 

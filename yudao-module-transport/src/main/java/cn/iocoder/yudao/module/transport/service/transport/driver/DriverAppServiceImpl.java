@@ -554,6 +554,15 @@ public class DriverAppServiceImpl implements DriverAppService {
                 return new RouteFetch(corridor, "amap");
             }
         }
+        // 1.5) 车辆线路不覆盖这一对站点时，改按"同时经过这两站的那条公交线"取走廊切片：
+        //      司机导航线仍然贴着公交线路走（用户要求：不能远离基本公交线路），
+        //      只有连线路都覆盖不到时才退回点对点路网。
+        if (routeCorridorService != null) {
+            List<double[]> anyLine = routeCorridorService.alongAnyLine(fromStationId, toStationId);
+            if (anyLine != null && anyLine.size() >= 2) {
+                return new RouteFetch(anyLine, "amap");
+            }
+        }
         // 2) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
         List<double[]> direct = roadPolylineService == null ? null : roadPolylineService.route(
                 from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
@@ -570,18 +579,17 @@ public class DriverAppServiceImpl implements DriverAppService {
                             .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
                     .build());
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
-                    && route.getPolyline().size() >= 2) {
+                    && route.getPolyline().size() >= 2 && "amap".equalsIgnoreCase(route.getProvider())) {
                 List<double[]> points = route.getPolyline().stream()
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
-                return new RouteFetch(points, route.getProvider());
+                return new RouteFetch(points, "amap");
             }
         } catch (Exception ignored) {
             // 算法不可用：走直线兜底
         }
-        return new RouteFetch(List.of(
-                new double[]{from.getLongitude().doubleValue(), from.getLatitude().doubleValue()},
-                new double[]{to.getLongitude().doubleValue(), to.getLatitude().doubleValue()}), "euclidean");
+        // 3) 全都拿不到：返回 null（调用方断开折线），绝不画"两点直线"
+        return null;
     }
 
     // ==================== 司机端写操作闭环 ====================
