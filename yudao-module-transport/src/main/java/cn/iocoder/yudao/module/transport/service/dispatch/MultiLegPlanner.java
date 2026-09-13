@@ -69,7 +69,7 @@ public class MultiLegPlanner {
      * 换乘枢纽候选数上限：真实公交线网里换乘点往往不在"最近几个站"里（如 邮电大学→磁器街 需经
      * 南坪站、五公里），上限过小会漏掉可行链路。170 站量级下 O(n²) 组合仅 3 万次，开销可忽略。
      */
-    static final int THREE_LEG_HUB_LIMIT = 200;
+    static final int THREE_LEG_HUB_LIMIT = 400;
 
     /** 高德公交兜底：**仅当本地线网+算法解不出可行换乘方案时**才调用（尽量少用高德） */
     @Resource private AmapTransitFallbackService amapTransitFallbackService;
@@ -272,14 +272,28 @@ public class MultiLegPlanner {
         List<StationDO> hubs = hubs(pickup, delivery, stations).stream()
                 .sorted(Comparator.comparingDouble((StationDO s) ->
                         distance(pickup, s) + distance(s, delivery)).thenComparing(StationDO::getId))
+                .toList();
+        // 两跳分别只需要"起点能到"和"能到终点"的枢纽：按角色过滤后再限流，
+        // 否则离起终点较远的换乘枢纽（如 临江门/较场口/会展中心）会被"最近 200 站"截掉，
+        // 本地线网解不出三段联运 → 退到高德建议（线路不在本地线网里、车辆会脱离运营范围）。
+        List<StationDO> firstHubs = hubs.stream()
+                .filter(h -> index.sameRoute(pickup.getId(), h.getId()))
+                .sorted(Comparator.comparingDouble((StationDO s) -> distance(pickup, s))
+                        .thenComparing(StationDO::getId))
+                .limit(THREE_LEG_HUB_LIMIT)
+                .toList();
+        List<StationDO> secondHubs = hubs.stream()
+                .filter(h -> index.sameRoute(h.getId(), delivery.getId()))
+                .sorted(Comparator.comparingDouble((StationDO s) -> distance(delivery, s))
+                        .thenComparing(StationDO::getId))
                 .limit(THREE_LEG_HUB_LIMIT)
                 .toList();
         Candidate best = null;
-        for (StationDO h1 : hubs) {
+        for (StationDO h1 : firstHubs) {
             if (!index.sameRoute(pickup.getId(), h1.getId())) {
                 continue;
             }
-            for (StationDO h2 : hubs) {
+            for (StationDO h2 : secondHubs) {
                 if (Objects.equals(h1.getId(), h2.getId())) {
                     continue;
                 }
@@ -397,6 +411,13 @@ public class MultiLegPlanner {
         private final java.util.Map<Long, java.util.List<Long>> orderedStations = new java.util.HashMap<>();
         /** 站点 id → 站点（算站间里程用） */
         private final java.util.Map<Long, StationDO> stationById = new java.util.HashMap<>();
+        /**
+         * 坐标网格（≈150m）→ 覆盖该格的线路集合。
+         * 现实里同名公交站常分布在道路两侧、库里有重复站点行，仅按站点 id 判"共线"会漏掉
+         * 换乘点（例：小龙坎立交 / 南坪站在不同线路里是不同站点行）→ 换乘方案出不来，
+         * 只能退到高德建议（线路不在本地线网里、车辆会脱离运营范围）。
+         */
+        private final java.util.Map<String, Set<Long>> routesByCell = new java.util.HashMap<>();
 
         RouteIndex(List<RouteStationDO> routeStations, List<StationDO> stations) {
             java.util.Map<Long, Set<Long>> map = new java.util.HashMap<>();
@@ -422,20 +443,60 @@ public class MultiLegPlanner {
                         .filter(java.util.Objects::nonNull)
                         .toList();
                 orderedStations.put(entry.getKey(), ordered);
+                for (Long stationId : ordered) {
+                    String cell = cellOf(stationById.get(stationId));
+                    if (cell != null) {
+                        routesByCell.computeIfAbsent(cell, k -> new HashSet<>()).add(entry.getKey());
+                    }
+                }
             }
+        }
+
+        /** 站点坐标 → 约 150m 网格 key（缺坐标返回 null） */
+        private static String cellOf(StationDO station) {
+            if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+                return null;
+            }
+            return cellKey(station.getLongitude().doubleValue(), station.getLatitude().doubleValue(), 0, 0);
+        }
+
+        private static String cellKey(double longitude, double latitude, int dx, int dy) {
+            long lon = Math.round(longitude / 0.0015) + dx;
+            long lat = Math.round(latitude / 0.0015) + dy;
+            return lon + ":" + lat;
+        }
+
+        /** 站点所在格 + 邻格（3×3）里出现过的线路集合，避免"同一地点被格线切开"漏判 */
+        private Set<Long> routesAround(StationDO station) {
+            if (station == null || station.getLongitude() == null || station.getLatitude() == null) {
+                return Set.of();
+            }
+            double lon = station.getLongitude().doubleValue();
+            double lat = station.getLatitude().doubleValue();
+            Set<Long> result = new HashSet<>();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    Set<Long> routes = routesByCell.get(cellKey(lon, lat, dx, dy));
+                    if (routes != null) {
+                        result.addAll(routes);
+                    }
+                }
+            }
+            return result;
         }
 
         /** 是否存在同一条线路同时覆盖两个站点 */
         boolean sameRoute(Long a, Long b) {
             Set<Long> ra = byStation.get(a);
-            if (ra == null || ra.isEmpty()) {
-                return false;
-            }
             Set<Long> rb = byStation.get(b);
-            if (rb == null || rb.isEmpty()) {
-                return false;
+            if (ra != null && !ra.isEmpty() && rb != null && !rb.isEmpty()
+                    && ra.stream().anyMatch(rb::contains)) {
+                return true;
             }
-            return ra.stream().anyMatch(rb::contains);
+            // 站点行不同但位置相同（同名站分布在道路两侧）：按坐标网格判断是否同属一条线路
+            Set<Long> routesA = routesAround(stationById.get(a));
+            Set<Long> routesB = routesAround(stationById.get(b));
+            return !routesA.isEmpty() && !routesB.isEmpty() && routesA.stream().anyMatch(routesB::contains);
         }
 
         /**
