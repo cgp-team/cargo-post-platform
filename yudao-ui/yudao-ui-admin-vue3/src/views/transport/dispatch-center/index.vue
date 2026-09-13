@@ -222,20 +222,23 @@ const renderTopology = () => {
     plate ? LEG_COLORS[plates.indexOf(plate) % LEG_COLORS.length] : LEG_COLORS[0]
   legs.forEach((l) => {
     if (l.fromLongitude == null || l.toLongitude == null) return
-    // 真实道路轨迹优先（navigationSource=AMAP）；无则回退站点直连（虚线＝估算，不伪装真实道路）
+    // 只画真实道路轨迹；缺轨迹（高德不可用/估算）的段不画"两点直线"——
+    // 演示里那种"两站直连"既不好看也不可靠，宁可断口。
     const road = (l.navigationPolyline || []).map((p) => pt(p.longitude, p.latitude))
     const p1 = pt(l.fromLongitude, l.fromLatitude!)
     const p2 = pt(l.toLongitude, l.toLatitude!)
-    const path = road.length >= 2 ? road : [p1, p2]
-    points.push(...path)
-    const line = new BMapGL.Polyline(path, {
-      // 真实道路实线（按车辆配色），估算段虚线
-      strokeColor: colorOf(l.plateNo),
-      strokeWeight: 5,
-      strokeStyle: l.navigationSource === 'AMAP' ? 'solid' : 'dashed'
-    })
-    map.addOverlay(line)
-    routeOverlays.push(line)
+    points.push(p1, p2)
+    if (road.length >= 2) {
+      points.push(...road)
+      const line = new BMapGL.Polyline(road, {
+        // 真实道路实线（按车辆配色）
+        strokeColor: colorOf(l.plateNo),
+        strokeWeight: 5,
+        strokeStyle: 'solid'
+      })
+      map.addOverlay(line)
+      routeOverlays.push(line)
+    }
     if (l.handoverRequired) {
       const marker = new BMapGL.Marker(p2)
       map.addOverlay(marker)

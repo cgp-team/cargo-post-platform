@@ -28,6 +28,9 @@ export interface MonitoringRouteVO {
   routeName: string
   distanceKm?: number
   points: MonitoringRoutePointVO[]
+  /** 真实道路折线（AMAP）；为空时前端只画虚线示意，不用直线冒充路线 */
+  roadPoints?: { longitude: number; latitude: number }[]
+  roadProvider?: string
 }
 
 /** 地图图层数据 */
