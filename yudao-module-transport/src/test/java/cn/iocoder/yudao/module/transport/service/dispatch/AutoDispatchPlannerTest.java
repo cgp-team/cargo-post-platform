@@ -272,4 +272,35 @@ class AutoDispatchPlannerTest {
         // 不放预算时三单都能进（对照）
         assertEquals(3, AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 25).size());
     }
+
+    @Test
+    void capacityBudget_takesLargestVehiclesAndSkipsDisabled() {
+        List<VehicleDO> vehicles = List.of(
+                vehicle(1L, 24, 30),
+                vehicle(2L, 10, 20),
+                vehicle(3L, 12, 20));
+        VehicleDO disabled = vehicle(4L, 99, 40);
+        disabled.setStatus(1);
+        List<VehicleDO> all = new java.util.ArrayList<>(vehicles);
+        all.add(disabled);
+
+        // 取最大的 2 台：24 + 12 = 36（停用车不参与）
+        assertEquals(36, AutoDispatchPlanner.capacityBudget(all, 2, 4));
+        // 车辆档案缺货仓件数 → 用默认值（算法契约默认 4）
+        VehicleDO noCapacity = VehicleDO.builder().id(9L).status(0).build();
+        assertEquals(4, AutoDispatchPlanner.capacityBudget(List.of(noCapacity), 1, 4));
+    }
+
+    @Test
+    void capByTotalItems_keepsNewestAndLeavesRestForNextBatch() {
+        // 算法预检 pickups/deliveries ≤ Σ货仓容量：超出直接 OVER_CAPACITY（"运力不足"）。
+        // 取批时按件数预算裁剪，超预算的订单留给下一批（下一轮成下一套方案），不丢单。
+        List<TransportOrderDO> orders = List.of(order(1L, 10L, 11L), order(2L, 12L, 13L), order(3L, 14L, 15L));
+        Map<Long, Integer> items = Map.of(1L, 6, 2L, 5, 3L, 4);
+
+        List<TransportOrderDO> batch = AutoDispatchPlanner.capByTotalItems(orders, items, 10);
+
+        // 第 1 单(6 件)必留；第 2 单会让合计到 11 > 10 → 跳过；第 3 单(4 件)刚好凑满 10 → 留
+        assertEquals(List.of(1L, 3L), batch.stream().map(TransportOrderDO::getId).toList());
+    }
 }
