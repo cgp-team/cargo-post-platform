@@ -249,4 +249,27 @@ class AutoDispatchPlannerTest {
 
         assertEquals(List.of(1L, 2L), batch.stream().map(TransportOrderDO::getId).toList());
     }
+
+    @Test
+    void selectAutoBatch_respectsStationBudget() {
+        // 算法契约上限"30 站点 / 25 订单"：只按订单数取批会凑出 40~50 个站点 → 直接抛规模超限、出不了方案。
+        // 这里按站点预算取批：锚点单必进，其余订单只有在不突破预算时才纳入（超出的留给下一批）。
+        List<StationDO> stations = new java.util.ArrayList<>(REGION_STATIONS.values());
+        for (long id = 20L; id <= 40L; id++) {
+            stations.add(station(id, "站" + id, 2, 104.0 + id * 0.001, 30.5));
+        }
+        List<TransportOrderDO> orders = new java.util.ArrayList<>();
+        // 最新的一单（锚点）：2 个站点
+        orders.add(timedOrder(1L, 20L, 21L, "2026-07-09T09:00:00"));
+        // 其余每单带来 2 个新站点：预算 4 → 只能再纳入 1 单
+        orders.add(timedOrder(2L, 22L, 23L, "2026-07-09T08:00:00"));
+        orders.add(timedOrder(3L, 24L, 25L, "2026-07-09T07:00:00"));
+
+        List<TransportOrderDO> batch = AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 25, 4);
+
+        assertEquals(List.of(1L, 2L), batch.stream().map(TransportOrderDO::getId).toList(),
+                "站点预算 4：锚点(2 站) + 第 2 单(再 +2 站)，第 3 单超出预算留给下一批");
+        // 不放预算时三单都能进（对照）
+        assertEquals(3, AutoDispatchPlanner.selectAutoBatch(orders, REGION_STATIONS, 25).size());
+    }
 }

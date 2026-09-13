@@ -595,7 +595,10 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 其余片区留在池里，再次点击「一键调度」自动成下一套方案。
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, MAX_ALGORITHM_ORDERS);
+            // 站点预算 = 算法站点上限 - 1（场站）：避免 25 单跨多条线路时站点数超限，
+            // 导致一键调度直接抛"规模超出算法上限"、现场出不了方案。
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMap, MAX_ALGORITHM_ORDERS,
+                    MAX_ALGORITHM_STATIONS - 1);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -689,14 +692,17 @@ public class DispatchServiceImpl implements DispatchService {
 
         List<Long> pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
 
-        // 不折返：取货站必须是某台候选车"本窗口还会经过"的站。所有候选车都已经开过这个站 →
-        // 本批不派这单（留给下一班次或改派其他线路），而不是让已经开过去的车掉头回来取。
-        if (!vehicleWindows.isEmpty()) {
-            pooledOrders = filterByNoBacktracking(pooledOrders, vehicleWindows, windowReasons);
-            if (pooledOrders.isEmpty()) {
-                throw exception(DISPATCH_NO_BACKTRACKING, String.join("、", windowReasons));
-            }
-            pooledIds = pooledOrders.stream().map(TransportOrderDO::getId).toList();
+        // 不折返 —— **只提示，绝不因此丢单**：
+        // 早期实现把"取货站已被本批候选车开过"的订单直接从本批剔除，结果一批订单跨多条线路时，
+        // 绝大多数订单的取货站都不在"本批 ≤3 台候选车"的剩余站里 → 整批被清空，
+        // 现场表现就是"全都不行了，一条方案都出不来"。
+        // 现在如实写进方案解释，订单照样交给算法（骨架仍是方向偏好，会尽量让车顺着线路走，
+        // 个别不合理的分配由调度员据提示人工调整）。
+        List<String> passedPickupWarnings = vehicleWindows.isEmpty()
+                ? List.of() : warnPickupAlreadyPassed(pooledOrders, vehicleWindows);
+        if (!passedPickupWarnings.isEmpty()) {
+            windowReasons.add("以下订单的取货站已被本批车辆驶过（不阻断，仍会排入本批，建议人工确认是否折返/改派）："
+                    + String.join("、", passedPickupWarnings));
         }
 
         // 先构建快照并做规模预检（只读，不占单）：无效输入快速失败，避免先 CAS 抢占后再抛错需要回滚。
@@ -2180,7 +2186,8 @@ public class DispatchServiceImpl implements DispatchService {
 
             // 与 createSmartPlan 同一批次口径：校验看到的订单数就是本次真正会被调度的订单数
 
-            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch, MAX_ALGORITHM_ORDERS);
+            pooledOrders = AutoDispatchPlanner.selectAutoBatch(pooledOrders, stationMapForBatch,
+                    MAX_ALGORITHM_ORDERS, MAX_ALGORITHM_STATIONS - 1);
 
             depot = AutoDispatchPlanner.selectDepot(pooledOrders, stations);
 
@@ -3982,20 +3989,17 @@ public class DispatchServiceImpl implements DispatchService {
      * 不折返预过滤：取货站必须是**某台候选车本窗口还会经过**的站。
      * 所有候选车都已经开过这个站 → 本批不派这单，而不是让已经开过去的公交车掉头回去取货。
      */
-    private static List<TransportOrderDO> filterByNoBacktracking(List<TransportOrderDO> orders,
-                                                                 Map<Long, VehicleWindow> windows,
-                                                                 List<String> reasons) {
+    private static List<String> warnPickupAlreadyPassed(List<TransportOrderDO> orders,
+                                                        Map<Long, VehicleWindow> windows) {
         Set<Long> reachable = new LinkedHashSet<>();
         windows.values().forEach(window -> reachable.addAll(window.stationsSet()));
-        List<TransportOrderDO> kept = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
         for (TransportOrderDO order : orders) {
             if (order.getPickupStationId() != null && !reachable.contains(order.getPickupStationId())) {
-                reasons.add(order.getOrderNo() + "（取货站已被车辆开过，不能掉头取货）");
-                continue;
+                warnings.add(order.getOrderNo());
             }
-            kept.add(order);
         }
-        return kept;
+        return warnings;
     }
 
     /** 算法骨架：每台车"本窗口还会依次经过"的站（只保留本批订单涉及的站，保序） */
