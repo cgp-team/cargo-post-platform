@@ -55,6 +55,10 @@ docker compose -f deploy/docker-compose.yml exec -T mysql mysql \
 
 > **提示：** 所有脚本均使用 INSERT IGNORE / ON DUPLICATE KEY UPDATE，可重复执行不会报错。
 
+> **自动部署已包含：** 第 9~11 号脚本（沙坪坝走廊修复、车辆体系分工、346 主线演示数据）已加入
+> `.github/workflows/deploy-dev.yml` 的部署迁移清单，每次部署自动执行（幂等），
+> 演示订单池不需要手工刷。手工执行时按上表顺序即可。
+
 > **注意：** 脚本 5 会重建 401~415 号线路的站序，脚本 11 会把"重庆工商大学站"插进 320 路（403）站序。
 > 因此每次重置演示库后，请按上表顺序执行；只重跑脚本 11 也是幂等的。
 

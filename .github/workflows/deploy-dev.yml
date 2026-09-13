@@ -221,8 +221,14 @@ jobs:
 
           # 重庆片区真实演示数据：重邮站点/车辆/司机 → 多段联运场景 → 真实公交线网 → 真实可行订单；
           # 顺序不可调换（后面的脚本按站名解析站点 id）
+          # demo-cqu-a-link / demo-vehicle-system-split / demo-line346-orders：
+          # 沙坪坝走廊换乘修复、车辆体系分工（一条线路一辆车）、346 主线演示单
+          # （含 重邮→重庆交通大学 联运、重庆大学A区订单）。都是幂等脚本，
+          # 纳入清单后每次部署都会把演示订单池刷到"当天可派"的状态。
           for f in demo-cqupt-stations demo-cqupt-vehicles demo-multi-leg \
-                   demo-real-bus-network demo-real-bus-shifts demo-real-orders transport-multi-leg-menu; do
+                   demo-real-bus-network demo-real-bus-shifts demo-real-orders \
+                   demo-cqu-a-link demo-vehicle-system-split demo-line346-orders \
+                   transport-multi-leg-menu; do
             if [ -f "sql/mysql/${f}.sql" ]; then
               echo "Applying ${f}.sql..."
               "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"

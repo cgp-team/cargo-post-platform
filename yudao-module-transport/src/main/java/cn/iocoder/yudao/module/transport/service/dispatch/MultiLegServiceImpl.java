@@ -48,6 +48,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 
+import cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService;
+
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
@@ -141,6 +143,9 @@ public class MultiLegServiceImpl implements MultiLegService {
     @Resource private TransportHandoverMapper handoverMapper;
 
     @Resource private AlgorithmClient algorithmClient;
+
+    /** 线路走廊（站间走向跟随公交线路真实几何） */
+    @Resource private RouteCorridorService routeCorridorService;
 
     @Resource private OrderEventService orderEventService;
 
@@ -471,19 +476,45 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         .build());
 
+                // 站间"怎么走"优先跟随**车辆运营线路的真实走廊**（按线路站序取到的整条线几何上切片）：
+                // 点对点驾车规划在"站牌在路另一侧 / 需上下桥"时会给出进隧道、绕远、掉头的走法，
+                // 与司机按线路行驶的真实路径不符（例：文峰公社 → 应经文峰正街路口 → 吉祥路口）。
+                // 里程/时长仍沿用算法口径，只替换"画线几何"。
+                List<double[]> corridorRoad = routeCorridorService == null ? null
+                        : routeCorridorService.alongOperatingLine(
+                                leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+
                 if (route == null || route.getPolyline() == null || route.getPolyline().isEmpty()) {
+
+                    if (corridorRoad != null && corridorRoad.size() >= 2) {
+
+                        leg.setNavigationPolyline(RouteCorridorService.serialize(corridorRoad));
+
+                        leg.setNavigationSource("AMAP");
+
+                    }
 
                     continue;
 
                 }
 
-                leg.setNavigationPolyline(route.getPolyline().stream()
+                if (corridorRoad != null && corridorRoad.size() >= 2) {
 
-                        .map(p -> p.getLongitude() + "," + p.getLatitude())
+                    leg.setNavigationPolyline(RouteCorridorService.serialize(corridorRoad));
 
-                        .collect(java.util.stream.Collectors.joining(";")));
+                    leg.setNavigationSource("AMAP");
 
-                leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
+                } else {
+
+                    leg.setNavigationPolyline(route.getPolyline().stream()
+
+                            .map(p -> p.getLongitude() + "," + p.getLatitude())
+
+                            .collect(java.util.stream.Collectors.joining(";")));
+
+                    leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
+
+                }
 
                 if (route.getDistanceKm() != null) {
 

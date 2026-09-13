@@ -137,6 +137,9 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private DispatchPlanLogMapper dispatchPlanLogMapper;
     @Resource private TransportLegMapper transportLegMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
+
+    /** 线路走廊：站间轨迹跟随公交线路真实几何（避免点对点路径进隧道/绕远/掉头） */
+    @Resource private cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService routeCorridorService;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private MemberUserApi memberUserApi;
@@ -457,6 +460,8 @@ public class DriverAppServiceImpl implements DriverAppService {
         items = items.stream()
                 .filter(i -> Objects.equals(i.getPlanId(), planId))
                 .collect(Collectors.toList());
+        // 车辆当前运营线路：用于"站间走向跟随线路走廊"（见 fetchRoutePolyline）
+        Long operatingRouteId = routeCorridorService == null ? null : routeCorridorService.operatingRouteId(vehicleId);
         Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
                 .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
         AppDriverRouteRespVO vo = new AppDriverRouteRespVO();
@@ -484,7 +489,8 @@ public class DriverAppServiceImpl implements DriverAppService {
             if (i > 0) {
                 DispatchPlanItemDO prev = items.get(i - 1);
                 StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
-                RouteFetch fetched = fetchRoutePolyline(from, station);
+                RouteFetch fetched = fetchRoutePolyline(operatingRouteId, prev.getStationId(), item.getStationId(),
+                        from, station);
                 if (fetched != null) {
                     if (fullPolyline.isEmpty()) {
                         fullPolyline.addAll(fetched.points); // 整段从上一站起
@@ -518,13 +524,26 @@ public class DriverAppServiceImpl implements DriverAppService {
     private record RouteFetch(List<double[]> points, String provider) {
     }
 
-    /** 坐标对 → 真实道路 polyline（算法 /route）；不可用/失败回退两点直线（明确 euclidean） */
-    private RouteFetch fetchRoutePolyline(StationDO from, StationDO to) {
+    /**
+     * 站间真实道路 polyline。取几何优先级：
+     * ① **车辆运营线路走廊切片**（站间走向跟线路走：站牌在道路另一侧/需上下桥时，
+     *   点对点驾车规划会给出"进隧道 → 绕远 → 掉头"的走法，与司机实际按线路行驶不符）；
+     * ② 后端直连高德驾车路网；③ 算法服务 /route；④ 最后才两点直线兜底（provider=euclidean，不伪装真实道路）。
+     */
+    private RouteFetch fetchRoutePolyline(Long operatingRouteId, Long fromStationId, Long toStationId,
+                                          StationDO from, StationDO to) {
         if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
         }
-        // 1) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
+        // 1) 线路走廊（车辆运营线路的真实几何切片）
+        if (routeCorridorService != null && operatingRouteId != null) {
+            List<double[]> corridor = routeCorridorService.alongRoute(operatingRouteId, fromStationId, toStationId);
+            if (corridor != null && corridor.size() >= 2) {
+                return new RouteFetch(corridor, "amap");
+            }
+        }
+        // 2) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
         List<double[]> direct = roadPolylineService == null ? null : roadPolylineService.route(
                 from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
                 to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
