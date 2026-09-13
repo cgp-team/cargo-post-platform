@@ -40,6 +40,8 @@ public class DriverVehicleController {
     private DriverMapper driverMapper;
     @Resource
     private VehicleMapper vehicleMapper;
+    @Resource
+    private cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper routeMapper;
 
     @PostMapping("/bind")
     @Operation(summary = "绑定司机与车辆")
@@ -66,7 +68,7 @@ public class DriverVehicleController {
         Map<Long, String> names = batchDriverNames(idsOf(pageResult.getList(), true));
         Map<Long, String> plates = batchPlateNos(idsOf(pageResult.getList(), false));
         List<DriverVehicleRespVO> list = pageResult.getList().stream()
-                .map(dv -> fill(BeanUtils.toBean(dv, DriverVehicleRespVO.class), names, plates))
+                .map(dv -> fill(BeanUtils.toBean(dv, DriverVehicleRespVO.class), names, plates, routeNames(pageResult.getList())))
                 .toList();
         return success(new PageResult<>(list, pageResult.getTotal()));
     }
@@ -80,7 +82,8 @@ public class DriverVehicleController {
         return success(list.stream()
                 .map(vo -> fill(BeanUtils.toBean(vo, DriverVehicleRespVO.class),
                         Map.of(vo.getDriverId(), nameOf(vo.getDriverId())),
-                        Map.of(vo.getVehicleId(), plateOf(vo.getVehicleId()))))
+                        Map.of(vo.getVehicleId(), plateOf(vo.getVehicleId())),
+                        routeNames(List.of(vo))))
                 .toList());
     }
 
@@ -119,10 +122,25 @@ public class DriverVehicleController {
         return vehicle == null ? "" : vehicle.getPlateNo();
     }
 
-    private DriverVehicleRespVO fill(DriverVehicleRespVO vo, Map<Long, String> names, Map<Long, String> plates) {
+    private DriverVehicleRespVO fill(DriverVehicleRespVO vo, Map<Long, String> names, Map<Long, String> plates,
+                                     Map<Long, String> routes) {
         vo.setDriverName(vo.getDriverId() == null ? null : names.getOrDefault(vo.getDriverId(), null));
         vo.setPlateNo(vo.getVehicleId() == null ? null : plates.getOrDefault(vo.getVehicleId(), null));
+        // 车辆绑定的运营线路：运营范围校验/演示讲解都要看这一列（"这台车跑哪条线"）
+        vo.setRouteName(vo.getRouteId() == null ? null : routes.get(vo.getRouteId()));
         return vo;
+    }
+
+    /** 绑定记录里出现的线路编号 → 线路名（一次查询，避免逐行回表） */
+    private Map<Long, String> routeNames(List<DriverVehicleDO> list) {
+        List<Long> routeIds = list.stream().map(DriverVehicleDO::getRouteId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (routeIds.isEmpty()) {
+            return Map.of();
+        }
+        return routeMapper.selectBatchIds(routeIds).stream()
+                .collect(Collectors.toMap(cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteDO::getId,
+                        route -> route.getRouteName() == null ? "" : route.getRouteName(), (a, b) -> a));
     }
 
 }
