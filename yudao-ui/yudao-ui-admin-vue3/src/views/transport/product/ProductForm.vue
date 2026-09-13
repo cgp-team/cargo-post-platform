@@ -2,10 +2,10 @@
   <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="商品名称" prop="name">
-        <el-input v-model="formData.name" placeholder="请输入商品名称" />
+        <el-input v-model="formData.name" placeholder="请输入商品名称" maxlength="128" show-word-limit />
       </el-form-item>
       <el-form-item label="产地村庄" prop="fromVillage">
-        <el-input v-model="formData.fromVillage" placeholder="请输入产地村庄" />
+        <el-input v-model="formData.fromVillage" placeholder="请输入产地村庄" maxlength="64" show-word-limit />
       </el-form-item>
       <el-form-item label="售价" prop="price">
         <el-input-number v-model="formData.price" :precision="2" :min="0" :max="999999" style="width:100%" />
@@ -18,14 +18,40 @@
       <el-form-item label="商品图" prop="image">
         <div style="width:100%">
           <UploadFile v-model:model-value="formData.imageUrl" :limit="1" :file-type="['image']" :is-show-tip="false" />
-          <el-input v-model="formData.image" placeholder="备用 emoji（未上传图片时显示），如 🍑" style="margin-top:8px" />
+          <!-- 也可以直接粘贴图片地址（外链/图床/包内路径都行）：与上传共用同一个字段，填了就用它 -->
+          <el-input
+            v-model="formData.imageUrl"
+            placeholder="或直接粘贴图片地址，如 https://... 或 /images/products/xxx.jpg"
+            clearable
+            maxlength="1024"
+            show-word-limit
+            style="margin-top:8px"
+          />
+          <div v-if="formData.imageUrl" style="margin-top:8px;display:flex;align-items:center;gap:8px">
+            <el-image :src="formData.imageUrl" fit="cover" style="width:56px;height:56px;border-radius:6px" />
+            <span style="font-size:12px;color:var(--el-text-color-secondary)">图片预览（商城与订单里都用它）</span>
+          </div>
+          <el-input
+            v-model="formData.image"
+            placeholder="备用 emoji（没有图片时显示），如 🍑"
+            maxlength="32"
+            show-word-limit
+            style="margin-top:8px"
+          />
         </div>
       </el-form-item>
       <el-form-item label="角标" prop="badge">
-        <el-input v-model="formData.badge" placeholder="如：大巴直通车" />
+        <el-input v-model="formData.badge" placeholder="如：大巴直通车" maxlength="64" show-word-limit />
       </el-form-item>
       <el-form-item label="商品描述" prop="description">
-        <el-input v-model="formData.description" type="textarea" :rows="3" placeholder="请输入商品描述" />
+        <el-input
+          v-model="formData.description"
+          type="textarea"
+          :rows="3"
+          maxlength="2000"
+          show-word-limit
+          placeholder="请输入商品描述（最多 2000 字）"
+        />
       </el-form-item>
       <el-form-item label="库存" prop="stock">
         <el-input-number v-model="formData.stock" :min="0" style="width:100%" />
