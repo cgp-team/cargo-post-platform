@@ -1,6 +1,6 @@
 # 路线规划算法对接
 
-本文档描述与算法组路线规划服务的对接方式，内容已与算法组 2026-08-09 的书面回复对齐。完整接口契约见 `docs/api/algorithm-api.yaml`；回复原文与逐条结论见 `docs/algorithm-doc-review.md`。
+本文档描述与算法组路线规划服务的对接方式，内容已与算法组 2026-08-09 的书面回复对齐。完整接口契约见 `docs/api/algorithm-api.yaml`；回复原文与逐条结论见 `docs/internal/algorithm-doc-review.md`。
 
 ## 调用边界
 
@@ -84,7 +84,7 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
 
 算法组镜像迟迟未交付，编程组按本契约自研了路线规划算法服务（生产候选），代码在 `algorithm/`，
 镜像 `cargo-post/algorithm:1.0.0`，`algorithmVersion=ortools-1.1.0`。决策依据：契约只约定接口行为
-与输出字段，未限定求解器（见 `docs/algorithm-doc-review.md` 差异表"求解算法：契约不限定，只要求
+与输出字段，未限定求解器（见 `docs/internal/algorithm-doc-review.md` 差异表"求解算法：契约不限定，只要求
 返回算法/参数版本"），因此求解器选用 Google OR-Tools（pywrapcp 路由模型），与算法组 ACO 方案互不阻塞——
 算法组镜像交付后可按同一契约验收套件对比、择优切换。
 
