@@ -31,8 +31,8 @@
 ┌───────▼────────┐     ┌─────────▼──────────┐    ┌─────────▼─────────┐
 │  Java 后端      │     │  Python 算法服务    │    │  外部地图服务      │
 │  yudao-server   │────▶│  algorithm:18081   │───▶│  高德 Web 服务 API │
-│  (48080, 宿主机)│HTTP │  mock-algorithm    │    │  百度地图 GL(前端) │
-│                 │◀────│  (127.0.0.1 回环)  │    │  高德小程序 SDK    │
+│  (48080, 宿主机)│HTTP │  (127.0.0.1 回环)  │    │  百度地图 GL(前端) │
+│                 │◀────│                    │    │  高德小程序 SDK    │
 └───────┬────────┘     └────────────────────┘    └───────────────────┘
         │
    ┌────▼────┐   ┌─────────┐
@@ -53,7 +53,6 @@
 |---|---|---|---|---|
 | 业务后端 | `yudao-server` + `yudao-module-*` + `yudao-framework` | Java 21 | Spring Boot 3.5.15（无 Spring Cloud） | 宿主机 systemd / 容器，端口 48080 |
 | 路径规划 | `algorithm/` | Python 3.11 | FastAPI 0.116 + OR-Tools 9.15 | Docker，127.0.0.1:18081 |
-| 算法 mock | `mock-algorithm/` | Python 3.11 | FastAPI（无求解器） | Docker，127.0.0.1:18080 |
 | 管理端 | `yudao-ui/yudao-ui-admin-vue3/` | TypeScript / Node ≥20.19 | Vue 3.5 + Vite 8 + Element Plus 2.13 | Nginx 静态托管 |
 | 小程序 | `miniprogram/` | 原生微信小程序（无 npm） | 基础库 3.17.0 | 微信分发 |
 | 数据库 | `sql/` | MySQL 8 + Redis | — | Docker（127.0.0.1） |
@@ -155,7 +154,7 @@ integration/algorithm/       # 算法服务适配层（唯一通道）
 - **结构**：`app/main.py` 直接承担路由层；`solver.py` 按 `algorithmMode` 三模式分流（HACO 默认 / BASELINE / HYBRID portfolio）；`haco/` 30+ 文件的求解器包；`baseline/ortools_solver.py`；`distance.py` 距离提供方抽象（高德路网 + 欧氏兜底）；`validators.py` 后置业务校验；
 - **接口**：`POST /api/v1/plan`（规划主接口，幂等 requestId）、`GET /api/v1/result/{id}`（轮询）、`POST /api/v1/distance`、`POST /api/v1/route`（真实道路 polyline）、`/health`、`/ready`；契约文档 `docs/api/algorithm-api.yaml`；
 - **规模上限**：100 站 / 25 单 / 3 车 / 10s（`main.py:46-48`）；
-- **mock-algorithm/**：同契约的 FastAPI 壳实现（无求解器，欧氏直线伪方案），带 `scenario` 混沌字段模拟超时/报错/无解，供后端适配层降级联调；两边跑**同一份契约测试套件**，切换实现只需改 `ALGORITHM_BASE_URL`。
+- **契约验收**：`tests/contract/` 用 `ALGORITHM_BASE_URL` 参数化，可对任意契约实现（如算法组镜像）直接验收。
 
 ## 4. 管理端（Vue3 SPA）
 
@@ -274,15 +273,15 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 - 算法：50+ pytest 文件分四层（契约 / 回归矩阵 / 最优性 gap / 消融与可复现性），另有 `benchmarks/` 性能留档；
 - 小程序：10 个 Node assert 测试；
 - e2e：`e2e/` 目录留存回归与演示证据文档；
-- 契约测试是亮点：`algorithm/tests/contract/` 与 `mock-algorithm/tests/contract/` 是同一份套件，设 `ALGORITHM_BASE_URL` 即可验收任意实现。
+- 契约测试是亮点：`algorithm/tests/contract/` 用 `ALGORITHM_BASE_URL` 参数化，即可验收任意契约实现。
 
 ### 8.4 外部化配置
 
-`.env.example` 关键项：`ALGORITHM_PORT=18081`、`MOCK_ALGORITHM_PORT=18080`、`ALGORITHM_BASE_URL`、`AMAP_KEY`（Web 服务 key）；小程序另有 `AMAP_MINI_KEY`（小程序 key，两者不可混用）；dev 环境后端配置外部化在 `/opt/cargo-post/config/application-dev.yaml`。
+`.env.example` 关键项：`ALGORITHM_PORT=18081`、`ALGORITHM_BASE_URL`、`AMAP_KEY`（Web 服务 key）；小程序另有 `AMAP_MINI_KEY`（小程序 key，两者不可混用）；dev 环境后端配置外部化在 `/opt/cargo-post/config/application-dev.yaml`。
 
 ## 9. 部署运行方式
 
-- **Docker Compose**（`deploy/docker-compose.yml`）：MySQL、Redis、algorithm（18081）、mock-algorithm（18080）、Nginx——**全部仅绑 127.0.0.1**（除 Nginx 对外）；
+- **Docker Compose**（`deploy/docker-compose.yml`）：MySQL、Redis、algorithm（18081）、Nginx——**全部仅绑 127.0.0.1**（除 Nginx 对外）；
 - **Java 后端跑宿主机**：systemd 单元 `deploy/cargo-post.service` 托管 `yudao-server.jar`，经 `ALGORITHM_BASE_URL` 指向回环上的算法端口；
 - **Nginx** 是唯一公网入口：SPA 静态 + `/api/` 反代 + `/ws/` 升级；刻意无算法 location；
 - **监控**：Actuator 全开放 + Spring Boot Admin `/admin`、SkyWalking 链路追踪、Druid 监控台（慢 SQL 100ms）。
@@ -292,15 +291,15 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 **架构优点**：
 
 1. **边界清晰**：算法服务无状态、前端不直连、适配层唯一通道+留痕——职责分离做得到位；
-2. **韧性设计贯穿全栈**：算法侧高德失败整单降级欧氏；后端侧 408 轮询/退避重试/30s 故障冷却；管理端地图加载失败降级 SVG 示意图；小程序 polyline 失败回退直线；mock-algorithm 带混沌场景支撑降级演练；
+2. **韧性设计贯穿全栈**：算法侧高德失败整单降级欧氏；后端侧 408 轮询/退避重试/30s 故障冷却；管理端地图加载失败降级 SVG 示意图；小程序 polyline 失败回退直线；
 3. **可审计性**：算法请求/响应 JSON 全量留痕（`transport_algorithm_request`）、调度方案含算法解释字段、算法求解本身全链路确定性（固定种子），人工审核环节嵌入闭环；
-4. **契约先行**：OpenAPI 契约 + 跨实现契约测试套件，使 mock / 自研 / 未来算法组交付物可插拔替换。
+4. **契约先行**：OpenAPI 契约 + 跨实现契约测试套件，使自研实现与未来算法组交付物可插拔替换。
 
 **已知局限与风险**：
 
 1. **BOM 残留**：RocketMQ、Flowable、Netty、weixin-java 等在 dependencies 中锁了版本但未挂载模块（`yudao-dependencies/pom.xml:37,49,72-86`），属上游裁剪不彻底，无碍运行但干扰阅读；
 2. **安全卫生**：小程序 `AMAP_MINI_KEY` 硬编码在仓库（`miniprogram/utils/config.js:33`，虽有"绑定 AppID"注释，仍建议记入审计）；本地环境短信验证码写死 9999、security mock 开启（`application-local.yaml:187-192,237-240`），须确保不进生产 profile；
-3. **文档时效性**：算法 `README.md` 标题停在 ortools-1.1.0（实际 haco-cps-1.4.1）；管理端 README 写 vite4（实际 Vite 8）；mock-algorithm 规模上限仍是旧 30 站（真实服务已放宽到 100）；
+3. **文档时效性**：算法 `README.md` 标题停在 ortools-1.1.0（实际 haco-cps-1.4.1）；管理端 README 写 vite4（实际 Vite 8）；
 4. **工程化缺口**：无 Maven Wrapper；DB 迁移无 Flyway，靠人工执行增量 SQL；小程序无 WebSocket，实时性靠 15s 轮询；WGS-84→GCJ-02 坐标转换未实现（接车载 GPS 前必须补，见 `docs/algorithm-integration.md`）；WebSocket sender 为 local，多实例部署时需切 redis/MQ；
 5. **空占位**：`operation / resource / settlement` 三个 controller/service 域仅有 `package-info.java`，是规划中的业务边界，尚未实现。
 
@@ -311,7 +310,6 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 | 路径 | 内容 |
 |---|---|
 | `algorithm/` | 生产算法服务（HACO-CPS + OR-Tools baseline） |
-| `mock-algorithm/` | 契约 mock + 混沌测试 |
 | `yudao-dependencies/` | 版本 BOM |
 | `yudao-framework/` | 16 个 starter |
 | `yudao-module-{system,infra,member,transport}/` | 业务模块，transport 为核心 |

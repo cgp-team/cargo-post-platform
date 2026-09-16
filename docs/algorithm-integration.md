@@ -124,7 +124,6 @@ ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用
   生效链路：服务器 `/opt/cargo-post/config/application-dev.yaml` 的 `yudao.transport.algorithm.base-url`
   为外部化字面量配置，优先级高于打包 `application.yaml` 的 `${ALGORITHM_BASE_URL:...}` 占位符——只改
   `.env`/`app.env` 不会生效，必须改该 yaml（或直接设 `YUDAO_TRANSPORT_ALGORITHM_BASEURL` 环境变量）。
-  `mock-algorithm` 服务保留，继续用于适配层混沌测试。
 
 ## 待算法组澄清
 

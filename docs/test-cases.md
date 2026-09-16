@@ -22,8 +22,7 @@
 
 | 场景 | 自动化位置 |
 |---|---|
-| 契约 Mock 五场景与幂等 | `mock-algorithm/tests`（pytest，19 例）；适配层侧由 `AlgorithmClientTest`（12 例，含 408 轮询、503 重试、422 兼容、413/400 不重试）覆盖 |
-| 契约验收（任意算法实现） | `mock-algorithm/tests/contract`（8 例，`ALGORITHM_BASE_URL` 参数化，可对自研/算法组镜像直接验收） |
+| 契约验收（任意算法实现） | `algorithm/tests/contract`（8 例，`ALGORITHM_BASE_URL` 参数化，可对自研/算法组镜像直接验收）；适配层侧由 `AlgorithmClientTest`（12 例，含 408 轮询、503 重试、422 兼容、413/400 不重试）覆盖 |
 | 自研算法求解器与距离提供方 | `algorithm/tests`（41 例：求解约束、矩阵缓存、QPS 限流退避、降级、双单位路径、segmentDuration） |
 | 结果合法性校验（归属/容量/时序/订单唯一） | `AlgorithmResultValidatorTest`（14 例） |
 | 适配层幂等（重复快照不重复建任务） | `AlgorithmAdapterTest`（5 例） |

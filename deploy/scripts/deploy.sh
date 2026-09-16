@@ -22,7 +22,6 @@ done
 compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 "${compose[@]}" config --quiet
 "${compose[@]}" pull --ignore-buildable
-"${compose[@]}" build mock-algorithm
 "${compose[@]}" build algorithm
 "${compose[@]}" up -d --remove-orphans
 

@@ -4,13 +4,12 @@ on:
   workflow_dispatch:
   push:
     # master 为正式部署分支；多段联运/真实公交线网开发分支也允许触发（便于演示前自动部署）
-    branches: [master, fix/haco-deadline-greedy-seed]
-    # 纯文档/小程序/CI/mock 算法的改动不部署任何内容，直接跳过整条流水线
+    branches: [master]
+    # 纯文档/小程序/CI 的改动不部署任何内容，直接跳过整条流水线
     paths-ignore:
       - 'docs/**'
       - 'miniprogram/**'
       - '.github/**'
-      - 'mock-algorithm/**'
 
 permissions:
   contents: read
@@ -390,7 +389,7 @@ jobs:
       # 自研算法服务（algorithm/，HACO-CPS）：代码更新时重建镜像并重启容器。
       # 后端接入已于 2026-08-30 切换到正式算法：服务器 /opt/cargo-post/config/application-dev.yaml
       # 的 yudao.transport.algorithm.base-url=http://127.0.0.1:18081（外部化 yaml 优先级高于 app.env 的
-      # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）；mock-algorithm(18080) 仅保留做混沌测试。
+      # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）。
       # 失败自动诊断：trap ERR 打印 docker/compose/端口/目录诊断，不裸 exit 1。
       - name: Build & deploy algorithm
         if: steps.changes.outputs.algorithm == 'true'

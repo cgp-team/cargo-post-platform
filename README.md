@@ -33,13 +33,13 @@
 - **订单业务**：客运、货运/生鲜、邮快件三类订单全状态流转，货运安全审核
 - **微信小程序**：「山乡巴士 · 站牌与车票」设计体系——商城下单、寄件、包裹轨迹与取件码、车来取货/送货实时提醒、实时公交、司机工作台（班次任务/装车核验/发车签收/收益）
 - **运力资源**：车辆/司机档案与人车绑定、证照/保险到期预警、站点线路班次
-- **基础设施**：CI 五项门禁 + dev 持续部署（self-hosted runner）、契约 Mock 与验收测试套件、分支保护
+- **基础设施**：CI 门禁 + dev 持续部署（self-hosted runner）、契约验收测试套件、分支保护
 
 ## 架构
 
 ```text
 管理端 / 微信小程序 ──> Nginx ──> 单体业务后端 ──> 算法适配层 ──> 路线规划算法服务
-                                  │                      （自研 OR-Tools / 契约 Mock）
+                                  │                      （自研 OR-Tools）
                                   ├── MySQL · Redis
                                   └── 高德距离测量 API（路网距离，可选降级）
 ```
@@ -54,7 +54,6 @@
 | 管理端 | Vue 3 · TypeScript · Element Plus · 百度地图 GL |
 | 小程序 | 微信原生小程序（仅调用 `/app-api`） |
 | 算法服务 | Python 3.11 · FastAPI · OR-Tools（pywrapcp）· Docker |
-| 算法 Mock | Python · FastAPI · pytest（契约 Mock / 混沌测试） |
 | 基础设施 | Docker Compose · Nginx · systemd · GitHub Actions |
 
 ## 快速开始
@@ -62,7 +61,7 @@
 环境要求：JDK 21 · Maven 3.9+ · Node.js 22 · pnpm · Python 3.12+ · Docker Compose v2
 
 ```bash
-# 1. 基础设施（MySQL / Redis / 算法服务与契约 Mock）
+# 1. 基础设施（MySQL / Redis / 算法服务）
 cp .env.example .env      # 修改占位密码；配置 AMAP_KEY 可启用路网距离
 docker compose --env-file .env -f deploy/docker-compose.yml up -d
 deploy/scripts/health-check.sh
@@ -88,8 +87,7 @@ yudao-server/              单体后端启动模块（装配 system、infra、tr
 yudao-module-transport/    客货邮业务模块（资源/订单/调度闭环/监控大盘/商品/算法适配层）
 yudao-ui/yudao-ui-admin-vue3/  管理端 Vue3 工程
 miniprogram/               微信小程序（商城、寄件、包裹、实时公交 + 司机工作台）
-algorithm/                 自研路线规划算法服务（FastAPI + OR-Tools，生产用）
-mock-algorithm/            契约 Mock 算法服务（混沌测试用）+ 契约验收测试套件
+algorithm/                 自研路线规划算法服务（FastAPI + OR-Tools）
 deploy/                    Compose、Nginx 示例、运维脚本、systemd 单元
 docs/                      需求、架构、契约、部署、数据库文档（索引见 docs/README.md）
 sql/                       MySQL 初始化脚本与增量迁移（sql/incremental/）

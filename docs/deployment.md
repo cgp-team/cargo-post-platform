@@ -82,7 +82,7 @@ SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NO
 
 部署流水线含两项提速机制（2026-08 起）：
 
-- **路径跳过**：`docs/`、`miniprogram/`、`.github/`、`mock-algorithm/` 的纯变更不触发部署；CI 门禁（`ci.yml`）自 2026-08-23 起改为「始终触发 + 变更探测按需跳过 job」（docs-only PR 也会产生 skipped 的必需检查，配合 master 分支保护可正常合并）。
+- **路径跳过**：`docs/`、`miniprogram/`、`.github/` 的纯变更不触发部署；CI 门禁（`ci.yml`）自 2026-08-23 起改为「始终触发 + 变更探测按需跳过 job」（docs-only PR 也会产生 skipped 的必需检查，配合 master 分支保护可正常合并）。
 - **部分构建**：`Detect changed areas` 步骤以「最近一次成功部署的 commit」为基准用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行（如纯 SQL 变更只跑迁移）；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
 
 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），因此部署 workflow 固定运行在服务器本机的 self-hosted runner（`runs-on: [self-hosted, cargo-post]`）上，构建与部署同机完成，无需 DEPLOY_* Secrets 与 SSH 通道。
