@@ -70,7 +70,7 @@ SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NO
 
 | 用途 | key 类型（高德控制台「服务平台」） | 配置位置 | 生效范围 |
 |---|---|---|---|
-| 小程序端「现实公交」站点层 | **微信小程序**（绑定 AppID `wx687e9bf8544ac559`） | `miniprogram/utils/config.js` 的 `AMAP_MINI_KEY`（客户端，绑定 AppID+域名，安全） | 首页/实时公交页的近公交站（`REAL_TRANSIT`） |
+| 小程序端「现实公交」站点层 | **微信小程序**（绑定 AppID `wx687e9bf8544ac559`） | 小程序仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) `utils/config.js` 的 `AMAP_MINI_KEY`（客户端，绑定 AppID+域名，安全） | 首页/实时公交页的近公交站（`REAL_TRANSIT`） |
 | 后端现实公交层 + 算法路网距离 | **Web 服务**（建议 IP 白名单填 `1.15.29.107`） | 服务器 `/opt/cargo-post-platform/.env` 的 `AMAP_KEY=`（算法容器同源）+ 后端 env | 后端 `AmapTransitProvider` 站点层；算法 `/distance` 从直线估算切驾车路网（路线预览/ETA/司机导航） |
 
 两种 key **不能互换**：把小程序 key 配到后端，高德返回 `USERKEY_PLAT_NOMATCH (10009)`（已实测）；反之亦然。
@@ -82,7 +82,7 @@ SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NO
 
 部署流水线含两项提速机制（2026-08 起）：
 
-- **路径跳过**：`docs/`、`miniprogram/`、`.github/` 的纯变更不触发部署；CI 门禁（`ci.yml`）自 2026-08-23 起改为「始终触发 + 变更探测按需跳过 job」（docs-only PR 也会产生 skipped 的必需检查，配合 master 分支保护可正常合并）。
+- **路径跳过**：`docs/`、`.github/` 的纯变更不触发部署（小程序已拆至 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) 仓库，不再经过本流水线）；CI 门禁（`ci.yml`）自 2026-08-23 起改为「始终触发 + 变更探测按需跳过 job」（docs-only PR 也会产生 skipped 的必需检查，配合 master 分支保护可正常合并）。
 - **部分构建**：`Detect changed areas` 步骤以「最近一次成功部署的 commit」为基准用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行（如纯 SQL 变更只跑迁移）；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
 
 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），因此部署 workflow 固定运行在服务器本机的 self-hosted runner（`runs-on: [self-hosted, cargo-post]`）上，构建与部署同机完成，无需 DEPLOY_* Secrets 与 SSH 通道。

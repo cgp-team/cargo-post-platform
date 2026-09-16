@@ -169,7 +169,7 @@ bus/detail?id → 复用 /bus/lines 按 busId 匹配车辆 → 进度 + 经停�
 - **算法 pytest 60 个**：plan/result、distance（矩阵/降级/缓存）、route（成功/不可达/缓存/malformed/并发）、contract。
 - **mock-algorithm 契约 8 个**。
 - **小程序 `node --check`**：全部 JS 语法。
-- **`miniprogram/tests/location.test.js`**：LocationService 12 场景（Node 直跑 mock wx）。
+- **小程序仓库 `tests/location.test.js`**（cargo-post-miniprogram）：LocationService 12 场景（Node 直跑 mock wx）。
 - **pre-push hook**：transport 测试 + 小程序 node check + 管理端 build。
 
 ## 八、当前缺失测试（审计结论）

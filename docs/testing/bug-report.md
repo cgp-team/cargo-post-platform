@@ -4,7 +4,7 @@
 
 ## BUG-001 [P1] 附近公交请求传 `undefined` 坐标参数 → 后端 400
 
-- **模块**：小程序 `miniprogram/utils/api.js` `getNearbyRealtimeBuses`
+- **模块**：小程序（cargo-post-miniprogram 仓库）`utils/api.js` `getNearbyRealtimeBuses`
 - **现象**：无精确定位时（农村/定位失败），`loadNearbyBusData` 传 `latitude/longitude/radius = undefined`，微信 `wx.request` 将 `undefined` 序列化为字符串 `"undefined"`，后端 `Method parameter 'latitude': Failed to convert ... 'java.lang.Double'; For input string: "undefined"` → 400。
 - **影响**：无定位用户附近公交功能报错（首页 console 报错，公交区不加载）。P0 边界（定位失败常见）。
 - **根因**：请求参数未过滤 undefined。
@@ -13,7 +13,7 @@
 
 ## BUG-002 [P1] 手动切换村庄后附近公交不刷新、district 不随切换更新
 
-- **模块**：小程序 `miniprogram/pages/index/index.js` `switchVillage`
+- **模块**：小程序（cargo-post-miniprogram 仓库）`pages/index/index.js` `switchVillage`
 - **现象**：用户手动切到"青山镇"，`currentVillage` 文本变了，但 `loadNearbyBusData` 未触发；且 district fallback 取自定位逆地理 `loc.district`，**不是手动选择的村庄** → 附近公交仍按旧条件/空。
 - **影响**：切换演示位置后看不到该区域公交（演示定位功能失效）。
 - **根因**：`switchVillage` 只改文本 + `loadHomeData`，不触发 nearby；`district` 来源未包含手动选择。

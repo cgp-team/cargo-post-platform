@@ -13,7 +13,7 @@
 - **OrderLifecycle**（`TransportOrderStatusEnum`）：已创建/待审核/待客户操作/待入池/已入池/已分配/已发车/已完成/已取消。
 - **ReviewStatus**（`ReviewStatusEnum`）：待审/通过/需客户操作/需人工/拒运。
 - **ServiceMode**（`ServiceModeEnum`）：上门/最近站/安全点/客户送站/站到站（取送分别判定）。
-- **ReasonCode**（`ReviewReasonCodeEnum`）：PROHIBITED_GOODS / DANGEROUS_GOODS / OVER_WEIGHT / OVER_SIZE / ROAD_UNREACHABLE / DETOUR_TOO_LARGE / PASSENGER_SERVICE_CONFLICT / NO_SAFE_HANDOFF_POINT / CUSTOMER_ACTION_REQUIRED / MANUAL_REVIEW_REQUIRED。**后端返回码，前端映射文案**（`miniprogram/utils/review.js`）。
+- **ReasonCode**（`ReviewReasonCodeEnum`）：PROHIBITED_GOODS / DANGEROUS_GOODS / OVER_WEIGHT / OVER_SIZE / ROAD_UNREACHABLE / DETOUR_TOO_LARGE / PASSENGER_SERVICE_CONFLICT / NO_SAFE_HANDOFF_POINT / CUSTOMER_ACTION_REQUIRED / MANUAL_REVIEW_REQUIRED。**后端返回码，前端映射文案**（小程序仓库 cargo-post-miniprogram 的 `utils/review.js`）。
 
 ## 规则引擎（`CargoReviewService`）
 | 规则 | 结果 |

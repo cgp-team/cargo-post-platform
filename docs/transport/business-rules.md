@@ -44,7 +44,7 @@
   当前公交线网无法覆盖等）。
 
 对应实现：后端只返回 `reviewStatus + reviewReasonCodes(+ message)`，
-前端 `miniprogram/utils/review.js` 统一映射文案，`send.js` 的 `_servicePointHint` / `_checkStationAccess`
+前端（小程序仓库 cargo-post-miniprogram）`utils/review.js` 统一映射文案，`send.js` 的 `_servicePointHint` / `_checkStationAccess`
 给出"送到哪个站点 / 一键改用就近站点"的操作入口。
 
 ## 5. 联运必须统筹时间，换乘站过远要留足交接时间

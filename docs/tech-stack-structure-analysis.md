@@ -54,7 +54,7 @@
 | 业务后端 | `yudao-server` + `yudao-module-*` + `yudao-framework` | Java 21 | Spring Boot 3.5.15（无 Spring Cloud） | 宿主机 systemd / 容器，端口 48080 |
 | 路径规划 | `algorithm/` | Python 3.11 | FastAPI 0.116 + OR-Tools 9.15 | Docker，127.0.0.1:18081 |
 | 管理端 | `yudao-ui/yudao-ui-admin-vue3/` | TypeScript / Node ≥20.19 | Vue 3.5 + Vite 8 + Element Plus 2.13 | Nginx 静态托管 |
-| 小程序 | `miniprogram/` | 原生微信小程序（无 npm） | 基础库 3.17.0 | 微信分发 |
+| 小程序 | 独立仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) | 原生微信小程序（无 npm） | 基础库 3.17.0 | 微信分发 |
 | 数据库 | `sql/` | MySQL 8 + Redis | — | Docker（127.0.0.1） |
 | 运维工具 | `tools/` | Python | — | 手动脚本 |
 
@@ -214,7 +214,7 @@ integration/algorithm/       # 算法服务适配层（唯一通道）
 - 路线 polyline **优先后端真实道路轨迹**（`/transport/bus/line-polyline`、`/transport/driver/route`），失败回退站点直线（`bus/index.js:339-367`）；
 - "现实公交"叠加层用高德小程序 SDK 查公交站 POI（`utils/transit-amap.js:19-42`），key 绑定 AppID；
 - **无 WebSocket**——实时性靠轮询（如公交车辆每 15s 刷新，`bus/index.js:10` 注释）；
-- 测试形态：纯 Node assert 直跑（`node miniprogram/tests/xxx.test.js`），10 个文件，含一个静态扫描 WXML 中 Vue 指令误用的lint式测试。
+- 测试形态：纯 Node assert 直跑（小程序仓库内 `node tests/xxx.test.js`），10 个文件，含一个静态扫描 WXML 中 Vue 指令误用的lint式测试。
 
 ## 6. 数据库与 SQL 资产
 
@@ -298,7 +298,7 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 **已知局限与风险**：
 
 1. **BOM 残留**：RocketMQ、Flowable、Netty、weixin-java 等在 dependencies 中锁了版本但未挂载模块（`yudao-dependencies/pom.xml:37,49,72-86`），属上游裁剪不彻底，无碍运行但干扰阅读；
-2. **安全卫生**：小程序 `AMAP_MINI_KEY` 硬编码在仓库（`miniprogram/utils/config.js:33`，虽有"绑定 AppID"注释，仍建议记入审计）；本地环境短信验证码写死 9999、security mock 开启（`application-local.yaml:187-192,237-240`），须确保不进生产 profile；
+2. **安全卫生**：小程序 `AMAP_MINI_KEY` 硬编码在仓库（cargo-post-miniprogram 的 `utils/config.js:33`，虽有"绑定 AppID"注释，仍建议记入审计）；本地环境短信验证码写死 9999、security mock 开启（`application-local.yaml:187-192,237-240`），须确保不进生产 profile；
 3. **文档时效性**：算法 `README.md` 标题停在 ortools-1.1.0（实际 haco-cps-1.4.1）；管理端 README 写 vite4（实际 Vite 8）；
 4. **工程化缺口**：无 Maven Wrapper；DB 迁移无 Flyway，靠人工执行增量 SQL；小程序无 WebSocket，实时性靠 15s 轮询；WGS-84→GCJ-02 坐标转换未实现（接车载 GPS 前必须补，见 `docs/algorithm-integration.md`）；WebSocket sender 为 local，多实例部署时需切 redis/MQ；
 5. **空占位**：`operation / resource / settlement` 三个 controller/service 域仅有 `package-info.java`，是规划中的业务边界，尚未实现。
@@ -315,7 +315,7 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 | `yudao-module-{system,infra,member,transport}/` | 业务模块，transport 为核心 |
 | `yudao-server/` | 启动壳 + 配置 + Dockerfile |
 | `yudao-ui/yudao-ui-admin-vue3/` | 管理端 SPA |
-| `miniprogram/` | 原生微信小程序 |
+| 小程序仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) | 原生微信小程序（已拆分独立仓库） |
 | `sql/mysql/` + `sql/incremental/` | DDL 源 + V001–V020 人工增量 |
 | `deploy/` | docker-compose / nginx / systemd |
 | `tools/` | 路网预取与线网 SQL 生成脚本 |
