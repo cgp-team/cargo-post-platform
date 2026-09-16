@@ -1,6 +1,6 @@
 # 客货邮运营管理平台（Cargo Post Platform）
 
-[![CI](https://github.com/Ferron2333/cargo-post-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ferron2333/cargo-post-platform/actions/workflows/ci.yml)
+[![CI](https://github.com/cgp-team/cargo-post-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/cgp-team/cargo-post-platform/actions/workflows/ci.yml)
 ![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?logo=springboot)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs)
