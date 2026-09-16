@@ -7,7 +7,7 @@
 ![MySQL](https://img.shields.io/badge/MySQL-8.4-4479A1?logo=mysql)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-面向县域**客运、货运、生鲜与邮快件协同运营**的一体化平台：管理端（Vue 3）+ 微信小程序（乘客/司机）+ 单体业务后端（Spring Boot）+ **自研路线规划算法服务**（OR-Tools，高德路网距离）。
+面向县域**客运、货运、生鲜与邮快件协同运营**的一体化平台：管理端（Vue 3）+ 单体业务后端（Spring Boot）+ **自研路线规划算法服务**（OR-Tools，高德路网距离）。微信小程序端（乘客/司机）已拆分为独立仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram)。
 
 覆盖完整业务闭环：村民小程序下单/寄件 → 订单归集入池 → 智能/手工派单（路线优化）→ 方案审核下发 → 司机班次执行与位置上报 → 包裹追踪与取件码核销 → 运营监控与结算估算。
 
@@ -21,9 +21,7 @@
   <img src="docs/images/admin-dispatch.jpg" width="32%" alt="调度工作台">
 </p>
 
-**微信小程序**：首页 · 客户功能 · 司机界面
-
-<img src="docs/images/miniprogram.png" width="86%" alt="小程序：首页 / 客户功能 / 司机界面">
+**微信小程序**：截图与说明见 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) 仓库 README。
 
 ## 功能特性
 
@@ -31,17 +29,17 @@
 - **算法服务**：自研 OR-Tools 路线规划（容量/时序/闭环约束、优先单车），FastAPI 契约接口 + 高德驾车路网距离（故障自动降级直线）；适配层快照幂等、超时重试、结果校验、规模预检
 - **车辆监控**：GIS 实时监控（司机上报位置优先，插值兜底）、轨迹回放、数据大盘
 - **订单业务**：客运、货运/生鲜、邮快件三类订单全状态流转，货运安全审核
-- **微信小程序**：「山乡巴士 · 站牌与车票」设计体系——商城下单、寄件、包裹轨迹与取件码、车来取货/送货实时提醒、实时公交、司机工作台（班次任务/装车核验/发车签收/收益）
+- **微信小程序**（独立仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram)）：「山乡巴士 · 站牌与车票」设计体系——商城下单、寄件、包裹轨迹与取件码、车来取货/送货实时提醒、实时公交、司机工作台（班次任务/装车核验/发车签收/收益）
 - **运力资源**：车辆/司机档案与人车绑定、证照/保险到期预警、站点线路班次
 - **基础设施**：CI 门禁 + dev 持续部署（self-hosted runner）、契约验收测试套件、分支保护
 
 ## 架构
 
 ```text
-管理端 / 微信小程序 ──> Nginx ──> 单体业务后端 ──> 算法适配层 ──> 路线规划算法服务
-                                  │                      （自研 OR-Tools）
-                                  ├── MySQL · Redis
-                                  └── 高德距离测量 API（路网距离，可选降级）
+管理端 / 微信小程序（独立仓库）──> Nginx ──> 单体业务后端 ──> 算法适配层 ──> 路线规划算法服务
+                                            │                      （自研 OR-Tools）
+                                            ├── MySQL · Redis
+                                            └── 高德距离测量 API（路网距离，可选降级）
 ```
 
 边界约束：前端不直连算法服务；算法服务不持有业务数据库凭据；所有调度状态变更可审计。
@@ -52,7 +50,7 @@
 |---|---|
 | 后端 | JDK 21 · Spring Boot 3.5 · Spring Security 6 · MyBatis Plus · MySQL 8.4 · Redis 7 |
 | 管理端 | Vue 3 · TypeScript · Element Plus · 百度地图 GL |
-| 小程序 | 微信原生小程序（仅调用 `/app-api`） |
+| 小程序 | 微信原生小程序（仅调用 `/app-api`），仓库：[cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) |
 | 算法服务 | Python 3.11 · FastAPI · OR-Tools（pywrapcp）· Docker |
 | 基础设施 | Docker Compose · Nginx · systemd · GitHub Actions |
 
@@ -77,7 +75,9 @@ mvn -pl yudao-server -am spring-boot:run
 # 4. 管理端
 cd yudao-ui/yudao-ui-admin-vue3 && pnpm install --frozen-lockfile && pnpm dev
 
-# 5. 小程序：微信开发者工具导入 miniprogram/（开发版勾选「不校验合法域名」）
+# 5. 小程序：克隆 cargo-post-miniprogram 仓库，微信开发者工具导入其根目录
+#    （开发版勾选「不校验合法域名」），详见该仓库 README
+git clone https://github.com/cgp-team/cargo-post-miniprogram.git
 ```
 
 ## 项目结构
@@ -86,12 +86,13 @@ cd yudao-ui/yudao-ui-admin-vue3 && pnpm install --frozen-lockfile && pnpm dev
 yudao-server/              单体后端启动模块（装配 system、infra、transport、member）
 yudao-module-transport/    客货邮业务模块（资源/订单/调度闭环/监控大盘/商品/算法适配层）
 yudao-ui/yudao-ui-admin-vue3/  管理端 Vue3 工程
-miniprogram/               微信小程序（商城、寄件、包裹、实时公交 + 司机工作台）
 algorithm/                 自研路线规划算法服务（FastAPI + OR-Tools）
 deploy/                    Compose、Nginx 示例、运维脚本、systemd 单元
 docs/                      需求、架构、契约、部署、数据库文档（索引见 docs/README.md）
 sql/                       MySQL 初始化脚本与增量迁移（sql/incremental/）
 ```
+
+微信小程序在独立仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram)（商城、寄件、包裹、实时公交 + 司机工作台）。
 
 ## 文档
 
@@ -101,7 +102,7 @@ sql/                       MySQL 初始化脚本与增量迁移（sql/incrementa
 | [架构设计](docs/architecture.md) | 总体架构、模块边界、调用约束 |
 | [算法对接](docs/algorithm-integration.md) | 路线规划算法契约与自研实现说明 |
 | [数据库](docs/database.md) | 数据库脚本与增量迁移 |
-| [小程序](docs/miniprogram.md) | 小程序页面、登录链路、联调步骤 |
+| [小程序](https://github.com/cgp-team/cargo-post-miniprogram) | 小程序页面、登录链路、联调步骤（独立仓库 README） |
 | [部署](docs/deployment.md) | 部署、CI/CD、Nginx、备份恢复 |
 | [完整索引](docs/README.md) | 全部文档索引 |
 

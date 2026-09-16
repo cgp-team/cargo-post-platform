@@ -21,8 +21,8 @@ curl http://localhost:48080/admin-api/infra/health
 
 ### 1.2 确保小程序已配置好
 
-- 微信开发者工具已导入 miniprogram/ 目录
-- miniprogram/config.js 或 project.config.json 中的 API 地址指向后端服务器
+- 微信开发者工具已导入小程序仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) 根目录
+- 小程序仓库 `utils/config.js` 中的 API 地址指向后端服务器
 - 如使用体验版/正式版，需在微信公众平台配置服务器域名白名单
 
 ### 1.3 确保已有演示数据

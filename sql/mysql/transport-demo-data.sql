@@ -135,7 +135,7 @@ INSERT IGNORE INTO transport_postal_order (id, order_id, mail_no, carrier_code, 
 
 -- ---------- 商城商品 ----------
 -- 排序：农产品在前（首页推荐只取前 4 个 → 首页展示农产品），重庆特产在后（id 7~12，商城列表可见）。
--- 特产照片：随小程序包发布的实拍图（miniprogram/images/products/*.jpg）+ 后端图片 URL，见 utils/product-img.js。
+-- 特产照片：随小程序包发布的实拍图（小程序仓库 cargo-post-miniprogram 的 images/products/*.jpg）+ 后端图片 URL，见其 utils/product-img.js。
 -- 农产品商品（演示种子数据）
 --
 -- ⚠️ 这里必须用 INSERT IGNORE，**不能** DELETE 后再 INSERT：

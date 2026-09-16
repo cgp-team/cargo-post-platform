@@ -20,7 +20,7 @@
 
 - **Java 单体**（yudao）：`yudao-module-transport` 承载全部业务（调度/审核/监控/司机端/实时公交）。
 - **Python 算法服务**（`algorithm/`）：OR-Tools 求解器（公交骨架 + 货运绕行插入）、高德路网/polyline。
-- **小程序**（`miniprogram/`）：寄货/包裹/实时公交/司机工作台。
+- **小程序**（独立仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram)）：寄货/包裹/实时公交/司机工作台。
 - **管理端**（`yudao-ui-admin-vue3/`）：站点/车辆/线路/班次/订单池/调度/监控/模拟控制。
 
 ## 四、核心链路（全闭环）
