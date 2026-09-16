@@ -24,9 +24,6 @@ echo "Checking MySQL..."
 echo "Checking Redis..."
 "${compose[@]}" exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning ping | grep -q PONG
 
-echo "Checking Mock algorithm..."
-curl --fail --silent --show-error "http://127.0.0.1:${MOCK_ALGORITHM_PORT:-18080}/health" >/dev/null
-
 echo "Checking Algorithm..."
 curl --fail --silent --show-error "http://127.0.0.1:${ALGORITHM_PORT:-18081}/health" >/dev/null
 

@@ -16,7 +16,7 @@ import java.time.Duration;
 @Data
 public class AlgorithmProperties {
 
-    /** 算法服务基础地址，如 http://127.0.0.1:18081（自研 algorithm 容器宿主端口；mock-algorithm 18080 仅供混沌测试） */
+    /** 算法服务基础地址，如 http://127.0.0.1:18081（自研 algorithm 容器宿主端口） */
     @NotBlank(message = "算法服务地址不能为空")
     private String baseUrl;
 

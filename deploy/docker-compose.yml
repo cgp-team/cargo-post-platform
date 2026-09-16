@@ -58,23 +58,8 @@ services:
   #     timeout: 5s
   #     retries: 10
 
-  mock-algorithm:
-    build:
-      context: ../mock-algorithm
-      dockerfile: Dockerfile
-    image: cargo-post/mock-algorithm:0.1.0
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${MOCK_ALGORITHM_PORT:-18080}:8000" # 仅本机：只允许后端内网访问
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  # 编程组自研路线规划算法服务（生产候选，ortools-1.1.0）。mock-algorithm 保留做适配层混沌测试。
+  # 自研路线规划算法服务（ortools-1.1.0）。
   # 业务后端已于 2026-08-30 切到本服务：application-dev.yaml base-url=http://127.0.0.1:18081（宿主端口）。
-  # mock-algorithm 保留做适配层混沌测试。
   algorithm:
     build:
       context: ../algorithm

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Scenario(str, Enum):
-    """Mock 混沌测试字段；真实算法接受但忽略（契约标注"真实算法可忽略"）。"""
+    """契约保留的混沌测试字段；真实算法接受但忽略（契约标注"真实算法可忽略"）。"""
 
     SUCCESS = "SUCCESS"
     PARTIAL_REJECTION = "PARTIAL_REJECTION"

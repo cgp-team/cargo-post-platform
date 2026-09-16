@@ -1,6 +1,6 @@
 """客货邮路线规划算法服务（编程组自研，OR-Tools 求解器）。
 
-契约见 docs/api/algorithm-api.yaml；与 mock-algorithm 的关系见 README.md。
+契约见 docs/api/algorithm-api.yaml。
 """
 
 import logging
@@ -222,7 +222,7 @@ def create_plan(request: PlanRequest):
     if validation_error is not None:
         return validation_error
 
-    # scenario 为 Mock 专属混沌字段，真实算法接受但忽略（契约标注"真实算法可忽略"）。
+    # scenario 为契约保留的混沌测试字段，真实算法接受但忽略（契约标注"真实算法可忽略"）。
     # 本规模求解远低于契约 10 秒时限，同步返回；若未来出现超时，按契约先落 pending
     # 记录并返回 408，业务侧凭 requestId 轮询 /api/v1/result/{requestId}。
     try:
