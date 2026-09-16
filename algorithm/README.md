@@ -2,7 +2,7 @@
 
 编程组自研的路线规划算法服务（生产候选）。算法组镜像迟迟未交付，本服务按已对齐的接口契约
 （`docs/api/algorithm-api.yaml`）自研实现，求解器使用 Google OR-Tools（pywrapcp 路由模型）。
-契约未限定求解器（`docs/algorithm-doc-review.md` 差异表"求解算法：契约不限定"），因此
+契约未限定求解器（`docs/internal/algorithm-doc-review.md` 差异表"求解算法：契约不限定"），因此
 `algorithmVersion` 以 `ortools-` 前缀区别于算法组 ACO 方案。
 
 ## 接口
