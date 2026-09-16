@@ -20,7 +20,7 @@
 - 参数错误 400（`INVALID_INPUT`）：未知站点引用、客运订单缺上下车站、无可用车辆等。
 - 无解统一 `200 + status=infeasible + reasonCode`：总需求超总容量 → `OVER_CAPACITY`；
   其余不可行 → `TIMING_CONFLICT`；不返回部分方案，不使用 `PARTIAL_ONLY`。
-- `scenario` 为 mock 专属混沌字段，本服务接受但忽略（契约标注"真实算法可忽略"）。
+- `scenario` 为契约保留的混沌测试字段，本服务接受但忽略（契约标注"真实算法可忽略"）。
 - `algorithmConfig`（ACO 超参数）全部接受但不参与求解，超出建议范围时响应带 `warnings` 不拒绝。
 - 请求体省略的可选字段一律按"没有"处理，不报参数错误。
 
@@ -53,20 +53,12 @@ python3 -m venv .venv
 # 本服务测试（契约套件进程内自验 + 求解器单测）
 cd algorithm && .venv/bin/python -m pytest tests -q
 
-# 用 mock 仓库的契约验收套件跨进程验收本服务（先按上文起 uvicorn）
-cd mock-algorithm && ALGORITHM_BASE_URL=http://127.0.0.1:18081 .venv/bin/python -m pytest tests/contract -q
+# 跨进程验收（先按上文起 uvicorn）：ALGORITHM_BASE_URL 指向运行中的服务
+cd algorithm && ALGORITHM_BASE_URL=http://127.0.0.1:18081 .venv/bin/python -m pytest tests/contract -q
 ```
 
-`tests/contract/test_contract.py` 复刻自 mock-algorithm 并逐条保持一致，未设置
-`ALGORITHM_BASE_URL` 时回退到本服务进程内 TestClient 自验。
-
-## 与 mock-algorithm 的关系
-
-- `mock-algorithm/` 保留不动：契约壳参考实现 + 混沌测试（scenario 字段）+ 适配层联调。
-- `algorithm/` 为生产候选实现：同一契约、真实求解。二者接口行为一致（幂等、错误码、轮询语义），
-  差异仅在求解结果（mock 为确定性伪方案，本服务为真实寻优）与版本标识。
-- 上线切换：业务后端将 `ALGORITHM_BASE_URL` 从 `http://mock-algorithm:8000` 改为
-  `http://algorithm:8000` 即可，适配层无需改动。
+`tests/contract/test_contract.py` 未设置 `ALGORITHM_BASE_URL` 时回退到本服务进程内
+TestClient 自验；设置后对运行中的服务做跨进程契约验收。
 
 ## Docker
 

@@ -15,7 +15,7 @@ info:
     - 无解语义存在待澄清矛盾：Q10 回复为 200 + status=infeasible，
       Q12 回复将 422 标注为业务不可行。适配层需同时兼容两种返回。
 servers:
-  - url: http://mock-algorithm:8000
+  - url: http://algorithm:8000
     description: Docker 内部开发地址
 paths:
   /api/v1/plan:

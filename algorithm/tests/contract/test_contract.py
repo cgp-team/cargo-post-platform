@@ -1,4 +1,4 @@
-"""路线规划算法服务契约验收测试（复刻自 mock-algorithm/tests/contract，逐条保持一致）。
+"""路线规划算法服务契约验收测试。
 
 用途：对任意声称实现契约（docs/api/algorithm-api.yaml）的算法服务做接入验收。
 
@@ -9,8 +9,8 @@
     # 未设置环境变量时回退到本服务进程内 TestClient 自验（CI 默认路径）
     pytest tests/contract -q
 
-注意：scenario 驱动的混沌用例（TIMEOUT / NO_FEASIBLE_SOLUTION 等）为 Mock 专属，
-保留在 mock-algorithm/tests/test_main.py，不属于本契约套件。
+注意：契约保留 `scenario` 混沌字段（TIMEOUT / NO_FEASIBLE_SOLUTION 等），真实算法接受但忽略；
+对应混沌行为用例已随 mock 服务移除，不属于本契约套件。
 """
 
 from __future__ import annotations
