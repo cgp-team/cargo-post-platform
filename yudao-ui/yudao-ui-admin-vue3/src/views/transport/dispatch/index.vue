@@ -40,14 +40,6 @@
         <Icon icon="ep:pointer" />手工派单
       </el-button>
       <el-button type="primary" v-hasPermi="['transport:dispatch:smart-plan']" @click="openSmart"><Icon icon="ep:magic-stick" />智能派单</el-button>
-      <el-button
-        type="success"
-        v-hasPermi="['transport:dispatch:smart-plan']"
-        :loading="demoRunning"
-        @click="runOneClickDemo"
-      >
-        <Icon icon="ep:video-play" />一键演示（归集→调度→审核）
-      </el-button>
       <!-- 任务窗口：本批只排这个时间段的任务；窗口开始时车辆已开过的站不会再派它掉头回去取货 -->
       <el-time-picker
         v-model="taskWindowRange"
@@ -470,14 +462,13 @@ import * as StationApi from '@/api/transport/station'
 import * as VehicleApi from '@/api/transport/vehicle'
 import { Dialog } from '@/components/Dialog'
 import DispatchVisualDialog from './DispatchVisualDialog.vue'
-// 一键演示需要"确认框 + 步骤 loading 文案"：按项目约定显式引入（不做全局挂载）
 import { ElLoading, ElMessageBox } from 'element-plus'
 
 defineOptions({ name: 'TransportDispatch' })
 
 const message = useMessage()
 
-// 调度结果可视化：一键演示/一键智能调度后就地展开（任务段时间线 + 地图路线 + ▶播放）
+// 调度结果可视化：一键智能调度后就地展开（任务段时间线 + 地图路线 + ▶播放）
 const visualVisible = ref(false)
 const visualPlanIds = ref<number[]>([])
 const openVisual = (planIds: number[]) => {
@@ -539,7 +530,7 @@ const vehicleName = (id?: number) => {
   if (id === undefined) return '-'
   const v = vehicleList.value.find((x) => x.id === id)
   if (!v) return id
-  // 带上绑定司机：现场演示时一眼看到"这车谁开"，司机端就用这个账号登录
+  // 带上绑定司机：一眼看到"这车谁开"，司机端就用这个账号登录
   return v.driverName ? `${v.plateNo}（${v.driverName}）` : v.plateNo
 }
 const loadSimpleLists = async () => {
@@ -565,7 +556,7 @@ type PoolQueryParams = {
   orderType?: number
 }
 // 默认不带状态过滤：刚在「订单管理」审核通过的订单是「待入池(8)」，若默认只看「已入池(1)」，
-// 管理员会以为订单没进来（演示第一屏就断）。默认展示全部流转态，可按状态再筛。
+// 管理员会以为订单没进来。默认展示全部流转态，可按状态再筛。
 const poolQuery = reactive<PoolQueryParams>({ pageNo: 1, pageSize: 10, status: undefined, orderType: undefined })
 
 const getPoolList = async () => {
@@ -802,9 +793,9 @@ const submitSmart = async () => {
 
 /**
  * 一键智能调度：后端自动选场站 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
- * 进度条按阶段演示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
+ * 进度条按阶段展示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
  */
-/** 一键调度最多连出几套方案（订单池里可能有多个片区：重庆邮电大学片区 + 成都片区…） */
+/** 一键调度最多连出几套方案（订单池里可能有多个片区，跨片区订单分批出方案） */
 const MAX_AUTO_ROUNDS = 4
 /** 订单池中「已入池(待调度)」订单数 */
 const pooledTotal = async () => {
@@ -877,66 +868,6 @@ const viewPlan = (planId: number) => {
   smartVisible.value = false
   message.info(`方案 #${planId} 已生成，可在下方「调度方案」列表查看详情`)
   getPlanList()
-}
-
-/**
- * 一键演示：归集全部待入池 → 一键智能调度 → 自动审核通过。
- *
- * 刻意**不做**发车核验：核验与发车留给司机端演示（扫码装车 → 发车 → 到站妥投），
- * 保证"管理员调度 / 司机执行"的分工在演示里完整呈现。管理员若要代核验，
- * 可在下方「调度方案」列表里对单台车执行发车核验（原入口保留）。
- * 每一步都复用正式接口与权限校验，不是特制后门。
- */
-const demoRunning = ref(false)
-const runOneClickDemo = async () => {
-  try {
-    await ElMessageBox.confirm(
-      '将依次执行：① 归集全部「待入池」订单 ② 一键智能调度（自动选场站/车辆） ③ 方案审核通过。\n\n发车核验与司机发车留给司机端演示（扫码装车 → 发车 → 到站妥投）。是否继续？',
-      '一键演示',
-      { type: 'warning', confirmButtonText: '开始演示', cancelButtonText: '取消' }
-    )
-  } catch (e) {
-    return // 用户取消
-  }
-  demoRunning.value = true
-  const loading = ElLoading.service({ text: '① 归集订单入池…', background: 'rgba(0,0,0,0.15)' })
-  try {
-    // ① 归集全部待入池订单
-    const collected = await DispatchApi.collectOrders({ all: true })
-    loading.setText(`① 已归集 ${collected} 单，② 正在按片区智能调度…`)
-    getPoolList()
-    // ② 一键智能调度（按片区分批：重邮片区一套、成都片区一套…；后端自动选场站与候选车辆）
-    const planIds = await runAutoPlans((text) => loading.setText(`② ${text}`))
-    // ③ 方案审核通过（每套方案都审）
-    for (const planId of planIds) {
-      loading.setText(`③ 正在审核方案 #${planId}…`)
-      await DispatchApi.reviewDispatchPlan({ planId, approve: true, reason: '一键演示自动审核通过' })
-    }
-    // ③.5 预热真实道路轨迹：把本批订单/方案涉及的站间路线取回并落库，
-    //      可视化里就不会出现「两站直线相连」（配额未恢复时返回 0，如实提示，不影响后续步骤）
-    loading.setText('③.5 正在预热真实道路轨迹（站间路线取回并落库）…')
-    const prefetched = await DispatchApi.prefetchRoadGeometry().catch(() => 0)
-    // ④ 演示态：把这一批订单放回「待入池」，方便反复演示同一批订单
-    //   （生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后此处为空操作：
-    //    调度后的订单不再出现在订单池，除非显式打回重新派送）
-    loading.setText('④ 演示态：订单放回待入池（方便重复演示）…')
-    await DispatchApi.recycleDemoPool(planIds).catch(() => 0)
-    const plan = await DispatchApi.getDispatchPlan(planIds[0])
-    loading.close()
-    await ElMessageBox.alert(
-      `归集订单：${collected} 单\n生成方案：${planIds.map((id) => '#' + id).join('、')}（共 ${planIds.length} 套，按片区分别成方案）\n首套方案：订单 ${plan.orderCount ?? '-'} 单 / 车辆 ${plan.vehicleCount ?? '-'} 台 / 场站 ${plan.depotStationName || '自动选择'}\n真实道路轨迹：本次取回并落库 ${prefetched} 段（未取到的段在可视化里显示「真实路线获取中」，会自动重试）\n\n接下来：关闭本弹窗可看「调度结果可视化」（任务段时间线 + 地图路线 + ▶播放）。\n司机端工作台：扫码装车 → 发车 → 到站妥投；用户端「快递」页可看到车辆动态与「车快到了」提醒。`,
-      '调度完成（发车留给司机端）',
-      { type: 'success', confirmButtonText: '知道了' }
-    )
-    getPlanList()
-    openVisual(planIds)
-  } catch (e) {
-    loading.close()
-    // 业务错误已由 axios 统一提示；这里补充语义化说明，便于现场判断卡在哪一步
-    message.error('一键演示中断：请确认存在「待入池」订单且后台已配置可用车辆（详见列表与上一条错误提示）')
-  } finally {
-    demoRunning.value = false
-  }
 }
 
 /**

@@ -20,8 +20,6 @@ public class AppBusNearbyRespVO {
     public static final String STATUS_NO_LOCATION = "NO_LOCATION";
     /** 数据来源：真实司机上报 */
     public static final String SOURCE_REAL = "REAL";
-    /** 数据来源：模拟插值 */
-    public static final String SOURCE_SIMULATED = "SIMULATED";
     /** 整体数据来源：无车辆 */
     public static final String SOURCE_NONE = "NONE";
 
@@ -37,7 +35,7 @@ public class AppBusNearbyRespVO {
     @Schema(description = "附近站点关联线路（无运营车辆也返回，供前端展示\"该区域有哪些线路/不在运营\"）")
     private List<NearbyLine> lines;
 
-    @Schema(description = "整体数据来源：REAL（含真实车辆）/ MIXED / SIMULATED / NONE")
+    @Schema(description = "整体数据来源：REAL（含真实车辆）/ NONE")
     private String dataSource;
 
     @Schema(description = "定位级别：PRECISE / APPROXIMATE / DISTRICT / UNKNOWN")
@@ -109,10 +107,10 @@ public class AppBusNearbyRespVO {
         @Schema(description = "纬度")
         private Double latitude;
 
-        @Schema(description = "位置数据来源：REAL=真实上报 / SIMULATED=模拟插值")
+        @Schema(description = "位置数据来源：REAL=真实上报 / REAL_STALE=上报已过期")
         private String dataSource;
 
-        @Schema(description = "位置新鲜度：REAL_FRESH(5min内真实) / REAL_STALE / SIMULATED / NO_LOCATION")
+        @Schema(description = "位置新鲜度：REAL_FRESH(5min内真实) / REAL_STALE / NO_LOCATION")
         private String locationSource;
 
         @Schema(description = "当前站点（无可靠判断为 null）")

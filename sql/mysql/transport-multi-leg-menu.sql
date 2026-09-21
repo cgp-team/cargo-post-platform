@@ -2,8 +2,8 @@
 -- 执行：mysql -u root -p ruoyi-vue-pro < sql/mysql/transport-multi-leg-menu.sql
 -- 幂等：INSERT IGNORE，可重复执行。
 --
--- 菜单编号区间说明：6800-6919 已被客货邮基础菜单占用，6920/6922 为「开发者中心/模拟运营」
--- （见 transport-schema-incremental.sql），故本文件使用 6930-6933，避免编号冲突。
+-- 菜单编号区间说明：6800-6919 已被客货邮基础菜单占用（6915/6920-6922 原「模拟运营/开发者中心」已下线），
+-- 故本文件使用 6930-6933，避免编号冲突。
 
 -- 用 ON DUPLICATE KEY UPDATE 而非 INSERT IGNORE：重复执行时修正名称/权限（历史误执行留下的占位名会被覆盖）
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES

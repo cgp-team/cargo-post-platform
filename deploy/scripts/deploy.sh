@@ -14,7 +14,7 @@ set -a
 source "${ENV_FILE}"
 set +a
 
-required=(DB_NAME DB_USER DB_PASSWORD REDIS_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD ALGORITHM_BASE_URL)
+required=(DB_NAME DB_USER DB_PASSWORD REDIS_PASSWORD ALGORITHM_BASE_URL)
 for name in "${required[@]}"; do
   [[ -n "${!name:-}" ]] || { echo "Required environment variable is empty: ${name}" >&2; exit 2; }
 done

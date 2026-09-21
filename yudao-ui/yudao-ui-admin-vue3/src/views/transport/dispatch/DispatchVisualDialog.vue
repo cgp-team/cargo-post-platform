@@ -22,10 +22,10 @@
       </div>
 
       <div class="viz-body">
-        <!-- 左：地图（加载失败 → 按真实坐标画线路示意图，演示不会中断） -->
+        <!-- 左：地图（加载失败 → 按真实坐标画线路示意图，展示不会中断） -->
         <div class="viz-map-wrap">
           <div ref="mapRef" class="viz-map"></div>
-          <!-- 地图未就绪 / 手动切到示意图 / 站点缺坐标时，用真实坐标画线路示意图覆盖在上层，演示不中断 -->
+          <!-- 地图未就绪 / 手动切到示意图 / 站点缺坐标时，用真实坐标画线路示意图覆盖在上层，展示不中断 -->
           <svg
             v-if="!mapReady || showSchematic"
             class="viz-svg viz-svg-overlay"
@@ -95,7 +95,7 @@
             该方案暂无可用真实道路轨迹（缺站点经纬度，或高德路网不可用）——已按"不画直线"处理。
             请在「站点管理」补齐站点经纬度，并确认后端已配置高德 key 后重新生成方案。
           </div>
-          <!-- 车辆配色图例：演示时一眼看清"哪条线是哪台车" -->
+          <!-- 车辆配色图例：一眼看清"哪条线是哪台车" -->
           <div v-if="visibleRoutes.length" class="viz-vehicle-legend">
             <div
               v-for="r in visibleRoutes"
@@ -218,7 +218,7 @@
               本方案暂无订单运输链（或该订单还未生成运输段）
             </div>
 
-            <!-- 行程链：同一台车的订单按时间先后串成一条连续线路（演示主线：346 司机本职跑线 + 途中取派货） -->
+            <!-- 行程链：同一台车的订单按时间先后串成一条连续线路（司机本职跑线 + 途中取派货） -->
             <div v-if="journeyChains.length" class="journey-wrap">
               <div class="journey-title">各车行程链（订单一段接一段，按先后）</div>
               <div
@@ -348,7 +348,7 @@ interface RouteView {
   stops: RouteStop[]
   /** 与 stops 下标对齐的可见坐标点（缺坐标的站会被跳过） */
   locatedStops: { stop: RouteStop; lng: number; lat: number }[]
-  /** 该车司机（姓名 + 手机号）：现场演示要按手机号登录司机端，直接展示省得对不上 */
+  /** 该车司机（姓名 + 手机号）：司机端按手机号登录，直接展示省得对不上 */
   driverText: string
   distanceKm: number
   distanceText: string
@@ -379,7 +379,7 @@ const drivers = ref<DriverApi.DriverVO[]>([])
 const topologies = ref<TopologyApi.OrderTopologyVO[]>([])
 
 /**
- * 车辆配色：每台车一条线、颜色互不相同，演示时一眼能分清（白+蓝主题下 12 色高对比）。
+ * 车辆配色：每台车一条线、颜色互不相同，一眼能分清（白+蓝主题下 12 色高对比）。
  * 颜色数量 ≥ 常见车队规模，超出后循环（并在图例里标出）。
  */
 const ROUTE_COLORS = [
@@ -546,7 +546,7 @@ const selectJourney = (key: string) => {
  * 取某段运输段的真实道路折线。
  *
  * 库里有 AMAP 轨迹就用库里的；没有就按需向后端补一次路网（10 分钟缓存）。
- * **补不到时返回空数组——绝不回退成"两点直连"**：演示里那条斜穿城市的直线就是这么来的，
+ * **补不到时返回空数组——绝不回退成"两点直连"**：那条斜穿城市的直线就是这么来的，
  * 需求明确要求"把直线去掉"，所以缺路网数据的段宁可不画（列表里标注"缺路网轨迹"）。
  */
 const resolveLegRoad = (leg: TopologyApi.TopologyLeg): { lng: number; lat: number }[] => {
@@ -667,7 +667,7 @@ const ensureLegRoad = async (key: string, legId: number | undefined, fromLng: nu
 const mapRoutes = computed<RouteView[]>(() => {
   if (panelTab.value === 'order') {
     // 选了行程链 → 画这台车"订单一段接一段"的整条连续线路；
-    // 选了单张订单 → 画该单分段；都没选 → 画全部车辆的连续线路（演示主线视图）
+    // 选了单张订单 → 画该单分段；都没选 → 画全部车辆的连续线路（全局视图）
     if (selectedJourneyKey.value) {
       const plate = selectedJourneyKey.value.slice('journey-'.length)
       return visibleRoutes.value.filter((r) => r.plateNo === plate)
@@ -717,7 +717,7 @@ const drawableRoutes = computed(() => mapRoutes.value.filter((r) => r.points.len
 
 /**
  * 多段联运交接（按订单）：哪个订单在哪一站交给谁（转运站点工作人员 / 其他司机）。
- * 结果按"该订单第一段的时间"升序排列 —— 演示时订单要按先后读，不能乱序。
+ * 结果按"该订单第一段的时间"升序排列 —— 订单要按先后读，不能乱序。
  */
 const linkOrders = computed<OrderChain[]>(() => {
   const shown = activePlanId.value
@@ -745,7 +745,7 @@ const linkOrders = computed<OrderChain[]>(() => {
           ...leg,
           handoverTarget,
           color: plateColorMap.value.get(leg.plateNo || '') || '#909399',
-          // 缺真实道路轨迹的段：地图不画直线，列表里明确标注（不让演示出现"斜穿城市的直线"）
+          // 缺真实道路轨迹的段：地图不画直线，列表里明确标注（不出现"斜穿城市的直线"）
           noRoad: !legHasRoad(leg)
         }
       })
@@ -861,8 +861,8 @@ type JourneyChain = {
 /**
  * 各车行程链：把运输段按车辆分组，段内按先后排序，再把同一张订单的段合并成一行。
  *
- * 这就是演示要讲的"司机本职按线路跑，途中一段接一段地取派货"：
- * 346 的司机从始发站出发 → 订单A（中研所→上新街）→ 订单B（黄桷垭→小什字）→ …
+ * 即"司机本职按线路跑，途中一段接一段地取派货"：
+ * 司机从始发站出发 → 订单A → 订单B → …
  * → 跨片区的那单在龙门浩交给 320 的司机 → 一路到终点站较场口；返程再走另一套调度。
  */
 const journeyChains = computed<JourneyChain[]>(() => {
@@ -1140,7 +1140,7 @@ const routePolylines = (route: RouteView): { lng: number; lat: number }[][] => {
 const mapRef = ref<HTMLDivElement>()
 const mapReady = ref(false)
 const mapError = ref('')
-/** 手动切换的"坐标示意图"模式：地图加载不出来时也能完整演示（播放同样可用） */
+/** 手动切换的"坐标示意图"模式：地图加载不出来时也能完整展示（播放同样可用） */
 const showSchematic = ref(false)
 let map: any = null
 const overlays = ref<any[]>([])
@@ -1971,7 +1971,7 @@ onBeforeUnmount(stopPlay)
   color: #e6a23c;
   line-height: 1.6;
 }
-/* 行程链：同一台车的订单按先后串起来（演示主线） */
+/* 行程链：同一台车的订单按先后串起来 */
 .journey-wrap {
   margin-bottom: 10px;
 }

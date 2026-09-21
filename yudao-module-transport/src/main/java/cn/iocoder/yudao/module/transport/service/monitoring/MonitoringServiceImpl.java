@@ -37,7 +37,6 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
-import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Lazy;
@@ -57,15 +56,8 @@ import java.util.stream.Collectors;
 /**
  * 车辆监控 Service 实现
  *
- * 位置优先取司机端上报的真实位置（transport_vehicle_location，report_time 5 分钟内有效，状态置在途）；
- * 无有效上报时回退以下确定性模拟规则（便于演示与测试）：
- * 1. 启用班次（status=0）按发车时间升序，轮转分配给可用车辆（status=0，一车多班，模拟排班）；
- * 2. 当前时间落在 [计划发车时间, 发车时间+计划时长] 内 → 在途，
- *    按已行驶分钟数在线路站点的累计 planned_minutes 上线性插值经纬度；
- * 3. 窗口外 → 空闲，停靠在其当前/下一班次线路的起点站；无对应班次 → 无坐标，不上图；
- * 4. 停用车辆（status=1）→ 状态停用，不上图。
- *
- * 调度闭环（transport_dispatch_plan_item）落地后，步骤 1 的映射应切换为真实派单结果。
+ * 位置仅取司机端上报的真实位置（transport_vehicle_location，report_time 15 分钟内有效，状态置在途）；
+ * 无有效上报 → 空闲，不上图，不伪造位置；停用车辆（status=1）→ 状态停用，不上图。
  */
 @Service
 @Validated
@@ -95,7 +87,6 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Resource private VehicleLocationMapper vehicleLocationMapper;
     @Resource private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
-    @Resource private SimulationEngine simulationEngine;
     @Resource @Lazy private VehicleLocationProvider locationProvider;
     @Resource private DispatchPlanMapper dispatchPlanMapper;
     @Resource private DispatchPlanItemMapper dispatchPlanItemMapper;
@@ -171,28 +162,9 @@ public class MonitoringServiceImpl implements MonitoringService {
         Map<Long, ShiftDO> shiftMap = shiftMapper.selectList().stream()
                 .collect(Collectors.toMap(ShiftDO::getId, Function.identity(), (a, b) -> a));
 
-        // 统一位置模型：通过 VehicleLocationProvider 获取所有车辆位置
+        // 统一位置模型：通过 VehicleLocationProvider 获取所有车辆位置（真实上报，无真实位置则 OFFLINE）
         Set<Long> vehicleIds = vehicles.stream().map(VehicleDO::getId).collect(Collectors.toSet());
-        // allowScheduleFallback=true：无真实上报 / 无模拟运行时，用"确定性班次模拟"兜底（演示可用性）
-        Map<Long, VehicleLocationSnapshot> locationSnapshots = locationProvider.getLocations(vehicleIds, true);
-
-        // 模拟排班：启用班次按发车时间升序，轮转分配给可用车辆（一车多班）
-        List<VehicleDO> availableVehicles = vehicles.stream()
-                .filter(v -> Objects.equals(v.getStatus(), VEHICLE_STATUS_AVAILABLE))
-                .sorted(Comparator.comparing(VehicleDO::getId))
-                .toList();
-        List<ShiftDO> sortedShifts = enabledShifts.stream()
-                .filter(s -> s.getPlannedDepartureTime() != null)
-                .sorted(Comparator.comparing(ShiftDO::getPlannedDepartureTime))
-                .toList();
-        Map<Long, List<ShiftDO>> vehicleShiftsMap = new HashMap<>();
-        if (!availableVehicles.isEmpty()) {
-            for (int j = 0; j < sortedShifts.size(); j++) {
-                VehicleDO vehicle = availableVehicles.get(j % availableVehicles.size());
-                vehicleShiftsMap.computeIfAbsent(vehicle.getId(), k -> new ArrayList<>())
-                        .add(sortedShifts.get(j));
-            }
-        }
+        Map<Long, VehicleLocationSnapshot> locationSnapshots = locationProvider.getLocations(vehicleIds);
 
         return vehicles.stream().map(vehicle -> {
             MonitoringVehicleRespVO vo = new MonitoringVehicleRespVO();
@@ -218,7 +190,7 @@ public class MonitoringServiceImpl implements MonitoringService {
                 vo.setDataSource(snapshot.getSource());
                 vo.setNextStationName(snapshot.getNextStationName());
                 vo.setCurrentStationName(snapshot.getCurrentStationName());
-                // 到下一站的剩余距离/分钟：班次插值与模拟引擎直接给出，前端"预计到达下一站"用它
+                // 到下一站的剩余距离/分钟：由统一快照给出，前端"预计到达下一站"用它
                 vo.setDistanceToNextStationKm(snapshot.getDistanceToNextStation());
                 vo.setEtaToNextStationMinutes(snapshot.getEtaToNextStationMinutes());
                 // 班次/线路/进度：由统一快照直接给出（REAL 上报缺班次时下面再按派单/执行回填）
@@ -232,13 +204,6 @@ public class MonitoringServiceImpl implements MonitoringService {
                 if (snapshot.getUpdatedAt() != null) {
                     vo.setLastLocationTime(snapshot.getUpdatedAt());
                 }
-                // 从 snapshot 推导进度
-                if (snapshot.getSimulationSeconds() != null && snapshot.getSimulationSeconds() > 0) {
-                    SimulationEngine.SimRun run = simulationEngine.getRun(vehicle.getId());
-                    if (run != null && run.getTotalSimSeconds() > 0) {
-                        vo.setProgress((int) Math.min(100, snapshot.getSimulationSeconds() * 100 / run.getTotalSimSeconds()));
-                    }
-                }
                 // 真实上报车辆：按派单明细 / 当天班次执行回填班次与线路（取不到保持空，不猜线路）
                 if ("REAL".equals(snapshot.getSource()) || "REAL_STALE".equals(snapshot.getSource())) {
                     fillRealVehicleShift(vo, vehicle.getId(), driverId, shiftMap, routeMap, enabledShifts);
@@ -246,7 +211,7 @@ public class MonitoringServiceImpl implements MonitoringService {
                 return vo;
             }
 
-            // 真正 OFFLINE（无真实上报、无模拟运行、不在任何班次窗口）：不上图，不伪造位置
+            // 真正 OFFLINE（无真实上报）：不上图，不伪造位置
             vo.setStatus(STATUS_IDLE);
             return vo;
         }).toList();
@@ -370,19 +335,12 @@ public class MonitoringServiceImpl implements MonitoringService {
         MonitoringPlanRespVO vo = new MonitoringPlanRespVO();
         vo.setVehicleId(vehicleId);
         vo.setPlateNo(vehicle.getPlateNo());
-        // 最新位置（REAL 优先；模拟引擎运行中取引擎位置）
+        // 最新位置（仅真实上报）
         VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
         if (loc != null && loc.getLongitude() != null) {
             vo.setLongitude(toDouble(loc.getLongitude()));
             vo.setLatitude(toDouble(loc.getLatitude()));
             vo.setDataSource("REAL");
-        } else {
-            SimulationEngine.SimTick sim = simulationEngine.tick(vehicleId);
-            if (sim != null) {
-                vo.setLongitude(sim.getLongitude());
-                vo.setLatitude(sim.getLatitude());
-                vo.setDataSource("SIMULATED");
-            }
         }
         // 该车辆方案（取最新一条已下发/执行中）
         List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()

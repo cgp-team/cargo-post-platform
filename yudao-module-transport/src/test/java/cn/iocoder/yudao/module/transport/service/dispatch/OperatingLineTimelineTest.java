@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 运营线路时间轴单测：核心是"车已经开过的站不能再派它去取货（不折返）"。
  *
  * <p>线路口径：悠山路(0min) → 中研所(10) → 上新街(20) → 较场口(30)，班次 08:00 发车、往返 60 分钟
- * （单程 30 分钟，与 DeterministicScheduleSimulator 同一套时间轴）。</p>
+ * （单程 30 分钟）。</p>
  */
 class OperatingLineTimelineTest {
 

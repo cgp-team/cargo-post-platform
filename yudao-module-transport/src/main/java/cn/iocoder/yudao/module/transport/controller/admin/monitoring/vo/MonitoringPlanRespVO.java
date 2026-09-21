@@ -30,7 +30,7 @@ public class MonitoringPlanRespVO {
     private Double longitude;
     @Schema(description = "当前车辆位置（纬度）")
     private Double latitude;
-    @Schema(description = "位置数据来源：REAL / SIMULATED / NO_LOCATION")
+    @Schema(description = "位置数据来源：REAL / NO_LOCATION")
     private String dataSource;
 
     @Schema(description = "路线来源：amap=高德真实道路 / euclidean=直线兜底")

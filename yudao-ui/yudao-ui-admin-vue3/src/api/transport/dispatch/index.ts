@@ -77,7 +77,7 @@ export interface DispatchCollectReqVO {
   orderIds?: number[]
   batchStart?: number
   batchEnd?: number
-  /** 一键归集：true=把当前所有「待入池」订单全部入池（演示/批量场景，免勾选） */
+  /** 一键归集：true=把当前所有「待入池」订单全部入池（批量场景，免勾选） */
   all?: boolean
 }
 
@@ -269,15 +269,6 @@ export const reviewDispatchPlan = (data: DispatchPlanReviewReqVO) => {
  */
 export const cancelPoolOrders = (orderIds: number[]): Promise<number> => {
   return request.put({ url: '/transport/dispatch/order-pool/cancel', data: orderIds })
-}
-
-/**
- * 演示态：把方案里的订单放回「待入池」，方便反复点「一键演示」。
- * 生产环境把 yudao.dispatch.demo-recycle-pool 设为 false 后，本调用为空操作
- * （调度后的订单不再回到订单池，除非显式打回重新派送）。
- */
-export const recycleDemoPool = (planIds?: number[]) => {
-  return request.post({ url: '/transport/dispatch/demo/recycle-pool', data: planIds || [] })
 }
 
 /** 发车核验 */

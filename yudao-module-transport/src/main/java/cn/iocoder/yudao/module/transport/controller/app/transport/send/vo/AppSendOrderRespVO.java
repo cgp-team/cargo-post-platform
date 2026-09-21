@@ -104,7 +104,7 @@ public class AppSendOrderRespVO {
     private BigDecimal carrierDistanceKm;
     @Schema(description = "承运车辆预计到达目标站点分钟数（实时位置估算）")
     private Integer carrierEtaMinutes;
-    @Schema(description = "承运车辆位置来源：REAL_FRESH 真实上报 / REAL_STALE 位置可能过期 / SIMULATED 模拟演示（班次插值或模拟引擎）")
+    @Schema(description = "承运车辆位置来源：REAL_FRESH 真实上报 / REAL_STALE 位置可能过期")
     private String carrierLocationSource;
     @Schema(description = "车辆是否即将到站（距目标站点 <= 10 分钟）：前端据此高亮并提示\"车快到了\"")
     private Boolean carrierApproaching;

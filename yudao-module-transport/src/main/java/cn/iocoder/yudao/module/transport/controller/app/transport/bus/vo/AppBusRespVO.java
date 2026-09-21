@@ -58,7 +58,7 @@ public class AppBusRespVO {
     @Schema(description = "速度(km/h)")
     private Double speedKmh;
 
-    @Schema(description = "数据来源：REAL 司机真实上报 / SIMULATED 时刻表模拟演示（前端据此标注，不冒充真实）")
+    @Schema(description = "数据来源：REAL 司机真实上报 / REAL_STALE 上报已过期")
     private String dataSource;
 
 }

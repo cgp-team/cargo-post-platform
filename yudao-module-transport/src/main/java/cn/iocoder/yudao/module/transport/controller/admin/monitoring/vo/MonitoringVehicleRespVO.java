@@ -42,7 +42,7 @@ public class MonitoringVehicleRespVO {
     @Schema(description = "班次进度百分比 0-100（仅在途时有值）")
     private Integer progress;
 
-    @Schema(description = "当前站/上一站名称（模拟位置给出所在区间起点站）")
+    @Schema(description = "当前站/上一站名称（按派单/班次回填，无则空）")
     private String currentStationName;
 
     @Schema(description = "下一站名称（仅在途且未到终点时有值）")
@@ -51,15 +51,15 @@ public class MonitoringVehicleRespVO {
     @Schema(description = "估算速度(km/h，按线路里程与计划时长估算，仅在途时有值)")
     private Double speedKmh;
 
-    @Schema(description = "距下一站剩余公里（班次插值/模拟引擎给出；真实上报无值时为空）")
+    @Schema(description = "距下一站剩余公里（真实上报无值时为空）")
     private Double distanceToNextStationKm;
 
     @Schema(description = "预计到达下一站分钟数（班次计划给出；真实上报无值时为空）")
     private Double etaToNextStationMinutes;
 
-    @Schema(description = "位置数据来源：REAL=司机5分钟内上报真实位置 / SIMULATED=按班次计划时间模拟插值")
+    @Schema(description = "位置数据来源：REAL=司机15分钟内上报真实位置 / REAL_STALE=上报已过期")
     private String dataSource;
 
-    @Schema(description = "最后位置时间（司机真实上报时间；模拟车辆为 null）")
+    @Schema(description = "最后位置时间（司机真实上报时间）")
     private LocalDateTime lastLocationTime;
 }

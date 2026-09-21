@@ -151,7 +151,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Resource private UserNotificationService userNotificationService;
 
-    /** 车辆当前位置（REAL > 模拟引擎 > 班次插值）：多段联运按"谁离本段起点近"改派，避免一台车跨城往返 */
+    /** 车辆当前位置（司机端真实上报）：多段联运按"谁离本段起点近"改派，避免一台车跨城往返 */
 
     @Resource private cn.iocoder.yudao.module.transport.service.monitoring.VehicleLocationProvider vehicleLocationProvider;
 
@@ -1773,7 +1773,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         try {
 
-            locs = vehicleLocationProvider.getLocations(vehicleIds, true);
+            locs = vehicleLocationProvider.getLocations(vehicleIds);
 
         } catch (Exception ex) {
 

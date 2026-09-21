@@ -288,7 +288,7 @@ class AppBusServiceImplTest {
                 route("R001", List.of(point(1L, "红花村站", 104.005, 30.0), point(2L, "远山站", 104.5, 30.4)))));
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
                 vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL"),    // 近车，真实
-                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "SIMULATED")));   // 远车，模拟
+                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "REAL_STALE")));  // 远车，过期上报
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
@@ -309,7 +309,7 @@ class AppBusServiceImplTest {
         when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
                 List.of(point(1L, "红花村站", 104.005, 30.0)))));
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
-                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "SIMULATED"))); // 远车被过滤
+                vehicle(20L, 1, 104.5, 30.4, "SH002", "R001", null, "REAL_STALE"))); // 远车被过滤
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
@@ -354,7 +354,7 @@ class AppBusServiceImplTest {
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
                 vehicle(1L, 1, 104.006, 30.0, "SH1", "R001", "下一站", "REAL"),
                 vehicle(2L, 1, 104.006, 30.0, "SH2", "R001", null, "REAL"),
-                vehicle(3L, 0, 104.006, 30.0, "SH3", "R001", null, "SIMULATED")));
+                vehicle(3L, 0, 104.006, 30.0, "SH3", "R001", null, "REAL_STALE")));
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
@@ -373,7 +373,7 @@ class AppBusServiceImplTest {
                 route("R002", List.of(point(3L, "青山镇站", 104.3, 30.3)))));
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
                 vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL"),
-                vehicle(20L, 1, 104.3, 30.3, "SH002", "R002", null, "SIMULATED")));
+                vehicle(20L, 1, 104.3, 30.3, "SH002", "R002", null, "REAL_STALE")));
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(null, null, null, "红花");
 
@@ -386,18 +386,18 @@ class AppBusServiceImplTest {
     }
 
     @Test
-    void nearby_simulated_only_data_source() {
+    void nearby_stale_only_data_source() {
         when(stationMapper.selectList()).thenReturn(List.of(station(1L, "红花村站", 104.005, 30.0)));
         when(monitoringService.getMapData()).thenReturn(mapData(route("R001",
                 List.of(point(1L, "红花村站", 104.005, 30.0)))));
         when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
-                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "SIMULATED")));
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL_STALE")));
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
         assertEquals(1, resp.getBuses().size());
-        assertEquals(AppBusNearbyRespVO.SOURCE_SIMULATED, resp.getBuses().get(0).getDataSource());
-        assertEquals(AppBusNearbyRespVO.SOURCE_SIMULATED, resp.getDataSource());
+        assertEquals("REAL_STALE", resp.getBuses().get(0).getDataSource());
+        assertEquals(AppBusNearbyRespVO.SOURCE_REAL, resp.getDataSource());
     }
 
     // ==================== 车辆→下一站 ETA（高德路网） ====================
@@ -443,15 +443,19 @@ class AppBusServiceImplTest {
     }
 
     @Test
-    void nearby_eta_simulated_location_source() {
-        stubNearbyWithNextStation("青山镇站", "SIMULATED");
+    void nearby_eta_stale_location_source() {
+        stubNearbyWithNextStation("青山镇站", "REAL");
+        // 上报时间超过 5 分钟 → REAL_STALE（司机中断上报但未超过监控窗口）
+        MonitoringVehicleRespVO stale = vehicle(10L, 1, 104.005, 30.01, "SH001", "R001", "青山镇站", "REAL");
+        stale.setLastLocationTime(java.time.LocalDateTime.now().minusMinutes(10));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(stale));
         when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
                 .available(true).distanceKm(2.8).durationSeconds(360.0).provider("amap").build());
 
         AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
-        assertEquals("SIMULATED", resp.getBuses().get(0).getLocationSource());
-        // 模拟位置也给出路网 ETA（dataSource 仍标注 SIMULATED，前端不伪装成真实）
+        assertEquals("REAL_STALE", resp.getBuses().get(0).getLocationSource());
+        // 过期真实位置仍给出路网 ETA
         assertEquals(6, resp.getBuses().get(0).getEtaMinutes());
     }
 

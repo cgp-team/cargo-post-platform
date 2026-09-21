@@ -59,7 +59,7 @@ class AppSendControllerTest {
         ReflectionTestUtils.setField(controller, "vehicleLocationProvider", vehicleLocationProvider);
     }
 
-    // ==================== 车来取货/送货提醒（演示可见性）====================
+    // ==================== 车来取货/送货提醒 ====================
 
     @Test
     void carrierApproaching_withinThreshold_only() {
@@ -72,11 +72,11 @@ class AppSendControllerTest {
     }
 
     @Test
-    void isRealLocationSource_distinguishesSimulated() {
-        // 模拟位置（班次插值/模拟引擎）是当次生成的，不走"真实上报过期"判定；前端会标注"模拟演示"
+    void isRealLocationSource_onlyReal() {
+        // 仅真实上报来源参与"过期不提醒"判定
         assertTrue(AppSendController.isRealLocationSource("REAL"));
         assertTrue(AppSendController.isRealLocationSource("REAL_STALE"));
-        assertFalse(AppSendController.isRealLocationSource("SIMULATED"));
+        assertFalse(AppSendController.isRealLocationSource("OFFLINE"));
         assertFalse(AppSendController.isRealLocationSource(null));
     }
 
@@ -129,8 +129,8 @@ class AppSendControllerTest {
         List<TransportOrderDO> orders = List.of(inTransit);
         List<AppSendOrderRespVO> list = List.of(new AppSendOrderRespVO());
         mockCarrierFixture();
-        // 真实上报是 60 分钟前的残留位置（班次已结束）→ 不提醒；注意模拟位置不走过期判定
-        when(vehicleLocationProvider.getLocations(any(), eq(true)))
+        // 真实上报是 60 分钟前的残留位置（班次已结束）→ 不提醒
+        when(vehicleLocationProvider.getLocations(any()))
                 .thenReturn(Map.of(7L, snapshot("REAL", LocalDateTime.now().minusMinutes(60))));
 
         invokeFillCarrierBatch(list, orders);
@@ -176,11 +176,11 @@ class AppSendControllerTest {
 
     /** 车辆最新位置为新鲜的真实上报（2 分钟前，统一位置模型给出的 REAL 快照） */
     private void mockFreshLocation() {
-        when(vehicleLocationProvider.getLocations(any(), eq(true)))
+        when(vehicleLocationProvider.getLocations(any()))
                 .thenReturn(Map.of(7L, snapshot("REAL", LocalDateTime.now().minusMinutes(2))));
     }
 
-    /** 统一位置模型快照（source: REAL / SIMULATED；坐标为 104.0000,30.0000 → 距中心站约 0.96km） */
+    /** 统一位置模型快照（source: REAL / OFFLINE；坐标为 104.0000,30.0000 → 距中心站约 0.96km） */
     private VehicleLocationSnapshot snapshot(String source, LocalDateTime updatedAt) {
         return VehicleLocationSnapshot.builder().vehicleId(7L).source(source)
                 .longitude(104.0000).latitude(30.0000).updatedAt(updatedAt).build();
