@@ -108,7 +108,7 @@ import {
 
 defineOptions({ name: 'TransportMonitoring' })
 
-// 说明：演示站点坐标（成都一带）按百度 BD-09 坐标系直接使用；
+// 说明：站点坐标按百度 BD-09 坐标系直接使用；
 // 将来接入真实 GPS（WGS84/GCJ-02）时需先做坐标转换再上图。
 
 const ROUTE_COLORS = ['#409EFF', '#E6A23C', '#F56C6C', '#9C27B0', '#00BCD4', '#795548']
@@ -151,11 +151,13 @@ const initMap = async () => {
     const data = await getMonitoringMapData()
     const BMapGL = window.BMapGL
     map = new BMapGL.Map(mapRef.value)
-    const center = calcCenter(data.stations)
+    const stations = data?.stations || []
+    const routes = data?.routes || []
+    const center = calcCenter(stations)
     map.centerAndZoom(new BMapGL.Point(center.lng, center.lat), 13)
     map.enableScrollWheelZoom()
-    drawStations(data.stations)
-    data.routes.forEach((route, index) => drawRoute(route, ROUTE_COLORS[index % ROUTE_COLORS.length]))
+    drawStations(stations)
+    routes.forEach((route, index) => drawRoute(route, ROUTE_COLORS[index % ROUTE_COLORS.length]))
     mapReady.value = true
     await refreshData()
     timer = window.setInterval(refreshData, POLL_INTERVAL)
@@ -202,7 +204,7 @@ const drawStations = (stations: MonitoringStationVO[]) => {
 const drawRoute = (route: MonitoringRouteVO, color: string) => {
   const BMapGL = window.BMapGL
   // 真实道路折线优先（AMAP）：库里预热过的线路直接画真实轨迹；
-  // 没预热过的线路只画"虚线示意"（站点直连），不冒充真实路线，避免演示里出现直线乱跑。
+  // 没预热过的线路只画"虚线示意"（站点直连），不冒充真实路线，避免出现直线乱跑。
   const road = (route.roadPoints ?? [])
     .filter((p) => p.longitude && p.latitude)
     .map((p) => {
@@ -217,7 +219,7 @@ const drawRoute = (route: MonitoringRouteVO, color: string) => {
     }))
     return
   }
-  const path = route.points
+  const path = (route.points ?? [])
     .filter((p) => p.longitude && p.latitude)
     .map((p) => {
       const bd = gcj02ToBd09(p.longitude!, p.latitude!)
@@ -238,9 +240,9 @@ const drawRoute = (route: MonitoringRouteVO, color: string) => {
 const refreshData = async () => {
   try {
     const [vehicleList, shiftList] = await Promise.all([getMonitoringVehicles(), getShiftExecution()])
-    vehicles.value = vehicleList
-    shifts.value = shiftList
-    refreshVehicleOverlays(vehicleList)
+    vehicles.value = vehicleList || []
+    shifts.value = shiftList || []
+    refreshVehicleOverlays(vehicles.value)
   } catch (e) {
     console.error('刷新监控数据失败', e)
   }

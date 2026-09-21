@@ -17,17 +17,50 @@ import java.util.Set;
  *
  * <p><b>为什么需要：</b>公交/大巴的本职是按线路跑、每站都停，闲置运力只是**顺路**带货。
  * 所以派单必须先知道"这个站车开过没有"——车已经开过的站，绝不能再派它掉头回去取货。
- * 本类就是这条规则的唯一事实来源，口径与 {@code DeterministicScheduleSimulator} 完全一致：
+ * 本类就是这条规则的唯一事实来源：
  * 班次窗口 = 一个往返，单程时长 = 窗口一半，站序计划分钟按单程时长等比缩放。</p>
  *
  * <p>纯函数（无 Spring 依赖），便于单测与回归。</p>
  */
 public final class OperatingLineTimeline {
 
-    /** 班次时长缺省值（分钟），与模拟器保持一致 */
+    /** 班次时长缺省值（分钟） */
     public static final int DEFAULT_DURATION_MINUTES = 60;
 
     private OperatingLineTimeline() {
+    }
+
+    /** 选取当前班次：优先在途窗口，其次下一班待发，否则当天最后一班（已收车） */
+    public static ShiftDO selectCurrentShift(List<ShiftDO> shifts, LocalTime now) {
+        if (shifts == null || shifts.isEmpty()) {
+            return null;
+        }
+        List<ShiftDO> sorted = shifts.stream()
+                .sorted(Comparator.comparing(ShiftDO::getPlannedDepartureTime))
+                .toList();
+        ShiftDO next = null;
+        for (ShiftDO shift : sorted) {
+            long elapsed = elapsedMinutes(shift, now);
+            if (elapsed >= 0 && elapsed <= durationMinutes(shift)) {
+                return shift;
+            }
+            if (elapsed < 0 && next == null) {
+                next = shift;
+            }
+        }
+        return next != null ? next : sorted.get(sorted.size() - 1);
+    }
+
+    /** 已行驶分钟（未发车为负） */
+    static long elapsedMinutes(ShiftDO shift, LocalTime now) {
+        if (shift.getPlannedDepartureTime() == null) {
+            return -1;
+        }
+        return Duration.between(shift.getPlannedDepartureTime(), now).toMinutes();
+    }
+
+    static int durationMinutes(ShiftDO shift) {
+        return shift.getPlannedDurationMinutes() != null ? shift.getPlannedDurationMinutes() : DEFAULT_DURATION_MINUTES;
     }
 
     /** 车辆在班次内的方向 */
@@ -89,7 +122,7 @@ public final class OperatingLineTimeline {
         List<Long> ids = ordered.stream().map(RouteStationDO::getStationId).toList();
         int n = ids.size();
 
-        // 班次窗口 = 一个往返：单程时长 = 窗口一半（与 DeterministicScheduleSimulator 同口径）
+        // 班次窗口 = 一个往返：单程时长 = 窗口一半
         int duration = shift.getPlannedDurationMinutes() != null && shift.getPlannedDurationMinutes() > 0
                 ? shift.getPlannedDurationMinutes() : DEFAULT_DURATION_MINUTES;
         int trip = Math.max(1, duration / 2);

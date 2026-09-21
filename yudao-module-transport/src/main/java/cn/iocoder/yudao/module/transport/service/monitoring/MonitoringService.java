@@ -12,8 +12,7 @@ import java.util.List;
 /**
  * 车辆监控 Service 接口
  *
- * 当前无 GPS 设备接入、调度闭环未实现，实时位置按"班次计划时间 + 线路站点序列"模拟插值。
- * 调度闭环（transport_dispatch_plan_item）落地后可切换数据源，接口保持不变。
+ * 实时位置仅来自司机端真实上报（transport_vehicle_location），不做任何模拟插值。
  */
 public interface MonitoringService {
 
@@ -23,12 +22,12 @@ public interface MonitoringService {
     MonitoringMapDataRespVO getMapData();
 
     /**
-     * 获取车辆实时模拟位置列表
+     * 获取车辆实时位置列表（真实上报；无上报则 OFFLINE 不上图）
      */
     List<MonitoringVehicleRespVO> getRealtimeVehicles();
 
     /**
-     * 获取今日班次执行状态（按班次计划时间窗口模拟）
+     * 获取今日班次执行状态（真实执行记录为准，缺记录时按班次计划时间窗口推导待发/在途/已完成）
      */
     List<MonitoringShiftRespVO> getShiftExecution();
 

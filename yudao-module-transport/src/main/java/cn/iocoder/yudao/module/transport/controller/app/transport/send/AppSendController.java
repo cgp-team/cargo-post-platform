@@ -97,7 +97,7 @@ public class AppSendController {
     @Resource private MultiLegService multiLegService;
     @Resource private TransportTopologyService transportTopologyService;
     @Resource private CargoPricingService cargoPricingService;
-    /** 统一车辆位置（REAL > 模拟引擎 > 确定性班次模拟）：演示无司机上报时也能出"车快到了" */
+    /** 统一车辆位置（司机端真实上报） */
     @Resource private VehicleLocationProvider vehicleLocationProvider;
 
     /** "车来取货/送货"提醒的订单状态范围：仅在途（已分配/已发车）；已完成/已取消不提醒 */
@@ -248,8 +248,8 @@ public class AppSendController {
             Map<Long, VehicleLocationSnapshot> carrierLocMap = new HashMap<>();
             Map<Long, VehicleDO> carrierVehicleMap = new HashMap<>();
             if (item.getVehicleId() != null) {
-                // 统一位置模型（REAL > 模拟引擎 > 确定性班次模拟）：演示时无需司机开 GPS 也能看到"车快到了"
-                carrierLocMap.putAll(vehicleLocationProvider.getLocations(Set.of(item.getVehicleId()), true));
+                // 统一位置模型：司机端真实上报
+                carrierLocMap.putAll(vehicleLocationProvider.getLocations(Set.of(item.getVehicleId())));
                 carrierVehicleMap.put(item.getVehicleId(), vehicleMapper.selectById(item.getVehicleId()));
             }
             fillCarrierLiveInfo(vo, item, carrierLocMap, carrierVehicleMap,
@@ -269,7 +269,7 @@ public class AppSendController {
                 && reportTime.isAfter(now.minusMinutes(CARRIER_LOCATION_FRESH_MINUTES));
     }
 
-    /** 是否真实上报来源（SIMULATED 由班次插值/模拟引擎当场生成，本身即新鲜，不走过期判定） */
+    /** 是否真实上报来源 */
     static boolean isRealLocationSource(String source) {
         return "REAL".equals(source) || "REAL_STALE".equals(source);
     }
@@ -337,8 +337,8 @@ public class AppSendController {
         if (vehicleIds.isEmpty()) {
             return;
         }
-        // 一次批量加载：车辆位置（统一位置模型：真实上报优先，否则确定性班次模拟）+ 车辆档案 + 站点
-        Map<Long, VehicleLocationSnapshot> locMap = vehicleLocationProvider.getLocations(vehicleIds, true);
+        // 一次批量加载：车辆位置（真实上报）+ 车辆档案 + 站点
+        Map<Long, VehicleLocationSnapshot> locMap = vehicleLocationProvider.getLocations(vehicleIds);
         Map<Long, VehicleDO> vehicleMap = vehicleMapper.selectBatchIds(vehicleIds).stream()
                 .collect(Collectors.toMap(VehicleDO::getId, Function.identity(), (a, b) -> a));
         Map<Long, StationDO> stationMap = stationService.getSimpleList().stream()
@@ -428,7 +428,7 @@ public class AppSendController {
     /** 填充承运车辆实时位置 + 距目标站点距离/分钟（车来取货/送货提醒）。
      *  目标站点 = 该订单方向经停站（揽收→上车站，派送/客运送客→下车站）。
      *  车辆无位置，或真实上报已过期（班次结束残留）时字段保持 null，不影响原流程。
-     *  位置来源写入 carrierLocationSource（REAL_FRESH / REAL_STALE / SIMULATED），模拟位置前端会标注"模拟演示"。 */
+     *  位置来源写入 carrierLocationSource（REAL_FRESH / REAL_STALE）。 */
     private void fillCarrierLiveInfo(AppSendOrderRespVO vo, DispatchPlanItemDO item,
                                      Map<Long, VehicleLocationSnapshot> locMap,
                                      Map<Long, VehicleDO> vehicleMap,
@@ -440,8 +440,7 @@ public class AppSendController {
         if (loc == null || loc.getLongitude() == null || loc.getLatitude() == null) {
             return;
         }
-        // 真实位置新鲜度：班次结束后的残留上报不参与提醒（vehicle_location 每车一行，收车后不清理）；
-        // SIMULATED（模拟引擎/班次插值）是当次生成的，直接用
+        // 真实位置新鲜度：班次结束后的残留上报不参与提醒（vehicle_location 每车一行，收车后不清理）
         String source = loc.getSource() == null ? "REAL" : loc.getSource();
         if (isRealLocationSource(source) && !isCarrierLocationFresh(loc.getUpdatedAt(), LocalDateTime.now())) {
             return;
@@ -462,11 +461,10 @@ public class AppSendController {
                 loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(),
                 station.getLongitude().doubleValue(), station.getLatitude().doubleValue(),
                 GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH);
-        // 位置新鲜度分级：真实 5 分钟内 = REAL_FRESH；其余真实 = REAL_STALE；模拟 = SIMULATED
+        // 位置新鲜度分级：真实 5 分钟内 = REAL_FRESH；其余真实 = REAL_STALE
         boolean fresh = loc.getUpdatedAt() != null
                 && loc.getUpdatedAt().isAfter(LocalDateTime.now().minusMinutes(CARRIER_FRESH_MINUTES));
-        vo.setCarrierLocationSource("SIMULATED".equals(source) ? "SIMULATED"
-                : (fresh ? "REAL_FRESH" : "REAL_STALE"));
+        vo.setCarrierLocationSource(fresh ? "REAL_FRESH" : "REAL_STALE");
         vo.setCarrierLongitude(loc.getLongitude().doubleValue());
         vo.setCarrierLatitude(loc.getLatitude().doubleValue());
         vo.setCarrierDistanceKm(BigDecimal.valueOf(Math.round(distanceEta.distKm() * 100) / 100.0));

@@ -66,7 +66,7 @@ deploy/scripts/health-check.sh
 
 # 2. 初始化数据库（依次 SOURCE）
 # sql/mysql/ruoyi-vue-pro.sql → cleanup-upstream-menus.sql → transport-schema.sql
-# → transport-schema-incremental.sql → transport-menu.sql（演示数据 transport-demo-data.sql 可选）
+# → transport-schema-incremental.sql → transport-menu.sql（再按需执行 sql/incremental/V*.sql）
 
 # 3. 后端（默认 48080）
 mvn -pl yudao-server -am clean test

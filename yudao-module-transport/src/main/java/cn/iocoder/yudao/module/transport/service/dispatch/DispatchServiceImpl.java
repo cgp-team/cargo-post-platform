@@ -60,8 +60,6 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 
-import cn.iocoder.yudao.module.transport.service.monitoring.DeterministicScheduleSimulator;
-
 import cn.iocoder.yudao.module.transport.enums.dispatch.*;
 
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmAdapter;
@@ -171,20 +169,6 @@ public class DispatchServiceImpl implements DispatchService {
     @Value("${yudao.dispatch.batch-minutes:480}")
 
     private int batchMinutes;
-
-    /**
-
-     * 演示态开关：一键演示后是否把方案里的订单放回「待入池」（方便反复演示）。
-
-     * <p>生产上线设为 false：调度后的订单不再出现在订单池，
-
-     * 除非通过"驳回/打回"显式操作让它重新派送。</p>
-
-     */
-
-    @Value("${yudao.dispatch.demo-recycle-pool:true}")
-
-    private boolean demoRecyclePool;
 
 
 
@@ -3745,78 +3729,6 @@ public class DispatchServiceImpl implements DispatchService {
 
 
     /** 当前半小时批次区间：分钟 < 30 则 :00，否则 :30；窗长 batchMinutes（默认一个班次） */
-    @Override
-
-    @Transactional(rollbackFor = Exception.class)
-
-    public int recyclePlanOrdersToPool(java.util.List<Long> planIds) {
-
-        if (!demoRecyclePool) {
-
-            return 0; // 生产态：调度后的订单不再回到订单池，除非显式打回重新派送
-
-        }
-
-        java.util.List<Long> ids = planIds == null ? java.util.List.of()
-
-                : planIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
-
-        java.util.List<DispatchPlanDO> plans = ids.isEmpty()
-
-                ? dispatchPlanMapper.selectList(new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX<DispatchPlanDO>()
-
-                        .ge(DispatchPlanDO::getCreateTime, LocalDateTime.now().toLocalDate().atStartOfDay()))
-
-                : dispatchPlanMapper.selectBatchIds(ids);
-
-        if (plans == null || plans.isEmpty()) {
-
-            return 0;
-
-        }
-
-        java.util.Set<Long> orderIds = new java.util.HashSet<>();
-
-        for (DispatchPlanDO plan : plans) {
-
-            dispatchPlanItemMapper.selectList(
-
-                            new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX<DispatchPlanItemDO>()
-
-                                    .eq(DispatchPlanItemDO::getPlanId, plan.getId())).stream()
-
-                    .map(DispatchPlanItemDO::getOrderId)
-
-                    .filter(java.util.Objects::nonNull)
-
-                    .forEach(orderIds::add);
-
-        }
-
-        int updated = 0;
-
-        for (Long orderId : orderIds) {
-
-            updated += orderMapper.updateById(TransportOrderDO.builder()
-
-                    .id(orderId)
-
-                    .status(TransportOrderStatusEnum.READY_FOR_POOL.getStatus())
-
-                    .build());
-
-        }
-
-        if (updated > 0) {
-
-            log.info("[recyclePlanOrdersToPool][演示态：{} 单放回待入池，方案保留（planIds={}）]", updated, ids);
-
-        }
-
-        return updated;
-
-    }
-
     private LocalDateTime[] currentBatch() {
 
         LocalDateTime now = LocalDateTime.now();
@@ -4080,7 +3992,7 @@ public class DispatchServiceImpl implements DispatchService {
                     .filter(s -> s.getStatus() == null || s.getStatus() == 0)
                     .collect(Collectors.groupingBy(ShiftDO::getRouteId));
             grouped.forEach((routeId, shifts) -> shiftByRoute.put(routeId,
-                    DeterministicScheduleSimulator.selectCurrentShift(shifts, at)));
+                    OperatingLineTimeline.selectCurrentShift(shifts, at)));
         }
 
         Map<Long, VehicleWindow> result = new LinkedHashMap<>();

@@ -118,7 +118,7 @@ public class AppBusServiceImpl implements AppBusService {
                     vo.setLatitude(v.getLatitude());
                     vo.setProgress(v.getProgress());
                     vo.setSpeedKmh(v.getSpeedKmh());
-                    // 数据来源（REAL / SIMULATED）：小程序据此标注「模拟演示」，不拿模拟位置冒充真实上报
+                    // 数据来源（REAL / REAL_STALE）：小程序据此标注位置新鲜度
                     vo.setDataSource(v.getDataSource());
                     // ETA = 剩余进度占比 × 班次计划时长（向下取整至少 1 分钟）
                     int duration = v.getShiftCode() == null ? 60
@@ -134,7 +134,7 @@ public class AppBusServiceImpl implements AppBusService {
                         Double wait = v.getEtaToNextStationMinutes();
                         vo.setWaitDepartureMinutes(wait == null ? null : (int) Math.max(0, Math.ceil(wait)));
                     }
-                    // 到下一站的剩余距离/分钟：班次插值直接给出（不依赖算法服务）；
+                    // 到下一站的剩余距离/分钟：由统一位置快照给出（不依赖算法服务）；
                     // 无下一站（待发/收车）时保持 null，前端据此显示"待发车/已到终点"
                     vo.setEtaToNextStationMinutes(v.getEtaToNextStationMinutes());
                     vo.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
@@ -382,7 +382,6 @@ public class AppBusServiceImpl implements AppBusService {
 
         List<AppBusNearbyRespVO.NearbyBus> buses = new ArrayList<>();
         boolean hasReal = false;
-        boolean hasSimulated = false;
         for (MonitoringVehicleRespVO v : monitoringService.getRealtimeVehicles()) {
             if (v.getStatus() != null && v.getStatus() == 2) {
                 continue; // 停用车辆
@@ -415,7 +414,7 @@ public class AppBusServiceImpl implements AppBusService {
             }
             bus.setLongitude(vlon);
             bus.setLatitude(vlat);
-            bus.setDataSource(v.getDataSource() == null ? AppBusNearbyRespVO.SOURCE_SIMULATED : v.getDataSource());
+            bus.setDataSource(v.getDataSource());
             bus.setNextStation(v.getNextStationName());
             bus.setCurrentStation(v.getCurrentStationName());
             bus.setStatus(mapStatus(v));
@@ -425,10 +424,8 @@ public class AppBusServiceImpl implements AppBusService {
             bus.setUpdatedAt(LocalDateTime.now());
             // 车辆位置 → 下一站 → 高德真实道路距离/ETA（短 TTL 缓存节流；无下一站/无位置不调高德）
             this.fillEta(bus, v, stationByName);
-            if (AppBusNearbyRespVO.SOURCE_REAL.equals(bus.getDataSource())) {
+            if (bus.getDataSource() != null && bus.getDataSource().startsWith(AppBusNearbyRespVO.SOURCE_REAL)) {
                 hasReal = true;
-            } else {
-                hasSimulated = true;
             }
             // 用户体验口径：卡片要回答"我最方便的那站，这车还有几分钟到"，
             // 而不是"这车离它的下一站还有几分钟"（下一站可能根本不在用户附近）。
@@ -467,8 +464,7 @@ public class AppBusServiceImpl implements AppBusService {
         resp.setLines(new ArrayList<>(deduped.values()));
         resp.setLineCount(deduped.size());
         resp.setDataSource(buses.isEmpty() ? AppBusNearbyRespVO.SOURCE_NONE
-                : (hasReal && hasSimulated ? "MIXED" : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL
-                        : AppBusNearbyRespVO.SOURCE_SIMULATED)));
+                : (hasReal ? AppBusNearbyRespVO.SOURCE_REAL : AppBusNearbyRespVO.SOURCE_NONE));
         fillServiceWindow(resp, mapData, buses);
         return resp;
     }
@@ -622,19 +618,16 @@ public class AppBusServiceImpl implements AppBusService {
     /** 真实位置新鲜度阈值（分钟）：超过视为 STALE（司机中断上报但未超过监控窗口） */
     private static final long REAL_FRESH_MINUTES = 5;
 
-    /** 位置新鲜度：REAL 且 lastLocationTime<5min→REAL_FRESH；REAL 且 ≥5min→REAL_STALE；SIMULATED→SIMULATED；无坐标→NO_LOCATION */
+    /** 位置新鲜度：lastLocationTime<5min→REAL_FRESH；其余→REAL_STALE；无坐标→NO_LOCATION */
     private String locationSource(MonitoringVehicleRespVO v) {
         if (v.getLongitude() == null || v.getLatitude() == null) {
             return "NO_LOCATION";
         }
-        if (AppBusNearbyRespVO.SOURCE_REAL.equals(v.getDataSource())) {
-            if (v.getLastLocationTime() != null
-                    && v.getLastLocationTime().isBefore(LocalDateTime.now().minusMinutes(REAL_FRESH_MINUTES))) {
-                return "REAL_STALE";
-            }
-            return "REAL_FRESH";
+        if (v.getLastLocationTime() != null
+                && v.getLastLocationTime().isBefore(LocalDateTime.now().minusMinutes(REAL_FRESH_MINUTES))) {
+            return "REAL_STALE";
         }
-        return "SIMULATED";
+        return "REAL_FRESH";
     }
 
     /**
@@ -728,7 +721,7 @@ public class AppBusServiceImpl implements AppBusService {
             bus.setRouteProvider("SCHEDULE");
             return;
         }
-        // 班次插值/模拟引擎已给出"到下一站剩余公里 + 分钟"：优先使用（稳定、不依赖算法服务）
+        // 统一位置快照已给出"到下一站剩余公里 + 分钟"：优先使用（稳定、不依赖算法服务）
         if (v.getEtaToNextStationMinutes() != null || v.getDistanceToNextStationKm() != null) {
             bus.setDistanceToNextStationKm(v.getDistanceToNextStationKm());
             bus.setEtaMinutes(v.getEtaToNextStationMinutes() == null ? null

@@ -270,7 +270,7 @@ const typeChartOptions = computed<EChartsOption>(() => ({
       radius: ['35%', '65%'],
       center: ['50%', '45%'],
       label: { formatter: '{b}\n{c} 单' },
-      data: orderStats.value.typeDistribution.map((item) => ({
+      data: (orderStats.value.typeDistribution ?? []).map((item) => ({
         name: ORDER_TYPE_LABELS[item.type] || `类型${item.type}`,
         value: item.count
       }))
@@ -306,7 +306,7 @@ const trendChartOptions = computed<EChartsOption>(() => ({
   grid: { top: 40, left: 24, right: 24, bottom: 24, containLabel: true },
   xAxis: {
     type: 'category',
-    data: orderStats.value.dailyTrend.map((item) => item.date.slice(5))
+    data: (orderStats.value.dailyTrend ?? []).map((item) => String(item.date ?? '').slice(5))
   },
   yAxis: [
     { type: 'value', name: '订单量', minInterval: 1 },
@@ -317,14 +317,14 @@ const trendChartOptions = computed<EChartsOption>(() => ({
       name: '订单量',
       type: 'bar',
       barMaxWidth: 24,
-      data: orderStats.value.dailyTrend.map((item) => item.count)
+      data: (orderStats.value.dailyTrend ?? []).map((item) => item.count)
     },
     {
       name: '营收(元)',
       type: 'line',
       yAxisIndex: 1,
       smooth: true,
-      data: orderStats.value.dailyTrend.map((item) => Number(item.amount ?? 0))
+      data: (orderStats.value.dailyTrend ?? []).map((item) => Number(item.amount ?? 0))
     }
   ]
 }))
@@ -337,9 +337,9 @@ const loadAll = async () => {
       getDashboardSummary(),
       getOrderStatistics()
     ])
-    stats.value = statisticsData
-    summary.value = summaryData
-    orderStats.value = orderStatisticsData
+    stats.value = statisticsData ?? {}
+    summary.value = summaryData ?? {}
+    orderStats.value = orderStatisticsData ?? { typeDistribution: [], statusDistribution: [], dailyTrend: [] }
   } catch (e) {
     console.error('Failed to load dashboard data', e)
   } finally {

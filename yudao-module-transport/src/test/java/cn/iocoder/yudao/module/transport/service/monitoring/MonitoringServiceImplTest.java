@@ -20,7 +20,6 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
-import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -55,7 +54,6 @@ class MonitoringServiceImplTest {
     @Mock private VehicleMapper vehicleMapper;
     @Mock private VehicleLocationTrackMapper vehicleLocationTrackMapper;
     @Mock private VehicleLocationMapper vehicleLocationMapper;
-    @Mock private SimulationEngine simulationEngine;
     @Mock private DispatchPlanItemMapper dispatchPlanItemMapper;
     @Mock private DriverMapper driverMapper;
     @Mock private DriverVehicleMapper driverVehicleMapper;
@@ -74,7 +72,6 @@ class MonitoringServiceImplTest {
         ReflectionTestUtils.setField(monitoringService, "vehicleMapper", vehicleMapper);
         ReflectionTestUtils.setField(monitoringService, "vehicleLocationTrackMapper", vehicleLocationTrackMapper);
         ReflectionTestUtils.setField(monitoringService, "vehicleLocationMapper", vehicleLocationMapper);
-        ReflectionTestUtils.setField(monitoringService, "simulationEngine", simulationEngine);
         ReflectionTestUtils.setField(monitoringService, "dispatchPlanItemMapper", dispatchPlanItemMapper);
         ReflectionTestUtils.setField(monitoringService, "driverMapper", driverMapper);
         ReflectionTestUtils.setField(monitoringService, "driverVehicleMapper", driverVehicleMapper);
@@ -170,10 +167,10 @@ class MonitoringServiceImplTest {
     // ==================== 统一位置模型：快照上下文透传到监控 VO ====================
 
     @Test
-    void getRealtimeVehicles_simulatedSnapshot_keepsShiftRouteContext() {
+    void getRealtimeVehicles_realSnapshot_keepsShiftRouteContext() {
         stubEmptyFleetLookups();
-        when(locationProvider.getLocations(any(), eq(true))).thenReturn(Map.of(VEHICLE_ID,
-                VehicleLocationSnapshot.builder().vehicleId(VEHICLE_ID).source("SIMULATED").status(1)
+        when(locationProvider.getLocations(any())).thenReturn(Map.of(VEHICLE_ID,
+                VehicleLocationSnapshot.builder().vehicleId(VEHICLE_ID).source("REAL").status(1)
                         .longitude(104.1).latitude(30.6)
                         .shiftId(1L).shiftCode("SH001").routeId(1L).routeName("县城—青山镇线")
                         .progress(40).currentStationName("红花村站").nextStationName("青山镇站")
@@ -183,10 +180,10 @@ class MonitoringServiceImplTest {
 
         assertEquals(1, vehicles.size());
         MonitoringVehicleRespVO vo = vehicles.get(0);
-        // 模拟位置必须带班次/线路上下文（实时公交按线路聚合车辆依赖），并标注 SIMULATED 不冒充真实
+        // 真实位置快照必须带班次/线路上下文（实时公交按线路聚合车辆依赖）
         assertEquals("SH001", vo.getShiftCode());
         assertEquals("县城—青山镇线", vo.getRouteName());
-        assertEquals("SIMULATED", vo.getDataSource());
+        assertEquals("REAL", vo.getDataSource());
         assertEquals(MonitoringServiceImpl.STATUS_IN_TRANSIT, vo.getStatus().intValue());
         assertEquals(40, vo.getProgress().intValue());
         assertEquals("青山镇站", vo.getNextStationName());
@@ -197,7 +194,7 @@ class MonitoringServiceImplTest {
     @Test
     void getRealtimeVehicles_offlineSnapshot_isIdleWithoutPosition() {
         stubEmptyFleetLookups();
-        when(locationProvider.getLocations(any(), eq(true))).thenReturn(Map.of(VEHICLE_ID,
+        when(locationProvider.getLocations(any())).thenReturn(Map.of(VEHICLE_ID,
                 VehicleLocationSnapshot.builder().vehicleId(VEHICLE_ID).source("OFFLINE").status(0).build()));
 
         List<MonitoringVehicleRespVO> vehicles = monitoringService.getRealtimeVehicles();

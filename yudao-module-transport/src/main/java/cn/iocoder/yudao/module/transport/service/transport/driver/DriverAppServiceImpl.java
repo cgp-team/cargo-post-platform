@@ -57,7 +57,6 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
-import cn.iocoder.yudao.module.transport.service.simulation.SimulationEngine;
 import cn.iocoder.yudao.module.transport.service.dispatch.HandoverService;
 import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
@@ -146,7 +145,6 @@ public class DriverAppServiceImpl implements DriverAppService {
     @Resource private AlgorithmClient algorithmClient;
     /** 真实道路几何（高德 Web key 直连，带缓存）：司机导航轨迹的首选来源 */
     @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
-    @Resource private SimulationEngine simulationEngine;
     @Resource private HandoverService handoverService;
     @Resource private MultiLegService multiLegService;
     @Resource private OrderEventService orderEventService;
@@ -1144,25 +1142,9 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setLongitude(loc.getLongitude().doubleValue());
             vo.setLatitude(loc.getLatitude().doubleValue());
         }
-        // 模拟运营引擎位置（管理端模拟驱动；simulationEnabled=false 时 tick 返回 null）
-        SimulationEngine.SimTick sim = simulationEngine.tick(vehicleId);
-        if (sim != null) {
-            vo.setSimRunning(true);
-            vo.setSimLongitude(sim.getLongitude());
-            vo.setSimLatitude(sim.getLatitude());
-            vo.setCurrentStationName(sim.getStationName());
-            vo.setArrived(sim.isArrived());
-            vo.setSimSeconds(sim.getSimSeconds());
-            SimulationEngine.SimRun run = simulationEngine.getRun(vehicleId);
-            if (run != null) {
-                vo.setTotalSimSeconds(run.getTotalSimSeconds());
-            }
-        }
-        // 当前生效源：REAL 优先，其次 SIMULATED，否则 NONE
+        // 当前生效源：REAL 优先，否则 NONE
         if (vo.getLongitude() != null) {
             vo.setDataSource("REAL");
-        } else if (Boolean.TRUE.equals(vo.getSimRunning())) {
-            vo.setDataSource("SIMULATED");
         } else {
             vo.setDataSource("NONE");
         }
