@@ -3,6 +3,8 @@ package cn.iocoder.yudao.module.member.controller.app.auth;
 import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.framework.ratelimiter.core.annotation.RateLimiter;
+import cn.iocoder.yudao.framework.ratelimiter.core.keyresolver.impl.ClientIpRateLimiterKeyResolver;
 import cn.iocoder.yudao.framework.security.config.SecurityProperties;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
 import cn.iocoder.yudao.module.member.controller.app.auth.vo.*;
@@ -74,6 +76,7 @@ public class AppAuthController {
     @PostMapping("/sms-login")
     @Operation(summary = "使用手机 + 验证码登录")
     @PermitAll
+    @RateLimiter(time = 60, count = 5, keyResolver = ClientIpRateLimiterKeyResolver.class) // 防短信轰炸 / 账号爆破
     public CommonResult<AppAuthLoginRespVO> smsLogin(@RequestBody @Valid AppAuthSmsLoginReqVO reqVO) {
         return success(authService.smsLogin(reqVO));
     }
@@ -81,6 +84,7 @@ public class AppAuthController {
     @PostMapping("/send-sms-code")
     @Operation(summary = "发送手机验证码")
     @PermitAll
+    @RateLimiter(time = 60, count = 5, keyResolver = ClientIpRateLimiterKeyResolver.class) // 防短信轰炸
     public CommonResult<Boolean> sendSmsCode(@RequestBody @Valid AppAuthSmsSendReqVO reqVO) {
         authService.sendSmsCode(getLoginUserId(), reqVO);
         return success(true);
