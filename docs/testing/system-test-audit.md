@@ -1,5 +1,7 @@
 # 系统测试审计报告（master @ b8031f44）
 
+> 📦 **存档说明（2026-09-21）**：本文为时点审计报告，其中 mock-algorithm 契约等被测对象已随运营化改造（PR #153）删除。仅作历史存档；现行测试说明见本目录其他文档。
+
 > 审计基线：`origin/master`（b8031f44，含 PR#83/84：寄货闭环 + 附近实时公交三阶段）。
 > 目的：建立完整测试方案，审计现有实现，标记并修复明确 P0/P1。
 > 说明：master 不含分支 `feat/dispatch-algorithm-integration` 最新 2 个修复 commit（`0743e1f1` undefined 参数、`6e8d02dd` 村庄切换刷新）——已作为 P1 记录，见 bug-report。

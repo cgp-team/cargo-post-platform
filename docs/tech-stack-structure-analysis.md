@@ -1,5 +1,10 @@
 # 客货邮联合调度平台：技术栈结构解析报告
 
+> **时效说明（2026-09-21）**：本文主体为运营化改造（PR #153）前的快照。本次改造已下线模拟运营子系统
+> （`simulation` controller/service、`SimulationEngine/Runtime`、`DeterministicScheduleSimulator`、
+> `transport.simulation.enabled` 开关）与开发者中心，并删除 mock-algorithm/ 与全部演示数据 SQL；
+> 文中相关段落已就地修正，增量 SQL 范围更新为 V001–V022。其余 `文件:行号` 引用以原文撰写时为准。
+
 > 范围：cargo-post-platform 全仓库（Java 后端 / 算法服务 / 管理端 / 小程序 / 数据库 / 部署）
 > 本文性质：技术栈与架构全景解析（论文风格），与《HACO-CPS 求解器机制解析》（`docs/algorithm/haco-cps-solver-mechanism.md`）互为姊妹篇——那篇讲算法原理，这篇讲工程全景
 > 核对方式：关键结论均标注 `文件:行号`
@@ -104,7 +109,6 @@ yudao-framework 的 starter（`yudao-framework/pom.xml:13-30`）：`common`（�
   - 端口 **48080**（`application-local.yaml:1-2`）；
   - WebSocket：`enable: true`、`path: /infra/ws`、`sender-type: local`（`application.yaml:133-136`）；
   - **算法服务地址**：`yudao.transport.algorithm.base-url=${ALGORITHM_BASE_URL:http://127.0.0.1:18081}`（`:154-157`）；
-  - 模拟运营开关：`yudao.transport.simulation.enabled`（`:158-160`）；
   - 多租户**已禁用**（`:169-170`）；本地环境短信验证码写死 9999、开启 security mock（`application-local.yaml:237-240`）；
 - Dockerfile：`eclipse-temurin:21-jre` + 拷贝 jar，EXPOSE 48080（`yudao-server/Dockerfile:3,9,20`）。
 
@@ -120,16 +124,15 @@ dal/dataobject + dal/mysql   # DO 与 Mapper（按业务域子包划分）
 integration/algorithm/       # 算法服务适配层（唯一通道）
 ```
 
-**controller 域**（管理端）：`dashboard`（运营概览）、`dispatch`（智能调度闭环）、`monitoring`（车辆监控）、`simulation`（模拟运营控制）、`developer`（健康诊断），以及资源域 `driver / vehicle / station / route / shift / order / product / handover / orderevent / notice / notification / feedback / topology`；`operation / resource / settlement` 目前仅有 `package-info.java` 占位。
+**controller 域**（管理端）：`dashboard`（运营概览）、`dispatch`（智能调度闭环）、`monitoring`（车辆监控），以及资源域 `driver / vehicle / station / route / shift / order / product / handover / orderevent / notice / notification / feedback / topology`；`operation / resource / settlement` 目前仅有 `package-info.java` 占位。（原 `simulation` 模拟运营控制与 `developer` 健康诊断两个域已随 2026-09-21 运营化改造移除。）
 **controller 域**（小程序端）：`bus`（乘车查询）、`driver`（司机执行）、`send`（寄件）、`order / product / feedback / notice / notification`。
 
 **service 核心域**：
 
 - `dispatch`：智能调度大脑——`AutoDispatchPlanner`（自动选场站选车）、`MultiLegPlanner` + `HandoverService` + `LegConflictService`（多段联运）、`CargoPricingService` / `PricingRuleService`（计价）、`DispatchEstimationService`（ETA/收入/成本估算）、`TransportTopologyService`（线网拓扑）；
-- `monitoring`：车辆实时监控 + `DeterministicScheduleSimulator`（确定性班次模拟器）；
+- `monitoring`：车辆实时监控 + `VehicleLocationProvider`（统一位置模型：REAL 司机上报 / REAL_STALE / OFFLINE，不做模拟推算）；
 - `order`：`CargoReviewService`（货运承运审核）、`OrderEventService`；
-- `geo`：`RoadPolylineService` / `RouteCorridorService`（路网轨迹/走廊）；
-- `simulation`：模拟运营引擎（`SimulationEngine/Runtime`）。
+- `geo`：`RoadPolylineService` / `RouteCorridorService`（路网轨迹/走廊）。
 
 **算法适配层**（`integration/algorithm/`）是后端访问 Python 算法服务的**唯一通道**：
 
@@ -177,7 +180,7 @@ integration/algorithm/       # 算法服务适配层（唯一通道）
 标准分层：`api/`（按后端模块分目录）、`views/`、`store/modules/`、`router/`、`layout/`、`components/`，路由守卫在 `src/permission.ts`。`src/api/transport/` 与 `src/views/transport/` 基本一一对应：
 
 - `dashboard` 运营概览；`dispatch` **调度工作台**（订单池/方案/手工/智能向导，`dispatch/index.vue:2,117,176,199`）；`dispatch-center` **调度中心**（订单池+实时地图+运输详情+事件时间线四合一）；`monitoring` 实时监控 + `replay.vue` 轨迹回放；
-- 资源管理：`station / route / shift / vehicle / driver / driver-vehicle`；业务：`order`（含货运审核）、`product / productOrder`、`handover`、`topology`（订单运输链可视化=多段联运展示位）、`notice / notification / expiry / developer / simulation`；
+- 资源管理：`station / route / shift / vehicle / driver / driver-vehicle`；业务：`order`（含货运审核）、`product / productOrder`、`handover`、`topology`（订单运输链可视化=多段联运展示位）、`notice / notification / expiry`（原 `developer / simulation` 视图已随运营化改造移除）；
 - 注意：**没有独立的 send/multileg 目录**——寄货订单在 `order`，联运可视化在 `topology`；`settlement` 目录为空，结算走 dispatch API（`api/transport/dispatch/index.ts:311`）。
 
 ### 4.3 地图集成
@@ -219,9 +222,9 @@ integration/algorithm/       # 算法服务适配层（唯一通道）
 ## 6. 数据库与 SQL 资产
 
 - **MySQL 8**（库名 `ruoyi-vue-pro`，`application-local.yaml:50`）+ **Redis**（缓存 TTL 1h、分布式锁、幂等）；
-- `sql/mysql/`：上游全量 `ruoyi-vue-pro.sql` + **transport 唯一 DDL 源** `transport-schema.sql` + 菜单/演示数据系列；
+- `sql/mysql/`：上游全量 `ruoyi-vue-pro.sql` + **transport 唯一 DDL 源** `transport-schema.sql` + 菜单脚本（比赛期的演示数据系列已随运营化改造删除）；
 - `transport-schema.sql` 表分组：资源域（vehicle/driver/station/route/shift，`:4-124`）、订单域（order/passenger/cargo/postal，`:142-210`）、**调度域**（dispatch_task `:231`、dispatch_plan `:249`、plan_item `:283`、plan_log、departure_check `:342`）、计价 `:327`、**算法留痕** `transport_algorithm_request :356`、商品溯源、执行监控（shift_execution/vehicle_location/track，`:451-492`）、**多段联运**（leg `:562`、handover `:599`、order_event `:636`、user_notification `:651`、driver_status `:674`）；
-- 演进管理：`sql/incremental/V001–V020` **人工执行，无 Flyway**（`sql/incremental/README.md:3`）——V002 算法留痕、V003 调度闭环、V010 计价、V012 分段路网、V015 算法解释字段、V018 联运框架、V019 站点可达性模型。
+- 演进管理：`sql/incremental/V001–V022` **人工执行，无 Flyway**（`sql/incremental/README.md:3`）——V002 算法留痕、V003 调度闭环、V010 计价、V012 分段路网、V015 算法解释字段、V018 联运框架、V019 站点可达性模型、V020 plan_reason 扩长、V021 移除模拟运营表与菜单、V022 会员中心菜单。
 
 ## 7. 端到端数据流
 
@@ -316,7 +319,7 @@ JDK 21 · Maven 3.9+（**无 Maven Wrapper**）· Node 22 · pnpm · Python 3.12
 | `yudao-server/` | 启动壳 + 配置 + Dockerfile |
 | `yudao-ui/yudao-ui-admin-vue3/` | 管理端 SPA |
 | 小程序仓库 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) | 原生微信小程序（已拆分独立仓库） |
-| `sql/mysql/` + `sql/incremental/` | DDL 源 + V001–V020 人工增量 |
+| `sql/mysql/` + `sql/incremental/` | DDL 源 + V001–V022 人工增量 |
 | `deploy/` | docker-compose / nginx / systemd |
 | `tools/` | 路网预取与线网 SQL 生成脚本 |
 | `docs/` | 文档库（api / algorithm / optimization / transport / testing / debug） |

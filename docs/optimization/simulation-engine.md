@@ -1,5 +1,7 @@
 # 模拟运营引擎（SimulationEngine）
 
+> ⚠️ **已废弃（2026-09-21）**：模拟运营子系统已随运营化改造（PR #153）整体下线——`/transport/simulation/*` 控制接口、`SimulationEngine/Runtime`、4 张模拟运行时表（由 `sql/incremental/V021__remove_simulation.sql` 清理）与 `SIMULATION_ENABLED` 开关均已移除。车辆位置现仅以司机端真实上报为准。本文仅作历史存档。
+
 ## 目标
 模拟车辆沿**真实道路 polyline**移动（非站点间直线），时间按倍速推进，模拟时间影响任务段状态。
 

@@ -11,7 +11,8 @@
 
 对应实现：
 
-- `DeterministicScheduleSimulator`：车辆位置完全按线路站序 + 计划分钟推进，逐站停靠；
+- 车辆位置以司机端真实上报为准（`VehicleLocationProvider`：REAL / REAL_STALE / OFFLINE），不做任何模拟推算；
+  （比赛期曾用 `DeterministicScheduleSimulator` 按班次计划推算位置，已随 2026-09-21 运营化改造移除）；
 - `transport_dispatch_plan_item.detour_distance_km / detour_duration_seconds / service_point_station_id`
   记录"相对公交骨架的绕行代价"，骨架站为 0；
 - `MultiLegPlanner` 的换乘/绕行惩罚（`DETOUR_PENALTY_MINUTES_PER_KM` 等）保证不会为了单个订单大幅绕行。
@@ -22,8 +23,9 @@
 - **返程：终点站 → 起点站，逆向再来一遍**，站点同样逐个停靠，**同样可以取货/派货**；
 - 因此班次时长按"往返"配置（`transport_shift.planned_duration_minutes` ≈ 线路单程分钟的 2 倍）。
 
-对应实现：`DeterministicScheduleSimulator.compute()` 在 `elapsed > 单程时长` 后进入返程阶段
-（位置 = 去程在折回时刻的位置，但当前站/下一站方向相反），往返跑完后收车回起点站。
+对应实现：班次时长按"往返"配置（`transport_shift.planned_duration_minutes` ≈ 线路单程分钟的 2 倍），
+调度按线路站序时间线构建去程/返程骨架，逐站停靠。（原班次确定性模拟器 `DeterministicScheduleSimulator`
+已于 2026-09-21 随模拟运营子系统下线。）
 
 ## 3. 不是所有订单都要接（可以选择不入池）
 
@@ -59,10 +61,10 @@
   当前车离本段起点 >6km 且换车能近 3km 以上才改派，并把前一段标记为需要换乘交接；
 - `retimeWithReposition()`：改派后按"上一段到达 + 交接停留(`HANDOVER_DWELL_MINUTES`) + 新车调动时间"重排各段时间。
 
-## 6. 演示与验收口径
+## 6. 运营与验收口径
 
 - 附近公交 / 实时公交展示的车辆**必须跑在真实公交线路上**（347 路区间、320 路、329 路、349 路…），
-  位置由班次计划推算（无真实 GPS 时明确标注"位置推算"），不伪造真实上报；
+  位置只来自司机端真实上报，无上报即显示"位置暂不可用"，不伪造、不推算；
 - 调度可视化应能一眼看出**哪条线是哪台车**（每车一色 + 车辆配色图例 + 行驶方向箭头 + 经停序号）；
 - 多段联运要在可视化里写清：**哪个订单、在哪一站、交给哪位司机/转运站点工作人员**。
 
@@ -82,5 +84,4 @@
 - 用户原始地址与坐标单独留痕（`transport_cargo_order.original_address / original_latitude / original_longitude`），
   不因为"选不到站点"就丢掉用户真实位置；
 - 实际服务点仍落到站点（`service_point_station_id`），调度与可视化都以站点为骨架，
-  绕行代价记在方案明细的 `detour_distance_km / detour_duration_seconds` 上；
-- 演示订单：`TPDEMO7`（明志苑门口路边取货 → DOOR_PICKUP）、`TPDEMO8`（送到学生公寓路口 → SAFE_ROADSIDE）。
+  绕行代价记在方案明细的 `detour_distance_km / detour_duration_seconds` 上。

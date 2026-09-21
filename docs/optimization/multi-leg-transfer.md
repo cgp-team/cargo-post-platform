@@ -72,6 +72,8 @@ DDL：`sql/incremental/V018__multi_leg_framework.sql`（人工执行入口）；
 
 ## 8. 演示路径（配合 demo SQL）
 
+> ⚠️ 本节为比赛演示期记录：所述 demo SQL 已随 2026-09-21 运营化改造全部删除，仅作历史存档。
+
 1. 执行 `sql/mysql/demo-cqupt-stations.sql`、`demo-cqupt-vehicles.sql`、`demo-multi-leg.sql`。
 2. 订单 `TPCQ0004`（黄桷垭 → 南山）/`TPCQ0005`（南山 → 黄桷垭）无直达线路 → 一键调度后被拆成 2 段。
 3. 司机端工作台出现"有 1 个换乘交接待确认"入口 → 进入交接页拍照确认。
@@ -103,7 +105,7 @@ DDL：`sql/incremental/V018__multi_leg_framework.sql`（人工执行入口）；
 
 - `OperatingLineTimeline`（纯函数）按「线路站序计划分钟 + 班次发车时间/时长」算出窗口开始时车辆位置：
   沿当前行驶方向**还会依次经过哪些站**（`travelOrder`）、**已经开过哪些站**（`passedStations`）。
-  口径与 `DeterministicScheduleSimulator` 一致（班次 = 一个往返，单程 = 窗口一半）。
+  口径：班次 = 一个往返，单程 = 窗口一半（与已下线的 `DeterministicScheduleSimulator` 原口径一致）。
 - `travelOrder` 作为该车**自己的算法骨架**（`AlgorithmVehicleDTO.skeleton`）：货运任务只能插进骨架间隙，
   按线路顺序、有先后地取派；并按窗口结束时刻截断，避免"整条线跑完的时间"撞窗口上限。
 - 派单前：取货站被所有候选车开过 → 本批不派该单（`DISPATCH_NO_BACKTRACKING`）。
