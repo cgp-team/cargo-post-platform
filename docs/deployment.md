@@ -10,14 +10,14 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 deploy/scripts/health-check.sh
 ```
 
-Compose 提供 MySQL、Redis、Mock 算法服务与自研算法服务（`algorithm/`，OR-Tools；MinIO 自 2026-08 起默认停用，compose 中保留注释可一键恢复；文件存储默认使用数据库）。MySQL/Redis/算法端口仅绑定 `127.0.0.1`，MySQL 已关闭 performance-schema 以适配小内存机器。业务后端与完整 Vue 管理端暂按本机进程启动。生产环境不得直接复用开发 Compose；应使用独立密钥、TLS、网络策略、监控、日志采集和经过演练的恢复流程。
+Compose 提供 MySQL、Redis 与自研算法服务（`algorithm/`，OR-Tools；MinIO 自 2026-08 起默认停用，compose 中保留注释可一键恢复；文件存储默认使用数据库）。MySQL/Redis/算法端口仅绑定 `127.0.0.1`，MySQL 已关闭 performance-schema 以适配小内存机器。业务后端与完整 Vue 管理端暂按本机进程启动。生产环境不得直接复用开发 Compose；应使用独立密钥、TLS、网络策略、监控、日志采集和经过演练的恢复流程。
 
 ### 服务器加固与精简基线（2026-08 起）
 
 dev 服务器已完成一轮系统性精简（方案与实测数据见 [slimming-plan.md](internal/slimming-plan.md)），基线如下，新增配置时不要回退：
 
 - 后端外部化配置 `/opt/cargo-post/config/application-dev.yaml` 叠加：~~Quartz 整体禁用~~（2026-08-23 起已因首个业务定时任务 `expiryWarningJob` 重新启用 Quartz 自动配置）、Redisson 线程收缩、Druid stat/监控台关闭、springdoc/knife4j 关闭（`/druid`、`/v3/api-docs` 不对公网开放）、api-encrypt 关闭、actuator 仅暴露 health。
-- 日志表由 deploy 用户 crontab 每周执行 `deploy/scripts/cleanup.sql` 清理（访问日志留 7 天、错误/登录日志留 30 天）。
+- 日志表由 deploy 用户 crontab 每周日 03:17 执行 `deploy/scripts/cleanup.sql` 清理（访问日志留 7 天、错误/登录日志留 30 天）。
 - `vm.swappiness=10` 已持久化（`/etc/sysctl.d/99-cargo-post.conf`），保护 mysqld 不被换出。
 
 ### 后端 Redis 归属（2026-09 起，登录/下单类故障首要排查项）
@@ -34,22 +34,14 @@ jar 内 `application-dev.yaml` 的 Redis 默认地址是 yudao 公共演示 Redi
 
 ### 文件（照片）URL 必须带 `/api` 前缀
 
-### 演示登录：短信渠道不可用时用密码登录
+### 短信渠道与会员登录
 
 dev 服务器的 `system_sms_channel` 用的是上游示例凭据（`DEBUG_DING_TALK`），`/app-api/member/auth/send-sms-code` 会返回 `500 系统异常`，
-因此**短信验证码登录在现场演示时不可用**（商城下单/我的寄货都要求登录）。执行 `sql/mysql/demo-member.sql` 预置一个已知密码的演示会员：
+因此**短信验证码登录当前不可用**（商城下单/我的寄货都要求登录）。比赛期的演示会员预置脚本 `sql/mysql/demo-member.sql`
+已随 2026-09-21 运营化改造删除，服务器上的演示会员账号也已清空；运营期会员账号通过小程序注册，
+或在管理端「会员中心 → 会员列表」（V022 新增菜单）中管理。
 
-| 账号 | 密码 | 登录方式 |
-|---|---|---|
-| `13800000000` | `123456` | 小程序登录页 → 切到「密码登录」 |
-
-```bash
-set -a; source /opt/cargo-post-platform/.env; set +a
-docker compose --env-file /opt/cargo-post-platform/.env -f deploy/docker-compose.yml \
-  exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}" "${DB_NAME}" < sql/mysql/demo-member.sql
-```
-
-若要连短信流程一起演示，需要在管理端「系统管理 → 短信管理」配置一个真实可用渠道（阿里云/腾讯云，需实名与模板报备），
+要启用短信登录，需要在管理端「系统管理 → 短信管理」配置一个真实可用渠道（阿里云/腾讯云，需实名与模板报备），
 或增加一个"开发调试渠道"（只写日志不真发短信）——后者可作为后续增强项。
 
 `deploy/nginx/nginx.conf` 只把 `/api/` 转发到后端（转发时**剥掉** `/api` 前缀），其余路径落到前端 SPA。
@@ -117,7 +109,7 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart cargo-post
 
 服务器专属配置（数据库、Redis 密码等）放 `/opt/cargo-post/config/application-dev.yaml`（Spring Boot 自动读取）或 `/opt/cargo-post/app.env`（systemd EnvironmentFile，权限 600），均不得提交仓库。
 
-Compose 技术栈（MySQL/Redis/Mock 算法）与 CI 的数据库迁移步骤统一从持久检出根目录的 `.env` 读取配置：按 `.env.example` 创建 `/opt/cargo-post-platform/.env`（权限 600），并用 `deploy/scripts/deploy.sh` 启动技术栈。注意 `.env` 放在 runner 工作区无效——`actions/checkout` 每次构建都会清理未跟踪文件。
+Compose 技术栈（MySQL/Redis/算法服务）与 CI 的数据库迁移步骤统一从持久检出根目录的 `.env` 读取配置：按 `.env.example` 创建 `/opt/cargo-post-platform/.env`（权限 600），并用 `deploy/scripts/deploy.sh` 启动技术栈。注意 `.env` 放在 runner 工作区无效——`actions/checkout` 每次构建都会清理未跟踪文件。
 
 ### Self-hosted runner
 
@@ -142,8 +134,22 @@ workflow 引用 `environment: dev`，首次运行自动创建；可在 Settings 
 
 `deploy/nginx/nginx.conf` 是无域名、无证书路径的示例：`/` 服务前端静态文件，`/api/` 代理后端，`/ws/` 代理 WebSocket。算法服务未配置浏览器入口，只允许后端通过内部地址访问。
 
+> **HTTPS/域名：待域名确定后配置。** 当前以 `http://1.15.29.107` 直连；运营方提供域名后需补办备案、申请证书并在 Nginx 增加 443 server 与 HTTP→HTTPS 跳转，届时同步更新 `infra_file_config.config.domain`、小程序仓库 `utils/config.js` 的 release baseURL 与百度地图 AK 的 Referer 白名单。
+
 前端百度地图 AK（`yudao-ui-admin-vue3/.env.prod` 的 `VITE_BAIDU_MAP_KEY`）的 Referer 白名单必须包含部署访问地址（IP 或域名，如 `1.15.29.107`），否则车辆监控等地图页会弹「APP Referer校验失败」且地图无法加载；在白名单管理平台（lbsyun.baidu.com 控制台）修改后即时生效，无需重新构建。
+
+## 运维脚本一览（`deploy/scripts/`）
+
+| 脚本 | 用途 |
+|---|---|
+| `health-check.sh` | 技术栈健康检查（Compose 各容器与后端端点） |
+| `deploy.sh` | 启动/更新技术栈（从仓库根目录 `.env` 读配置） |
+| `diagnose-backend.sh` | 后端故障一次采集（健康、Redis 读写、磁盘、日志） |
+| `backup.sh` | MySQL gzip 逻辑备份，默认保留 14 天（见下节） |
+| `cleanup.sql` | 日志表清理（crontab 每周日 03:17 执行） |
+| `app-api-smoke.sh` | 小程序端 `/app-api` 关键端点冒烟测试 |
+| `purge-demo-data.sql` | 一次性手工清库（移除比赛演示数据，2026-09-21 已执行；危险操作，须先备份，禁止纳入自动化） |
 
 ## 备份与恢复
 
-`deploy/scripts/backup.sh` 生成 gzip 压缩的 MySQL 逻辑备份，默认保留 14 天。该脚本是开发基础版本，不代表完整灾备；上线前必须完成恢复演练、对象存储备份、异地副本、RPO/RTO 和加密要求。
+dev 服务器已由 deploy 用户 crontab **每日 03:47 自动执行** `deploy/scripts/backup.sh`，生成 gzip 压缩的 MySQL 逻辑备份并**保留 14 天**；另有**每周日 03:17** 执行 `deploy/scripts/cleanup.sql` 清理日志表（访问日志留 7 天、错误/登录日志留 30 天）。该脚本仍是开发基础版本，不代表完整灾备；上线前必须完成恢复演练、对象存储备份、异地副本、RPO/RTO 和加密要求。
