@@ -132,9 +132,9 @@ workflow 引用 `environment: dev`，首次运行自动创建；可在 Settings 
 
 ## Nginx
 
-`deploy/nginx/nginx.conf` 是无域名、无证书路径的示例：`/` 服务前端静态文件，`/api/` 代理后端，`/ws/` 代理 WebSocket。算法服务未配置浏览器入口，只允许后端通过内部地址访问。
+`deploy/nginx/nginx.conf` 与生产服务器 `/etc/nginx/sites-enabled/cargo-post` 保持一致：`/` 服务前端静态文件，`/api/` 代理后端，`/ws/` 代理 WebSocket。算法服务未配置浏览器入口，只允许后端通过内部地址访问。
 
-> **HTTPS/域名：待域名确定后配置。** 当前以 `http://1.15.29.107` 直连；运营方提供域名后需补办备案、申请证书并在 Nginx 增加 443 server 与 HTTP→HTTPS 跳转，届时同步更新 `infra_file_config.config.domain`、小程序仓库 `utils/config.js` 的 release baseURL 与百度地图 AK 的 Referer 白名单。
+> **HTTPS（2026-09-21 已配置）**：域名 `api.qwer2333.com`（A 记录指向 `1.15.29.107`），Let's Encrypt 证书经 certbot 签发并自动续期（certbot.timer）；域名 80 端口 301 跳转 HTTPS，IP 直连（`http://1.15.29.107`）保留给开发版小程序与应急访问。注意服务器 mihomo 代理为 TUN 模式，已加 `letsencrypt.org` 直连绕行规则，否则续期会失败。域名切换后已同步：`infra_file_config.config.domain`、小程序仓库 `utils/config.js` 的 trial/release baseURL；百度地图 AK 的 Referer 白名单需加 `api.qwer2333.com`（lbsyun.baidu.com 控制台操作，即时生效）。
 
 前端百度地图 AK（`yudao-ui-admin-vue3/.env.prod` 的 `VITE_BAIDU_MAP_KEY`）的 Referer 白名单必须包含部署访问地址（IP 或域名，如 `1.15.29.107`），否则车辆监控等地图页会弹「APP Referer校验失败」且地图无法加载；在白名单管理平台（lbsyun.baidu.com 控制台）修改后即时生效，无需重新构建。
 
