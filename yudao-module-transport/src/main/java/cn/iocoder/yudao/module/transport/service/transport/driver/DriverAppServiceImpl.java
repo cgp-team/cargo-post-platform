@@ -1358,9 +1358,6 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     /** 完成配送/取货：最后一段完成 → 订单完成 + 通知（需求 §6 禁止第一段完成即整单完成） */
-    // FIXME(WAVE4-P1 状态机CAS死角): advanceLegStatus 用 notIn(COMPLETED,CANCELLED) 直接写 COMPLETED，
-    // 会把多段联运中间态(TRANSFERRING/IN_TRANSIT/PARTIALLY_COMPLETED)绕过剩余段→货物滞留换乘站。
-    // 需加 read-check-then-write 守卫 + 乐观锁/版本号。细节交其他模型。
     private void completeLeg(TransportLegDO leg) {
         List<TransportLegDO> all = multiLegService.getLegsByOrderId(leg.getOrderId());
         // 守卫：中间段不允许直接"完成"。中间段的正确出口是换乘交接（handover-start/confirm），
