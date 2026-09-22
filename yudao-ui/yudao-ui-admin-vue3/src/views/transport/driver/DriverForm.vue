@@ -28,7 +28,21 @@ const message = useMessage()
 const formLoading = ref(false); const dialogVisible = ref(false); const dialogTitle = ref(''); const formType = ref('')
 const formRef = ref(); const emit = defineEmits(['success'])
 const formData = ref<DriverApi.DriverVO>({ name: '', mobile: '', licenseNo: '', licenseExpireDate: undefined })
-const formRules = reactive({ name: [{ required: true, message: '司机姓名不能为空', trigger: 'blur' }] })
+// 手机号：中国大陆 11 位；驾驶证号：与身份证同号的 18 位，也兼容部分地区的字母编号
+const MOBILE_PATTERN = /^1[3-9]\d{9}$/
+const LICENSE_PATTERN = /^[0-9A-Za-z]{12,20}$/
+const formRules = reactive({
+  name: [{ required: true, message: '司机姓名不能为空', trigger: 'blur' }],
+  mobile: [
+    { required: true, message: '手机号不能为空', trigger: 'blur' },
+    { pattern: MOBILE_PATTERN, message: '请输入正确的 11 位手机号', trigger: 'blur' }
+  ],
+  licenseNo: [
+    { required: true, message: '驾驶证号不能为空', trigger: 'blur' },
+    { pattern: LICENSE_PATTERN, message: '驾驶证号为 12-20 位数字或字母', trigger: 'blur' }
+  ],
+  licenseExpireDate: [{ required: true, message: '请选择驾照到期日', trigger: 'change' }]
+})
 const resetForm = () => { formData.value = { name: '', mobile: '', licenseNo: '', licenseExpireDate: undefined }; formRef.value?.resetFields() }
 const open = (type: string, id?: number) => {
   dialogVisible.value = true; dialogTitle.value = type === 'create' ? '新增司机' : '编辑司机'; formType.value = type; resetForm()

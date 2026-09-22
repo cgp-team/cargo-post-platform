@@ -35,8 +35,8 @@
       </el-form-item>
       <el-form-item label="线路状态" prop="status">
         <el-radio-group v-model="formData.status">
-          <el-radio :label="0">启用</el-radio>
-          <el-radio :label="1">停用</el-radio>
+          <el-radio :value="0">启用</el-radio>
+          <el-radio :value="1">停用</el-radio>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="开放调度" prop="dispatchEnabled">
@@ -94,9 +94,22 @@ const formData = ref<any>({
   routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null,
   sourceType: 'PROJECT', serviceType: 'CARGO', status: 0, dispatchEnabled: true
 })
+// 起终点相同会产生"零长度线路"：里程为 0、算法代价矩阵退化，调度结果不可用——在入口拦住
+const validateEndStation = (_rule: any, value: any, callback: any) => {
+  if (value != null && value === formData.value.startStationId) {
+    return callback(new Error('终点站点不能与起点站点相同'))
+  }
+  callback()
+}
 const formRules = reactive({
   routeCode: [{ required: true, message: '线路编码不能为空', trigger: 'blur' }],
   routeName: [{ required: true, message: '线路名称不能为空', trigger: 'blur' }],
+  startStationId: [{ required: true, message: '请选择起点站点', trigger: 'change' }],
+  endStationId: [
+    { required: true, message: '请选择终点站点', trigger: 'change' },
+    { validator: validateEndStation, trigger: 'change' }
+  ],
+  distanceKm: [{ type: 'number', min: 0, message: '里程需为不小于 0 的数字', trigger: 'blur' }],
 })
 const resetForm = () => {
   formData.value = {

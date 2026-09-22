@@ -28,8 +28,8 @@
       </el-form-item>
       <el-form-item label="站点状态" prop="status">
         <el-radio-group v-model="formData.status">
-          <el-radio :label="0">启用</el-radio>
-          <el-radio :label="1">停用</el-radio>
+          <el-radio :value="0">启用</el-radio>
+          <el-radio :value="1">停用</el-radio>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="数据来源" prop="sourceType">
@@ -187,9 +187,24 @@ const formData = ref<StationApi.StationVO>({
   remark: '',
 })
 
+// 经纬度：业务坐标统一 GCJ-02，越界坐标会污染算法代价矩阵（距离/耗时全错），必须在入口拦住
+const validateLongitude = (_rule: any, value: any, callback: any) => {
+  if (value === undefined || value === null || value === '') return callback()
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < -180 || n > 180) return callback(new Error('经度需为 -180 ~ 180 之间的数字'))
+  callback()
+}
+const validateLatitude = (_rule: any, value: any, callback: any) => {
+  if (value === undefined || value === null || value === '') return callback()
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < -90 || n > 90) return callback(new Error('纬度需为 -90 ~ 90 之间的数字'))
+  callback()
+}
 const formRules = reactive({
   stationCode: [{ required: true, message: '站点编码不能为空', trigger: 'blur' }],
   stationName: [{ required: true, message: '站点名称不能为空', trigger: 'blur' }],
+  longitude: [{ validator: validateLongitude, trigger: 'blur' }],
+  latitude: [{ validator: validateLatitude, trigger: 'blur' }],
 })
 
 const resetForm = () => {

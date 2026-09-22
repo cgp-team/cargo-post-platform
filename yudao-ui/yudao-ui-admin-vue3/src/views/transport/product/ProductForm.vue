@@ -58,8 +58,8 @@
       </el-form-item>
       <el-form-item label="状态" prop="status">
         <el-radio-group v-model="formData.status">
-          <el-radio :label="0">上架</el-radio>
-          <el-radio :label="1">下架</el-radio>
+          <el-radio :value="0">上架</el-radio>
+          <el-radio :value="1">下架</el-radio>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="排序" prop="sort">
@@ -103,6 +103,16 @@ const formData = ref<any>({
 
 const formRules = reactive({
   name: [{ required: true, message: '商品名称不能为空', trigger: 'blur' }],
+  fromVillage: [{ required: true, message: '产地村庄不能为空', trigger: 'blur' }],
+  price: [
+    { required: true, message: '售价不能为空', trigger: 'blur' },
+    { type: 'number', min: 0, message: '售价需为不小于 0 的数字', trigger: 'blur' }
+  ],
+  unit: [{ required: true, message: '请选择单位', trigger: 'change' }],
+  stock: [
+    { required: true, message: '库存不能为空', trigger: 'blur' },
+    { type: 'number', min: 0, message: '库存需为不小于 0 的数字', trigger: 'blur' }
+  ],
 })
 
 const resetForm = () => {

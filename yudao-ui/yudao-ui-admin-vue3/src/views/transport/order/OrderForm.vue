@@ -134,10 +134,41 @@ const formData = ref<any>({
   receiverAddress: '',
 })
 
+const MOBILE_PATTERN = /^1[3-9]\d{9}$/
+
+// 自环订单（取=送）在算法侧会产生空运输段，前端直接拦住更省事
+const validateDeliveryStation = (_rule: any, value: any, callback: any) => {
+  if (value != null && value === formData.value.pickupStationId) {
+    return callback(new Error('送达站点不能与取货站点相同'))
+  }
+  callback()
+}
+// 时间窗倒挂（最早取货晚于最迟送达）在算法侧是无解输入，前端先挡一道
+const validateTimeWindow = (_rule: any, value: any, callback: any) => {
+  const earliest = formData.value.earliestPickupTime
+  if (earliest && value && new Date(value).getTime() < new Date(earliest).getTime()) {
+    return callback(new Error('最迟送达时间不能早于最早取货时间'))
+  }
+  callback()
+}
+
 const formRules = reactive({
   orderType: [{ required: true, message: '请选择订单类型', trigger: 'change' }],
   pickupStationId: [{ required: true, message: '请选择取货站点', trigger: 'change' }],
-  deliveryStationId: [{ required: true, message: '请选择送达站点', trigger: 'change' }],
+  deliveryStationId: [
+    { required: true, message: '请选择送达站点', trigger: 'change' },
+    { validator: validateDeliveryStation, trigger: 'change' }
+  ],
+  latestDeliveryTime: [{ validator: validateTimeWindow, trigger: 'change' }],
+  totalAmount: [{ type: 'number', min: 0, message: '订单金额需为不小于 0 的数字', trigger: 'blur' }],
+  passengerCount: [{ type: 'number', min: 1, message: '乘客人数至少为 1', trigger: 'blur' }],
+  contactMobile: [{ pattern: MOBILE_PATTERN, message: '请输入正确的 11 位手机号', trigger: 'blur' }],
+  receiverMobile: [{ pattern: MOBILE_PATTERN, message: '请输入正确的 11 位手机号', trigger: 'blur' }],
+  cargoItemCount: [{ type: 'number', min: 1, message: '件数至少为 1', trigger: 'blur' }],
+  cargoWeightKg: [{ type: 'number', min: 0, message: '重量需为不小于 0 的数字', trigger: 'blur' }],
+  cargoVolumeM3: [{ type: 'number', min: 0, message: '体积需为不小于 0 的数字', trigger: 'blur' }],
+  postalItemCount: [{ type: 'number', min: 1, message: '件数至少为 1', trigger: 'blur' }],
+  postalWeightKg: [{ type: 'number', min: 0, message: '重量需为不小于 0 的数字', trigger: 'blur' }],
 })
 
 const resetForm = () => {

@@ -329,6 +329,15 @@ const submitAudit = async (pass: boolean) => {
     message.warning('拒绝时请填写原因')
     return
   }
+  // 二次确认：拒绝承运会直接把订单置为已取消（用户端立即可见），且没有撤销入口
+  if (!pass) {
+    const no = auditRow.value.orderNo || auditRow.value.id
+    try {
+      await message.confirm(`确认拒绝订单「${no}」？拒绝后订单将取消，不可恢复。`)
+    } catch (e) {
+      return
+    }
+  }
   auditLoading.value = true
   try {
     await OrderApi.auditOrder({ orderId: auditRow.value.id!, pass, rejectReason: auditForm.value.rejectReason })
