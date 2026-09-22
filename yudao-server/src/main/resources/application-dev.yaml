@@ -114,17 +114,18 @@ logging:
 --- #################### 微信公众号相关配置 ####################
 wx: # 参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-starters/wx-java-mp-spring-boot-starter/README.md 文档
   mp:
-    # 公众号配置(必填)
-    app-id: wx041349c6f39b268b
-    secret: 5abee519483bc9f8cb37ce280e814bd0
+    # 公众号配置(必填)；secret 为 yudao 演示值，生产部署须用环境变量覆盖并轮换
+    app-id: ${WX_MP_APP_ID:wx041349c6f39b268b}
+    secret: ${WX_MP_SECRET:5abee519483bc9f8cb37ce280e814bd0}
     # 存储配置，解决 AccessToken 的跨节点的共享
     config-storage:
       type: RedisTemplate # 采用 RedisTemplate 操作 Redis，会自动从 Spring 中获取
       key-prefix: wx # Redis Key 的前缀
       http-client-type: HttpComponents # 采用 HttpComponents（HttpClient 5）请求微信公众号平台
   miniapp: # 小程序配置（必填），参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-starters/wx-java-miniapp-spring-boot-starter/README.md 文档
-    appid: wx63c280fe3248a3e7
-    secret: 6f270509224a7ae1296bbf1c8cb97aed
+    # secret 为 yudao 演示值；上线前必须换成项目真实 secret 并用 WX_MINIAPP_SECRET 环境变量注入
+    appid: ${WX_MINIAPP_APPID:wx63c280fe3248a3e7}
+    secret: ${WX_MINIAPP_SECRET:6f270509224a7ae1296bbf1c8cb97aed}
     config-storage:
       type: RedisTemplate # 采用 RedisTemplate 操作 Redis，会自动从 Spring 中获取
       key-prefix: wa # Redis Key 的前缀
@@ -135,18 +136,18 @@ wx: # 参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-sta
 # 芋道配置项，设置当前项目所有自定义的配置
 yudao:
   demo: false # 开启演示模式
-  tencent-lbs-key: TVDBZ-TDILD-4ON4B-PFDZA-RNLKH-VVF6E # QQ 地图的密钥 https://lbs.qq.com/service/staticV2/staticGuide/staticDoc
+  tencent-lbs-key: ${TENCENT_LBS_KEY:TVDBZ-TDILD-4ON4B-PFDZA-RNLKH-VVF6E} # QQ 地图的密钥（yudao 演示值，生产须覆盖）
 
 justauth:
   enabled: true
   type:
-    DINGTALK: # 钉钉
-      client-id: dingvrnreaje3yqvzhxg
-      client-secret: i8E6iZyDvZj51JIb0tYsYfVQYOks9Cq1lgryEjFRqC79P3iJcrxEwT6Qk2QvLrLI
+    DINGTALK: # 钉钉（yudao 演示值，生产须覆盖）
+      client-id: ${JUSTAUTH_DINGTALK_CLIENT_ID:dingvrnreaje3yqvzhxg}
+      client-secret: ${JUSTAUTH_DINGTALK_CLIENT_SECRET:i8E6iZyDvZj51JIb0tYsYfVQYOks9Cq1lgryEjFRqC79P3iJcrxEwT6Qk2QvLrLI}
       ignore-check-redirect-uri: true
-    WECHAT_ENTERPRISE: # 企业微信
-      client-id: wwd411c69a39ad2e54
-      client-secret: 1wTb7hYxnpT2TUbIeHGXGo7T0odav1ic10mLdyyATOw
+    WECHAT_ENTERPRISE: # 企业微信（yudao 演示值，生产须覆盖）
+      client-id: ${JUSTAUTH_WECOM_CLIENT_ID:wwd411c69a39ad2e54}
+      client-secret: ${JUSTAUTH_WECOM_CLIENT_SECRET:1wTb7hYxnpT2TUbIeHGXGo7T0odav1ic10mLdyyATOw}
       agent-id: 1000004
       ignore-check-redirect-uri: true
     # noinspection SpringBootApplicationYaml

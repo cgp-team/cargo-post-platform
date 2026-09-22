@@ -67,7 +67,7 @@ mybatis-plus:
     banner: false # 关闭控制台的 Banner 打印
   type-aliases-package: ${yudao.info.base-package}.module.*.dal.dataobject
   encryptor:
-    password: XDV71a+xqStEA3WH # 加解密的秘钥，可使用 https://www.imaegoo.com/2020/aes-key-generator/ 网站生成
+    password: ${MP_ENCRYPTOR_PASSWORD:XDV71a+xqStEA3WH} # 加解密的秘钥（yudao 演示值）；生产部署须用环境变量覆盖并轮换
 
 mybatis-plus-join:
   banner: false # 是否打印 mybatis plus join banner，默认true
@@ -116,7 +116,9 @@ yudao:
     admin-ui:
       url: http://dashboard.yudao.iocoder.cn # Admin 管理后台 UI 的地址
   xss:
-    enable: false
+    enable: true # 审计修复：XSS 过滤开启。JsoupXssCleaner 用 Safelist.relaxed()（富文本白名单，
+                 # 保留 p/img/a/style，剔除 script 与 on* 事件），不会误杀富文本内容；
+                 # 注意：普通文本字段中出现 < 会被转义为 &lt;（罕见输入，如遇业务冲突可回滚 false）
     exclude-urls: # 如下两个 url，仅仅是为了演示，去掉配置也没关系
       - ${spring.boot.admin.context-path}/** # 不处理 Spring Boot Admin 的请求
       - ${management.endpoints.web.base-path}/** # 不处理 Actuator 的请求
