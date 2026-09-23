@@ -210,18 +210,21 @@ class TrainingSampleGenerator:
         self,
         recorder: SearchTraceRecorder | None = None,
         router: RealRoadRouter | None = None,
+        stations: dict[str, tuple[float, float]] | None = None,
     ):
         self.recorder = recorder or SearchTraceRecorder(
             graph_version=GRAPH_VERSION, route_version=ROUTE_VERSION
         )
         self.router = router or RealRoadRouter()
+        # 显式站点（测试/无 transit snapshot 环境）；None 时仍走真实 Transit Snapshot
+        self.stations_override = stations
         self.scenario_unavailable_count = 0
         self.estimated_rejected = 0
         self.uncertain_rejected = 0
 
     def generate(self, n_samples: int, seed: int = 20260921) -> SearchTraceRecorder:
         rng = random.Random(seed)
-        scen_gen = ScenarioGenerator()
+        scen_gen = ScenarioGenerator(stations=self.stations_override)
         stations = scen_gen.stations
         scenarios = scen_gen.generate(max(1, n_samples // 6), seed=seed)
         produced = 0

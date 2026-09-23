@@ -75,6 +75,18 @@ class RankingDatasetBuilder:
                     y[i] = n - i
                     prev_rel = y[i]
                 prev_key = key
+            # LightGBM lambdarank：grade 取值要小且无空档。n-i 在大 group 上会到 40+，
+            # 且并列跳号；压成 0=不可行 / 1..3=可行三档（保序，与 RouteSearchTeacher 同风格）。
+            pos = y[y > 0]
+            if pos.size:
+                t1, t2 = np.quantile(pos, [0.34, 0.67])
+                graded = np.zeros(n, dtype=np.int32)
+                graded[(y > 0) & (y <= t1)] = 1
+                graded[(y > 0) & (y > t1) & (y <= t2)] = 2
+                graded[y > t2] = 3
+                y = graded
+            else:
+                y = np.zeros(n, dtype=np.int32)
             groups.append(RankingGroup(
                 group_id=sid,
                 candidate_ids=[s.candidate_id for s in items],

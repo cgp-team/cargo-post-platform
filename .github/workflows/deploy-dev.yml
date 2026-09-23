@@ -465,11 +465,19 @@ jobs:
           echo "===== 启动 algorithm 容器 ====="
           "${COMPOSE_NO_PROGRESS[@]}" up -d algorithm
 
+          # 宿主端口与 compose 的 ${ALGORITHM_PORT:-18081} 对齐，避免 .env 改端口后健康检查打错口
+          ALGO_PORT="${ALGORITHM_PORT:-}"
+          if [ -z "${ALGO_PORT}" ] && [ -f "${ENV_FILE}" ]; then
+            ALGO_PORT="$(grep -E '^ALGORITHM_PORT=' "${ENV_FILE}" | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+          fi
+          ALGO_PORT="${ALGO_PORT:-18081}"
+          echo "algorithm host port: ${ALGO_PORT}"
+
           echo "===== 等待 algorithm 就绪（最多 60 秒） ====="
           READY=0
           for i in $(seq 1 20); do
             sleep 3
-            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
+            if curl -fsS --max-time 3 "http://127.0.0.1:${ALGO_PORT}/health" >/dev/null 2>&1; then
               echo "algorithm 就绪（第 ${i} 次探测）"
               READY=1
               break
@@ -490,7 +498,7 @@ jobs:
 
           echo "===== 验证部署结果 ====="
           "${COMPOSE_NO_PROGRESS[@]}" ps algorithm
-          HEALTH=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>/dev/null || echo "unreachable")
+          HEALTH=$(curl -fsS --max-time 5 "http://127.0.0.1:${ALGO_PORT}/health" 2>/dev/null || echo "unreachable")
           echo "algorithm health: ${HEALTH}"
           echo "algorithm 部署完成"
 
