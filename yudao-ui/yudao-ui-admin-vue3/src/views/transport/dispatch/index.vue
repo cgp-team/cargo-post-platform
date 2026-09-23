@@ -64,14 +64,7 @@
         style="margin-top:16px"
         @selection-change="handleSelectionChange"
       >
-                    <el-table-column label="里程口径" min-width="100">
-              <template #default="scope">
-                <el-tag :type="scope.row.routeProvider === 'FORMAL_ROAD' ? 'success' : 'warning'" size="small">
-                  {{ routeProviderLabel(scope.row.routeProvider) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-<el-table-column type="selection" width="50" align="center" :selectable="poolSelectable" />
+        <el-table-column type="selection" width="50" align="center" :selectable="poolSelectable" />
         <el-table-column label="订单号" prop="orderNo" align="center" width="200" />
         <el-table-column label="订单类型" prop="orderType" align="center" width="80">
           <template #default="scope">
@@ -151,6 +144,13 @@
         </el-table-column>
         <el-table-column label="总里程(km)" prop="totalDistance" align="center">
           <template #default="scope">{{ totalDistanceText(scope.row.totalDistance) }}</template>
+        </el-table-column>
+        <el-table-column label="里程口径" min-width="100">
+          <template #default="scope">
+            <el-tag :type="scope.row.routeProvider === 'FORMAL_ROAD' ? 'success' : 'warning'" size="small">
+              {{ routeProviderLabel(scope.row.routeProvider) }}
+            </el-tag>
+          </template>
         </el-table-column>
         <el-table-column label="算法版本" prop="algorithmVersion" align="center" />
         <el-table-column label="审核人" prop="approvedBy" align="center" />
