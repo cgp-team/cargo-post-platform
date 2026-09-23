@@ -24,6 +24,7 @@ export interface DispatchPlanVO {
   parameterVersion?: string
   score?: number
   totalDistance?: number
+  routeProvider?: string
   estDurationMinutes?: number
   estRevenue?: number
   estCost?: number
