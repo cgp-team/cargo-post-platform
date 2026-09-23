@@ -1,4 +1,15 @@
-"""HACO-CPS Exact Oracle：小规模穷举最优解。
+"""HACO-CPS Exact Oracle：小规模穷举最优解（**简化模型 Oracle**）。
+
+重要声明（本轮修正）：
+- 本模块是 **简化模型 Oracle**，不是完整生产模型 Exact Optimum。
+- 与生产 RouteGenome 相比，当前简化点包括：
+  - 无 Skeleton PASS 固定骨架 / gap 约束
+  - 无事件级 DEPOT/RETURN 末位不变量检查
+  - 乘客/货物容量为简化累计，不含 CargoOut/CargoIn/PRELOADED 完整口径
+  - 无时间窗（max_duration + 服务时间）
+  - 目标仅最小化距离，不含 passenger_impact / cargo_detour / vehicle_count
+- 因此 **不得** 据此声称 "HACO 距离真实全局最优只差 X%"。
+- 可继续作为 small-instance consistency test 使用（同为距离最小化时的参照）。
 
 用于 <=8 tasks 的精确验证，不依赖 OR-Tools。
 使用 branch-and-bound + pruning 求解。

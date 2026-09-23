@@ -1,0 +1,44 @@
+{
+  "name": "branch_ranker_10k_seed42",
+  "dataset_size": 10000,
+  "seed": 42,
+  "n_samples": 6117,
+  "n_od": 6117,
+  "val": {
+    "split": "val",
+    "top1_hit": 0.18865979381443299,
+    "top3_hit": 0.4020618556701031,
+    "detour_regret_proxy": 10.476461190213026,
+    "n": 970
+  },
+  "test": {
+    "split": "test",
+    "top1_hit": 0.18036286019210246,
+    "top3_hit": 0.37566702241195304,
+    "detour_regret_proxy": 10.088232037753528,
+    "n": 937
+  },
+  "training_time_s": 3.78,
+  "feature_count": 13,
+  "num_iterations": 80,
+  "num_leaves": 31,
+  "learning_rate": 0.08,
+  "model_size_bytes": null,
+  "n_train_groups": 4210,
+  "leakage_audit": "pass",
+  "features": [
+    "candidate_distance",
+    "candidate_duration_estimate",
+    "origin_distance",
+    "destination_distance",
+    "via_distance",
+    "heading_difference",
+    "road_class",
+    "road_level",
+    "intersection_degree",
+    "detour_estimate",
+    "region_code",
+    "profile_code",
+    "historical_success_rate"
+  ]
+}

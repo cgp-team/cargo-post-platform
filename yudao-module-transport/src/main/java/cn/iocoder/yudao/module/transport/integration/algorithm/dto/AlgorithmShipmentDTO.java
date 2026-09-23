@@ -33,4 +33,7 @@ public class AlgorithmShipmentDTO {
     /** 体积（m³），算法当前不校验 */
     private Double volumeM3;
 
+    /** 可选经济价值（向后兼容），业务层真实报价；缺失不报错。 */
+    private Double economicValue;
+
 }

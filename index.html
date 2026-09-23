@@ -1,0 +1,246 @@
+<!-- AI生成 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>客货邮动态调度</title>
+<style>
+:root{
+  --bg:#0f1419;--card:#1a222c;--ink:#e7eef7;--mut:#8b9bb0;--acc:#3d9cf0;--ok:#3ecf8e;--warn:#f0b429;--bad:#f07178;--line:#2a3542;
+  font-size:15px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;padding:12px 12px 28px}
+h1{font-size:1.15rem;font-weight:600;letter-spacing:.02em}
+.sub{color:var(--mut);font-size:.78rem;margin-top:2px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:6px 0;font-size:.86rem}
+.row span:first-child{color:var(--mut)}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.72rem;font-weight:600}
+.tag.ok{background:rgba(62,207,142,.15);color:var(--ok)}
+.tag.warn{background:rgba(240,180,41,.15);color:var(--warn)}
+.tag.bad{background:rgba(240,113,120,.15);color:var(--bad)}
+.tag.acc{background:rgba(61,156,240,.15);color:var(--acc)}
+button{width:100%;border:0;border-radius:12px;padding:14px;font-size:1rem;font-weight:600;background:var(--acc);color:#fff;margin-top:4px}
+button:disabled{opacity:.45}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+input,select{width:100%;background:#121a22;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px 12px;font-size:.9rem;margin-top:4px}
+label{font-size:.75rem;color:var(--mut);display:block;margin-top:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;color:var(--mut);white-space:pre-wrap;word-break:break-all}
+.bar{height:8px;background:#121a22;border-radius:99px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--ok));border-radius:99px}
+.kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.kpi div{background:#121a22;border-radius:10px;padding:8px;text-align:center}
+.kpi b{display:block;font-size:1.05rem}
+.kpi small{color:var(--mut);font-size:.68rem}
+#log{max-height:180px;overflow:auto}
+.pill-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<p data-aigc-mark="1" style="margin:0 0 8px;font-size:10px;line-height:1.3;color:#6b6560;font-weight:400;">AI生成</p>
+
+<h1>客货邮智能调度</h1>
+<div class="sub">DISPATCH_CORE_V047 · 正式路网 GraphHopper/OSM · 手机演示</div>
+
+<div class="card">
+  <div class="row"><span>服务</span><span id="apiStatus" class="tag warn">检测中</span></div>
+  <div class="row"><span>API Base</span><span class="mono" id="apiBase"></span></div>
+  <label>自定义 API（可选）</label>
+  <input id="baseInput" placeholder="http://127.0.0.1:8000" />
+  <button class="ghost" onclick="saveBase()" style="margin-top:8px">保存并检测</button>
+</div>
+
+<div class="card">
+  <div style="font-weight:600;margin-bottom:6px">演示订单</div>
+  <div class="grid2">
+    <div><label>类型</label>
+      <select id="orderType">
+        <option value="PASSENGER">客运</option>
+        <option value="CARGO">货运</option>
+        <option value="POSTAL">邮务</option>
+      </select></div>
+    <div><label>优先级</label>
+      <select id="priority"><option>普通</option><option>高价值</option></select></div>
+  </div>
+  <label>订单号</label>
+  <input id="orderId" value="ORD-DEMO-001"/>
+  <label>当前班次 / 车辆</label>
+  <input id="tripId" value="TRIP-347"/>
+  <div class="grid2">
+    <div><label>出发</label><input id="dep" type="time" value="07:30"/></div>
+    <div><label>执行状态</label>
+      <select id="execState">
+        <option>PLANNED</option><option>READY</option><option>DEPARTED</option>
+      </select></div>
+  </div>
+  <button id="btnAlloc" onclick="runAllocate()">动态分配（正式路网）</button>
+  <button class="ghost" onclick="runPlan()" style="margin-top:8px">批次 HACO 求解</button>
+</div>
+
+<div class="card" id="resultCard" style="display:none">
+  <div style="font-weight:600;margin-bottom:4px">调度结果</div>
+  <div class="row"><span>动作</span><span id="rAction" class="tag acc">—</span></div>
+  <div class="row"><span>原因</span><span id="rReason" class="mono">—</span></div>
+  <div class="row"><span>成本口径</span><span id="rFormal">—</span></div>
+  <div class="kpi">
+    <div><b id="rDist">—</b><small>增量距离</small></div>
+    <div><b id="rDur">—</b><small>增量时长</small></div>
+    <div><b id="rPax">—</b><small>乘客影响</small></div>
+  </div>
+  <div class="bar"><i id="rBar" style="width:0%"></i></div>
+  <div class="pill-row" id="rPills"></div>
+  <div class="mono" id="log" style="margin-top:10px"></div>
+</div>
+
+<script>
+const LS = 'cgp_api_base';
+function apiBase(){
+  return (document.getElementById('baseInput').value || localStorage.getItem(LS) || 'http://127.0.0.1:8000').replace(/\/$/,'');
+}
+function saveBase(){ localStorage.setItem(LS, apiBase()); ping(); }
+function log(msg){
+  const el=document.getElementById('log');
+  el.textContent = (new Date()).toLocaleTimeString()+'  '+msg+'\n'+el.textContent;
+}
+async function ping(){
+  const st=document.getElementById('apiStatus');
+  document.getElementById('apiBase').textContent=apiBase();
+  st.textContent='检测中'; st.className='tag warn';
+  try{
+    // openapi 或任意端点
+    const r=await fetch(apiBase()+'/openapi.json',{signal:AbortSignal.timeout(2500)});
+    if(r.ok){ st.textContent='在线 · formal GH'; st.className='tag ok'; log('API 在线'); return; }
+    throw new Error('bad');
+  }catch(e){
+    st.textContent='离线'; st.className='tag bad'; log('API 不可达（请本机启动 algorithm 服务）');
+  }
+}
+function demoPayload(){
+  const t=document.getElementById('orderType').value;
+  const high=document.getElementById('priority').value==='高价值';
+  // 重庆站点示例（GCJ-02）
+  const stations=[
+    {stationId:'S1',name:'邮电大学',latitude:29.5335,longitude:106.6005},
+    {stationId:'S2',name:'工商大学',latitude:29.5602,longitude:106.5503},
+    {stationId:'S3',name:'江津客运站',latitude:29.285,longitude:106.253}
+  ];
+  const order={
+    orderId: document.getElementById('orderId').value || 'ORD-DEMO-001',
+    orderType: t,
+    servicePointId:'S1',
+    stationId:'S1',
+    boardingStationId:'S1',
+    alightingStationId:'S2',
+    itemCount:1,
+    readyTime:'07:00',
+    pickupDeadline:'08:30',
+    deliveryDeadline:'10:00',
+    priority: high?'HIGH':'NORMAL',
+    economicValue: high?120:40
+  };
+  return {
+    requestId:'REQ-'+Date.now(),
+    order,
+    stations,
+    currentTrips:[{
+      tripId: document.getElementById('tripId').value||'TRIP-347',
+      vehicleId:'V1', driverId:'D1', routeId:'R1', shiftId:'SH1',
+      departureTime: document.getElementById('dep').value||'07:30',
+      executionState: document.getElementById('execState').value,
+      currentLatitude:29.534, currentLongitude:106.601,
+      remainingCargoCapacity:8, remainingPassengerCapacity:12,
+      tripDetourRemainingM:8000, passengerImpactBudgetS:180
+    }],
+    futureTrips:[{
+      tripId:'TRIP-512', vehicleId:'V2', driverId:'D2', routeId:'R1', shiftId:'SH2',
+      departureTime:'09:00', executionState:'PLANNED',
+      currentLatitude:29.534, currentLongitude:106.601,
+      remainingCargoCapacity:10, remainingPassengerCapacity:20,
+      tripDetourRemainingM:12000, passengerImpactBudgetS:300
+    }],
+    otherRouteTrips:[{
+      tripId:'TRIP-88', vehicleId:'V3', driverId:'D3', routeId:'R9', shiftId:'SH3',
+      departureTime:'08:00', executionState:'PLANNED',
+      currentLatitude:29.56, currentLongitude:106.55,
+      remainingCargoCapacity:6, remainingPassengerCapacity:8,
+      tripDetourRemainingM:6000, passengerImpactBudgetS:120
+    }]
+  };
+}
+function planPayload(){
+  return {
+    requestId:'PLAN-'+Date.now(),
+    depot:{stationId:'D0',name:'主站',latitude:29.533,longitude:106.600},
+    stations:[
+      {stationId:'S1',name:'邮电大学',latitude:29.5335,longitude:106.6005},
+      {stationId:'S2',name:'工商大学',latitude:29.5602,longitude:106.5503},
+      {stationId:'S3',name:'江津',latitude:29.285,longitude:106.253}
+    ],
+    orders:[
+      {orderId:'P1',orderType:'PASSENGER',boardingStationId:'S1',alightingStationId:'S2',itemCount:2},
+      {orderId:'C1',orderType:'CARGO',stationId:'S3',itemCount:3}
+    ],
+    vehicles:[{vehicleId:'V1',capacity:10,passengerCapacity:20}],
+    algorithmConfig:{algorithmMode:'HACO',maxIterations:30,antCount:12}
+  };
+}
+async function post(path, body){
+  const r=await fetch(apiBase()+path,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body), signal:AbortSignal.timeout(20000)
+  });
+  const t=await r.text();
+  try{return {status:r.status, data:JSON.parse(t)};}catch{return {status:r.status, data:t};}
+}
+function showResult(kind, res){
+  const card=document.getElementById('resultCard');
+  card.style.display='block';
+  const d=res.data||{};
+  const act=d.action||d.selectedCandidateType||d.status||'—';
+  document.getElementById('rAction').textContent=act;
+  document.getElementById('rReason').textContent=d.reasonCode||d.reason||JSON.stringify(d).slice(0,120);
+  const formal=d.costIsFormal ?? d.formal ?? (d.distanceUnit==='km');
+  document.getElementById('rFormal').innerHTML = formal
+    ? '<span class="tag ok">FORMAL 真实道路</span>'
+    : '<span class="tag warn">非 formal / 降级</span>';
+  const dd=d.incrementalDistanceM ?? d.totalDistance ?? d.deltaDistanceM;
+  const tt=d.incrementalDurationS ?? d.deltaDurationS;
+  const pp=d.passengerImpactS ?? d.passengerImpactProxyS;
+  document.getElementById('rDist').textContent = dd!=null? (typeof dd==='number'?dd.toFixed(0)+'m':'—'):'—';
+  document.getElementById('rDur').textContent = tt!=null? (typeof tt==='number'?tt.toFixed(0)+'s':'—'):'—';
+  document.getElementById('rPax').textContent = pp!=null? (typeof pp==='number'?pp.toFixed(0)+'s':'—'):'—';
+  document.getElementById('rBar').style.width = formal?'100%':'35%';
+  const pills=document.getElementById('rPills');
+  pills.innerHTML='';
+  (d.warnings||[]).forEach(w=>{
+    const s=document.createElement('span'); s.className='tag warn'; s.textContent=String(w).slice(0,28); pills.appendChild(s);
+  });
+  if(d.decisionTrace){
+    const s=document.createElement('span'); s.className='tag acc'; s.textContent='DecisionTrace'; pills.appendChild(s);
+  }
+  log(kind+' HTTP '+res.status+' → '+act);
+}
+async function runAllocate(){
+  document.getElementById('btnAlloc').disabled=true;
+  try{
+    log('POST /api/v1/dispatch/allocate …');
+    const res=await post('/api/v1/dispatch/allocate', demoPayload());
+    showResult('allocate', res);
+  }catch(e){ log('allocate 失败: '+e.message); alert('请求失败：'+e.message); }
+  finally{ document.getElementById('btnAlloc').disabled=false; }
+}
+async function runPlan(){
+  try{
+    log('POST /api/v1/plan …');
+    const res=await post('/api/v1/plan', planPayload());
+    showResult('plan', res);
+  }catch(e){ log('plan 失败: '+e.message); alert('请求失败：'+e.message); }
+}
+document.getElementById('baseInput').value = localStorage.getItem(LS) || 'http://127.0.0.1:8000';
+ping();
+</script>
+</body>
+</html>

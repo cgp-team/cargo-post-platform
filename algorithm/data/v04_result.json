@@ -1,0 +1,62 @@
+{
+  "experiment_id": "v04-8888",
+  "status": "OK",
+  "n_od_requested": 250,
+  "groups": 250,
+  "train_groups": 187,
+  "test_groups": 63,
+  "gen_s": 23.39,
+  "train_s": 0.12,
+  "gh_calls": 1250,
+  "real_model": {
+    "recall": {
+      "1": 0.11507936507936507,
+      "3": 0.32142857142857145,
+      "5": 0.5238095238095238,
+      "10": 0.8492063492063492
+    },
+    "path_edge_recall": {
+      "1": 0.0075473383277223,
+      "3": 0.021908553878997258,
+      "5": 0.035904620082297424,
+      "10": 0.06127344665996822
+    },
+    "distance_regret_mean": 0.10103595805618593,
+    "duration_regret_mean": 0.08933168157802872,
+    "n_groups_scored": 63
+  },
+  "shuffled_label_control": {
+    "recall": {
+      "1": 0.051587301587301584,
+      "3": 0.16865079365079366,
+      "5": 0.2976190476190476,
+      "10": 0.6031746031746031
+    },
+    "path_edge_recall": {
+      "1": 0.0038447593183630175,
+      "3": 0.01211597772786263,
+      "5": 0.020174491230270288,
+      "10": 0.04186071387061744
+    },
+    "distance_regret_mean": 0.32080820915832364,
+    "duration_regret_mean": 0.38253319720662377,
+    "n_groups_scored": 63
+  },
+  "random_baseline": {
+    "recall@1": 0.0625,
+    "recall@5": 0.3125
+  },
+  "shuffle_golden_ok": true,
+  "label_balance": 0.5,
+  "teacher_path_edges_mean": 133.7,
+  "cross_region_groups": 175,
+  "jiangjin_touch_groups": 183,
+  "leakage": false,
+  "synthetic": 0,
+  "notes": [
+    "label=\u771f\u5b9e GH edge_id \u2208 teacher \u8def\u5f84\u96c6\u5408",
+    "Recall@K=|topK\u2229teacher_cands|/|teacher_cands|",
+    "shuffle \u63a7\u5236\uff1a\u8bad\u7ec3 label \u7f6e\u4e71\uff0c\u6d4b\u8bd5 label \u4fdd\u6301\u771f\u5b9e",
+    "E[Recall@K]_random = K/n_cands"
+  ]
+}

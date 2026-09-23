@@ -1,0 +1,38 @@
+{
+  "features": [
+    "edge_road_m",
+    "edge_duration_s",
+    "edge_class_code",
+    "edge_speed",
+    "is_oneway",
+    "intersection_degree",
+    "turn_angle_deg",
+    "is_bridge_like",
+    "is_tunnel_like",
+    "is_highway_like",
+    "origin_dist_m",
+    "dest_dist_m",
+    "remaining_lower_bound_m",
+    "cum_dist_m",
+    "cum_time_s",
+    "progress_ratio",
+    "gap_index",
+    "passenger_impact_est",
+    "cargo_detour_est",
+    "trip_locked",
+    "sla_remaining_s",
+    "capacity_remaining",
+    "multi_leg_state",
+    "urban_density_proxy"
+  ],
+  "forbidden": [
+    "final_objective",
+    "final_path_cost",
+    "future_gps",
+    "future_solution",
+    "post_execution",
+    "teacher_best_edge",
+    "teacher_path_contains",
+    "teacher_rank"
+  ]
+}

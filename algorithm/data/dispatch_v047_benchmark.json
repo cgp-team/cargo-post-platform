@@ -1,0 +1,205 @@
+{
+  "version": "DISPATCH_CORE_V047",
+  "scenarioCount": 7,
+  "stations": {
+    "CUPT": [
+      29.5333,
+      106.6074
+    ],
+    "CTBU": [
+      29.502,
+      106.583
+    ],
+    "NANPING": [
+      29.522,
+      106.568
+    ],
+    "SHAPINGBA": [
+      29.54,
+      106.45
+    ],
+    "YANGJIAYU": [
+      29.56,
+      106.57
+    ],
+    "JIEFANGBEI": [
+      29.563,
+      106.575
+    ],
+    "CHANGAN": [
+      29.528,
+      106.55
+    ],
+    "LIJIAYU": [
+      29.545,
+      106.53
+    ]
+  },
+  "perStrategy": {
+    "BASELINE_RULE": [
+      {
+        "status": "ASSIGNED",
+        "chosen": "347/07:30",
+        "cost": 1.474
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "347/07:30",
+        "cost": 1.474
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "347/07:30",
+        "cost": 1.474
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "347/07:30",
+        "cost": 1.474
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "303/08:30",
+        "cost": 6.234
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "305/09:30",
+        "cost": 0.589
+      },
+      {
+        "status": "ASSIGNED",
+        "chosen": "309/07:00",
+        "cost": 9.766
+      }
+    ],
+    "HACO_ONLY": [
+      {
+        "case": "haco-short",
+        "status": "feasible",
+        "reasonCode": null,
+        "algorithmVersion": "haco-cps-1.4.1",
+        "runtime_ms": 63.449,
+        "matrix": "None(degree)"
+      },
+      {
+        "case": "haco-medium",
+        "status": "feasible",
+        "reasonCode": null,
+        "algorithmVersion": "haco-cps-1.4.1",
+        "runtime_ms": 31.582,
+        "matrix": "None(degree)"
+      }
+    ],
+    "HACO_DYNAMIC": [
+      {
+        "status": "ASSIGNED",
+        "level": "LEVEL_0_FAST_INSERT",
+        "chosen": "CURRENT_TRIP",
+        "cost": 21.698,
+        "reason": "PRE_DEPARTURE_OPEN",
+        "cost_formal": false,
+        "runtime_ms": 0.453,
+        "traceSummary": "选择 CURRENT_TRIP 347/07:30；reason=PRE_DEPARTURE_OPEN；成本 UNKNOWN（未获得正式真实道路）；乘客影响 proxy 0s；增量成本 21.70。"
+      },
+      {
+        "status": "ASSIGNED",
+        "level": "LEVEL_0_FAST_INSERT",
+        "chosen": "CURRENT_TRIP",
+        "cost": 29.125,
+        "reason": "PRE_DEPARTURE_OPEN",
+        "cost_formal": false,
+        "runtime_ms": 0.365,
+        "traceSummary": "选择 CURRENT_TRIP 347/07:30；reason=PRE_DEPARTURE_OPEN；成本 UNKNOWN（未获得正式真实道路）；乘客影响 proxy 0s；增量成本 29.12。"
+      },
+      {
+        "status": "ASSIGNED",
+        "level": "LEVEL_0_FAST_INSERT",
+        "chosen": "CURRENT_TRIP",
+        "cost": 21.463,
+        "reason": "PRE_DEPARTURE_OPEN",
+        "cost_formal": false,
+        "runtime_ms": 0.319,
+        "traceSummary": "选择 CURRENT_TRIP 347/07:30；reason=PRE_DEPARTURE_OPEN；成本 UNKNOWN（未获得正式真实道路）；乘客影响 proxy 0s；增量成本 21.46。"
+      },
+      {
+        "status": "ASSIGNED",
+        "level": "LEVEL_2_OTHER_ROUTE_OR_MULTILEG",
+        "chosen": "OTHER_ROUTE",
+        "cost": 46.342,
+        "reason": "PRE_DEPARTURE_OPEN",
+        "cost_formal": false,
+        "runtime_ms": 0.28,
+        "traceSummary": "选择 OTHER_ROUTE 303/09:00；reason=PRE_DEPARTURE_OPEN；成本 UNKNOWN（未获得正式真实道路）；乘客影响 proxy 0s；增量成本 46.34。"
+      },
+      {
+        "status": "HOLD",
+        "level": "LEVEL_5_HOLD",
+        "chosen": null,
+        "cost": 0.0,
+        "reason": "HOLD_NO_FEASIBLE_CANDIDATE",
+        "cost_formal": false,
+        "runtime_ms": 0.129,
+        "traceSummary": "未选中任何候选（HOLD / 人工复核）。"
+      },
+      {
+        "status": "ASSIGNED",
+        "level": "LEVEL_2_OTHER_ROUTE_OR_MULTILEG",
+        "chosen": "OTHER_ROUTE",
+        "cost": 17.051,
+        "reason": "PRE_DEPARTURE_OPEN",
+        "cost_formal": false,
+        "runtime_ms": 0.248,
+        "traceSummary": "选择 OTHER_ROUTE 305/09:30；reason=PRE_DEPARTURE_OPEN；成本 UNKNOWN（未获得正式真实道路）；乘客影响 proxy 0s；增量成本 17.05。"
+      },
+      {
+        "status": "HOLD",
+        "level": "LEVEL_5_HOLD",
+        "chosen": null,
+        "cost": 0.0,
+        "reason": "HOLD_NO_FEASIBLE_CANDIDATE",
+        "cost_formal": false,
+        "runtime_ms": 0.109,
+        "traceSummary": "未选中任何候选（HOLD / 人工复核）。"
+      }
+    ],
+    "HACO_DYNAMIC_GH": [
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      },
+      {
+        "status": "SKIPPED_NO_ROUTING_BACKEND"
+      }
+    ]
+  },
+  "summary": {
+    "orders": 7,
+    "hacoDynamicAssigned": 5,
+    "hacoDynamicHold": 2,
+    "hacoDynamicCompletionRate": 0.714,
+    "hacoDynamicP50RuntimeMs": 0.28,
+    "hacoDynamicP95RuntimeMs": 0.506,
+    "levelCounts": {
+      "LEVEL_0_FAST_INSERT": 3,
+      "LEVEL_2_OTHER_ROUTE_OR_MULTILEG": 2,
+      "LEVEL_5_HOLD": 2
+    },
+    "formalCostAvailable": false,
+    "ghBranchSelector": "SKIPPED_NO_ROUTING_BACKEND"
+  }
+}

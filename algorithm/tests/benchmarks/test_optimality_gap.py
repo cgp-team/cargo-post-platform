@@ -1,9 +1,15 @@
-"""小规模最优性 Gap 测试。
+"""小规模一致性测试（**简化模型 Oracle 参照**，不是全局最优证明）。
 
-构造超小场景（3~6 个任务节点），用穷举求真正最优结果，
-与当前 OR-Tools solver 比较，计算 optimality_gap。
+修正声明：
+- 参照解来自穷举 TSP 距离，不是完整生产模型 Exact Optimum（无 skeleton/passenger impact 等）。
+- Exact Oracle 模块也已标记为“简化模型 Oracle”。
+- 不得据此声称 "HACO 距离真实全局最优只差 X%"。
+- 本测试仅作 small-instance consistency check。
 
-公式：gap = (algorithm_distance - optimal_distance) / optimal_distance
+构造超小场景（3~6 个任务节点），用穷举求简化模型参照结果，
+与当前 OR-Tools solver 比较，计算 consistency_gap。
+
+公式：gap = (algorithm_distance - reference_distance) / reference_distance
 
 小规模场景要求 gap <= 10%，更简单场景要求 <= 5%。
 """

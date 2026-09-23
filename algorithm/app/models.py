@@ -46,8 +46,8 @@ class StopAction(str, Enum):
 
 class Station(BaseModel):
     stationId: str
-    longitude: float
-    latitude: float
+    longitude: float = Field(ge=-180, le=180)
+    latitude: float = Field(ge=-90, le=90)
 
 
 class Vehicle(BaseModel):
@@ -63,6 +63,9 @@ class Vehicle(BaseModel):
     # 公交骨架（Mandatory Passenger Service）：车辆必须按顺序经停的站点编号列表（不含场站）。
     # 提供时该车辆按骨架顺序强制停靠，货运/揽收作为绕行插入骨架间隙；缺省为纯 VRP。
     skeleton: list[str] | None = None
+    # DISPATCH_CORE_V047 (section 18): 可选重量/体积运力；未配置时保持旧 itemCount 口径。
+    cargoWeightCapacityKg: float | None = Field(default=None, ge=0)
+    cargoVolumeCapacityM3: float | None = Field(default=None, ge=0)
 
 
 class PlanOrder(BaseModel):
@@ -77,6 +80,9 @@ class PlanOrder(BaseModel):
     # 货物来源：PRELOADED=场站预装（消耗 initialCargoLoad）；SHIPMENT 为历史死语义（配对货运走 PlanShipment）。
     # 缺省为 None，solver 按上下文推断（DELIVERY→PRELOADED，PICKUP→无来源语义）
     cargoSource: CargoSource | None = None
+    # 可选经济价值（向后兼容）：业务层可在进算法前传入真实运费/结算金额。
+    # 缺省 None 表示无经济字段，算法不报错、不造假价格；仅用于性价比比较。
+    economicValue: float | None = Field(default=None, ge=0)
 
 
 class AlgorithmMode(str, Enum):
@@ -133,6 +139,13 @@ class PlanShipment(BaseModel):
     quantity: int = Field(ge=1)
     weightKg: float | None = Field(default=None, ge=0)
     volumeM3: float | None = Field(default=None, ge=0)
+    # DISPATCH_CORE_V047 (section 17): 可选经济价值，向后兼容；不强制业务层传。
+    economicValue: float | None = Field(default=None, ge=0)
+    # DISPATCH_CORE_V047 (section 15): 真正的订单时效表达，全部 optional（缺省兼容旧行为）。
+    readyTime: datetime | None = None
+    pickupDeadline: datetime | None = None
+    deliveryDeadline: datetime | None = None
+    priority: int = Field(default=0, ge=0)
 
 
 class PlanRequest(BaseModel):
@@ -205,8 +218,8 @@ class ErrorResponse(BaseModel):
 
 class DistancePoint(BaseModel):
     stationId: str
-    longitude: float
-    latitude: float
+    longitude: float = Field(ge=-180, le=180)
+    latitude: float = Field(ge=-90, le=90)
 
 
 class DistanceRequest(BaseModel):

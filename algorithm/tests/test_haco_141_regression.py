@@ -24,7 +24,15 @@ from app.models import (
 from app.solver import solve as unified_solve
 from app.haco.config import HacoConfig
 from app.haco.deadline import SearchDeadline
-from app.haco.encoding import ObjectiveVector, TaskBlock, TaskType
+from app.haco.encoding import (
+    ObjectiveVector,
+    SEARCH_ENERGY_CARGO_DETOUR,
+    SEARCH_ENERGY_DISTANCE,
+    SEARCH_ENERGY_DURATION,
+    SEARCH_ENERGY_PASSENGER,
+    TaskBlock,
+    TaskType,
+)
 from app.haco.pheromone import PheromoneMatrix, extract_vehicle_task_sequences
 from app.haco.route_genome import EventType, RouteEvent, RouteGenome
 from app.haco.feasibility_engine import FeasibilityEngine
@@ -574,9 +582,10 @@ def _generate_insertion_candidates_exhaustive(
                         passenger_impact=metrics["passenger_impact"],
                         cargo_detour=metrics["cargo_detour"],
                         heuristic_score=(
-                            metrics["distance"]
-                            + metrics["passenger_impact"] * 0.01
-                            + metrics["cargo_detour"] * 10.0
+                            metrics["passenger_impact"] * SEARCH_ENERGY_PASSENGER
+                            + metrics["cargo_detour"] * SEARCH_ENERGY_CARGO_DETOUR
+                            + metrics["distance"] * SEARCH_ENERGY_DISTANCE
+                            + metrics["duration"] * SEARCH_ENERGY_DURATION
                         ),
                     ))
         else:
@@ -609,9 +618,10 @@ def _generate_insertion_candidates_exhaustive(
                     passenger_impact=metrics["passenger_impact"],
                     cargo_detour=metrics["cargo_detour"],
                     heuristic_score=(
-                        metrics["distance"]
-                        + metrics["passenger_impact"] * 0.01
-                        + metrics["cargo_detour"] * 10.0
+                        metrics["passenger_impact"] * SEARCH_ENERGY_PASSENGER
+                        + metrics["cargo_detour"] * SEARCH_ENERGY_CARGO_DETOUR
+                        + metrics["distance"] * SEARCH_ENERGY_DISTANCE
+                        + metrics["duration"] * SEARCH_ENERGY_DURATION
                     ),
                 ))
     candidates.sort(key=lambda x: x.heuristic_score)

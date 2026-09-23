@@ -106,4 +106,7 @@ public interface DispatchService {
      */
     PageResult<DispatchPlanDO> getPlanPage(DispatchPlanPageReqVO reqVO);
 
+
+    /** 动态插单：委托算法 /api/v1/dispatch/allocate（DISPATCH_CORE_V047）。 */
+    java.util.Map<String, Object> allocateDynamic(java.util.Map<String, Object> payload);
 }

@@ -1,0 +1,225 @@
+{
+  "failure_count": 244,
+  "worst_20": [
+    {
+      "kind": "quality_or_slowdown",
+      "alg": "v044",
+      "od_id": "od23",
+      "from": "锦霞街",
+      "to": "湖榕路",
+      "distance_regret": 0.0,
+      "wall_reduction": -23.898299399425323,
+      "base_wall_s": 5.900001269765198e-05,
+      "ml_wall_s": 0.0014689999807160348
+    },
+    {
+      "kind": "quality_or_slowdown",
+      "alg": "v044",
+      "od_id": "od19",
+      "from": "四龙碑",
+      "to": "干湾",
+      "distance_regret": 0.0,
+      "wall_reduction": -17.350380763393293,
+      "base_wall_s": 0.0001446999958716333,
+      "ml_wall_s": 0.0026553000207059085
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od36",
+      "from": "陈南路口",
+      "to": "林场垭口",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.2875620999839157,
+      "ml_wall_s": 2.373607300018193,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od4",
+      "from": "园博园西门",
+      "to": "大马槽",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.550321199989412,
+      "ml_wall_s": 1.7873735000030138,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od85",
+      "from": "同茂大道东段",
+      "to": "大马槽",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.18611099998815916,
+      "ml_wall_s": 1.4045825000212062,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od14",
+      "from": "大渡口区二院",
+      "to": "osm_node_5935105461",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.1460291999974288,
+      "ml_wall_s": 0.9233667000080459,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "quality_or_slowdown",
+      "alg": "v044",
+      "od_id": "od16",
+      "from": "区人民医院",
+      "to": "四龙碑",
+      "distance_regret": 0.000638363715862715,
+      "wall_reduction": -10.868686439255027,
+      "base_wall_s": 0.00025740001001395285,
+      "ml_wall_s": 0.0030550000083167106
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od10",
+      "from": "碧津公园",
+      "to": "嘉和社区",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.048021199996583164,
+      "ml_wall_s": 0.8199141999939457,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od33",
+      "from": "怡和路",
+      "to": "沙坪黄桷堡",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.11775579999084584,
+      "ml_wall_s": 0.7153939999989234,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od72",
+      "from": "大坪",
+      "to": "南海村（无站牌）",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.07866159998229705,
+      "ml_wall_s": 0.6915561000059824,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od91",
+      "from": "嘉和社区",
+      "to": "五九所",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.03512329998193309,
+      "ml_wall_s": 0.5757052999979351,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od30",
+      "from": "轨道南桥寺西",
+      "to": "重光立交",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.01623390000895597,
+      "ml_wall_s": 0.5587288000097033,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od89",
+      "from": "江南小区",
+      "to": "铜罐驿实验学校",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.16361950000282377,
+      "ml_wall_s": 0.4569944000104442,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od76",
+      "from": "园博园西门",
+      "to": "陈南路口",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.04712800000561401,
+      "ml_wall_s": 0.440062499983469,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od87",
+      "from": "osm_node_5951921229",
+      "to": "丁家汽车站",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.07648310001241043,
+      "ml_wall_s": 0.4228838999988511,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od63",
+      "from": "大坪",
+      "to": "264临时停靠",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.1687734000151977,
+      "ml_wall_s": 0.4127998999902047,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od38",
+      "from": "白欣路南段",
+      "to": "嘉和社区",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.06727869997848757,
+      "ml_wall_s": 0.3542463000048883,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od15",
+      "from": "轨道南桥寺西",
+      "to": "兰花路",
+      "region": "chongqing_core->chongqing_core",
+      "base_wall_s": 0.041004099999554455,
+      "ml_wall_s": 0.32865040001343004,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od40",
+      "from": "山顶路",
+      "to": "小沛滩",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.024107500008540228,
+      "ml_wall_s": 0.2977709000115283,
+      "reason": "pruned_search_missed_target"
+    },
+    {
+      "kind": "unreachable",
+      "alg": "v043",
+      "od_id": "od67",
+      "from": "新龙湾",
+      "to": "大马槽",
+      "region": "chongqing_core->jiangjin",
+      "base_wall_s": 0.015580799983581528,
+      "ml_wall_s": 0.1984758000180591,
+      "reason": "pruned_search_missed_target"
+    }
+  ]
+}

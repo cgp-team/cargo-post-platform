@@ -229,6 +229,7 @@ public class AppDriverController {
     public CommonResult<PageResult<AppNotificationRespVO>> messages(
             @RequestParam("driverId") Long driverId, PageParam pageParam,
             @RequestParam(value = "readStatus", required = false) Integer readStatus) {
+        driverAppService.requireCurrentDriver(driverId); // 归属校验：防越权查看他人司机通知（订单号/收件人手机等 PII 泄露）
         PageResult<AppNotificationRespVO> result = BeanUtils.toBean(
                 userNotificationService.getDriverPage(driverId, readStatus, pageParam),
                 AppNotificationRespVO.class, vo -> vo.setEventTypeName(orderEventService.typeName(vo.getEventType())));
@@ -239,6 +240,7 @@ public class AppDriverController {
     @Operation(summary = "司机未读消息数")
     @Parameter(name = "driverId", description = "司机编号", required = true)
     public CommonResult<Long> messagesUnreadCount(@RequestParam("driverId") Long driverId) {
+        driverAppService.requireCurrentDriver(driverId); // 归属校验：防越权探测他人司机未读数
         return success(userNotificationService.getDriverUnreadCount(driverId));
     }
 

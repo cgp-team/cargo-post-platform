@@ -108,4 +108,14 @@ public class AlgorithmAdapter {
         return objectMapper.readValue(json, clazz);
     }
 
+
+    /** 动态调度透传（不做 plan 级幂等快照；由算法侧 requestId 幂等）。 */
+    public java.util.Map<String, Object> allocateRaw(java.util.Map<String, Object> payload) {
+        return algorithmClient.allocate(payload);
+    }
+
+    /** 启动自检：算法服务连通性。 */
+    public boolean healthCheck() {
+        return algorithmClient.healthCheck();
+    }
 }

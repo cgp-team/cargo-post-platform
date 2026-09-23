@@ -910,7 +910,13 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        legMapper.updateById(update);
+        // CAS 守卫：仅当段状态仍为读取时的旧值时推进，防并发 read-check-then-write 覆盖他人推进（状态回退/跳级）
+        int affected = legMapper.update(update, new LambdaQueryWrapperX<TransportLegDO>()
+                .eq(TransportLegDO::getId, leg.getId())
+                .eq(TransportLegDO::getStatus, leg.getStatus()));
+        if (affected == 0) {
+            throw exception(LEG_TRANSITION_ILLEGAL, "运输段状态已被并发操作推进，请刷新后重试");
+        }
 
         syncResourceStatus(leg, target);
 

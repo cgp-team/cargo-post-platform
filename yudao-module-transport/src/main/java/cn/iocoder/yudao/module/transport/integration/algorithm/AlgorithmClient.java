@@ -97,6 +97,45 @@ public class AlgorithmClient {
      * 两站点间路网距离/耗时查询（寄货页取货→送达）。轻量即时查询，不落幂等留痕；
      * 失败抛 {@link ServiceException}，调用方捕获后降级直线距离。
      */
+    /** 启动/巡检：探测算法服务是否可达（openapi 或 plan 路由）。 */
+    public boolean healthCheck() {
+        try {
+            restTemplate.getForEntity("/openapi.json", String.class);
+            return true;
+        } catch (Exception ex) {
+            try {
+                restTemplate.getForEntity("/api/v1/route", String.class);
+                return true;
+            } catch (Exception ex2) {
+                log.warn("[healthCheck] 算法服务不可达 baseUrl={} : {}", properties.getBaseUrl(), ex2.getMessage());
+                return false;
+            }
+        }
+    }
+
+    /** 动态插单调度：POST /api/v1/dispatch/allocate（DISPATCH_CORE_V047）。 */
+    @SuppressWarnings("unchecked")
+    public java.util.Map<String, Object> allocate(java.util.Map<String, Object> payload) {
+        for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
+            try {
+                var response = restTemplate.postForEntity("/api/v1/dispatch/allocate", payload, java.util.Map.class);
+                return response.getBody();
+            } catch (org.springframework.web.client.HttpServerErrorException ex) {
+                int status = ex.getStatusCode().value();
+                if (status == 502 || status == 503 || status == 504) {
+                    log.warn("[allocate][第 {} 次可重试 status={}]", attempt + 1, status);
+                } else {
+                    log.warn("[allocate][失败 status={} body={}]", status, ex.getResponseBodyAsString());
+                    throw ex;
+                }
+            } catch (Exception ex) {
+                log.warn("[allocate][网络错误 第 {} 次: {}]", attempt + 1, ex.getMessage());
+            }
+            sleep(properties.getRetryBackoff().toMillis());
+        }
+        throw new ServiceException("算法动态调度服务暂不可用");
+    }
+
     public AlgorithmDistanceRespDTO distance(AlgorithmDistanceReqDTO request) {
         if (request.getRequestId() == null) {
             request.setRequestId("req-" + IdUtil.fastSimpleUUID());

@@ -365,7 +365,12 @@ public class TransportOrderServiceImpl implements TransportOrderService {
             orderUpd.setId(order.getId());
             orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
             orderMapper.updateById(orderUpd);
-            cargoOrderMapper.updateById(upd);
+            // CAS：仅当审核状态仍为 PASSED（读取时）时落库，防并发复核互相覆盖
+            if (cargoOrderMapper.update(upd, new LambdaQueryWrapperX<CargoOrderDO>()
+                    .eq(CargoOrderDO::getId, cargo.getId())
+                    .eq(CargoOrderDO::getReviewStatus, ReviewStatusEnum.PASSED.getStatus())) == 0) {
+                throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
+            }
             return;
         }
         boolean reviewGate = Objects.equals(status, TransportOrderStatusEnum.CREATED.getStatus())
@@ -403,7 +408,17 @@ public class TransportOrderServiceImpl implements TransportOrderService {
             orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
             orderMapper.updateById(orderUpd);
         }
-        cargoOrderMapper.updateById(upd);
+        // CAS：仅当审核状态仍为读取时的 undecided 值时落库，防并发两次 audit（一通过一拒绝）互相覆盖
+        LambdaQueryWrapperX<CargoOrderDO> auditCas = new LambdaQueryWrapperX<CargoOrderDO>()
+                .eq(CargoOrderDO::getId, cargo.getId());
+        if (reviewStatus == null) {
+            auditCas.isNull(CargoOrderDO::getReviewStatus);
+        } else {
+            auditCas.eq(CargoOrderDO::getReviewStatus, reviewStatus);
+        }
+        if (cargoOrderMapper.update(upd, auditCas) == 0) {
+            throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
+        }
     }
 
     @Override

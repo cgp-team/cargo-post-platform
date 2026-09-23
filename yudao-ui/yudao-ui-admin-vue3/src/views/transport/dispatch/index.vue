@@ -64,7 +64,14 @@
         style="margin-top:16px"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="50" align="center" :selectable="poolSelectable" />
+                    <el-table-column label="里程口径" min-width="100">
+              <template #default="scope">
+                <el-tag :type="scope.row.routeProvider === 'FORMAL_ROAD' ? 'success' : 'warning'" size="small">
+                  {{ routeProviderLabel(scope.row.routeProvider) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+<el-table-column type="selection" width="50" align="center" :selectable="poolSelectable" />
         <el-table-column label="订单号" prop="orderNo" align="center" width="200" />
         <el-table-column label="订单类型" prop="orderType" align="center" width="80">
           <template #default="scope">
@@ -132,7 +139,7 @@
         <el-table-column label="方案号" prop="id" align="center" width="80" />
         <el-table-column label="派单方式" prop="mode" align="center" width="90">
           <template #default="scope">
-            <el-tag :type="modeTag(scope.row.mode)" size="small">{{ modeLabel(scope.row.mode) }}</el-tag>
+            <el-tag :type="dispatchModeTag(scope.row.mode)" size="small">{{ dispatchModeLabel(scope.row.mode) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="方案状态" prop="status" align="center" width="90">
@@ -442,7 +449,7 @@
       </el-table-column>
       <el-table-column label="动作" prop="actionType" align="center" width="90">
         <template #default="scope">
-          <el-tag :type="actionTag(scope.row.actionType)" size="small">{{ actionLabel(scope.row.actionType) }}</el-tag>
+          <el-tag :type="stopActionTag(scope.row.actionType)" size="small">{{ stopActionLabel(scope.row.actionType) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="订单号" align="center">
@@ -463,6 +470,18 @@ import * as VehicleApi from '@/api/transport/vehicle'
 import { Dialog } from '@/components/Dialog'
 import DispatchVisualDialog from './DispatchVisualDialog.vue'
 import { ElLoading, ElMessageBox } from 'element-plus'
+import {
+  orderTypeLabel,
+  orderTypeTag,
+  orderStatusLabel,
+  orderStatusTag,
+  planStatusLabel,
+  planStatusTag,
+  dispatchModeLabel,
+  dispatchModeTag,
+  stopActionLabel,
+  stopActionTag
+} from '../constants'
 
 defineOptions({ name: 'TransportDispatch' })
 
@@ -489,36 +508,8 @@ const taskWindowParams = () => {
   return { windowStart: range[0], windowEnd: range[1] }
 }
 
-type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
-
-// 订单类型:1 客运 2 货运 3 邮快件
-const orderTypeLabelMap: Record<number, string> = { 1: '客运', 2: '货运', 3: '邮快件' }
-const orderTypeLabel = (type?: number) => (type === undefined ? '-' : orderTypeLabelMap[type] || '未知')
-const orderTypeTagMap: Record<number, TagType> = { 1: 'success', 2: 'warning', 3: 'info' }
-const orderTypeTag = (type?: number): TagType => (type === undefined ? 'info' : orderTypeTagMap[type] || 'info')
-
-// 订单状态(OrderLifecycle):0 已创建 6 待审核 7 待客户操作 8 待入池 1 已入池 2 已分配 3 已发车 4 已完成 5 已取消
-// Phase 2/3：承运审核前置——仅「待入池(8)」可归集入池
-const orderStatusLabelMap: Record<number, string> = { 0: '已创建', 6: '待审核', 7: '待客户操作', 8: '待入池', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消' }
-const orderStatusLabel = (status?: number) => (status === undefined ? '-' : orderStatusLabelMap[status] || '未知')
-const orderStatusTagMap: Record<number, TagType> = { 0: 'info', 6: 'warning', 7: 'warning', 8: 'warning', 1: 'warning', 2: 'primary', 3: 'success', 4: 'success', 5: 'danger' }
-const orderStatusTag = (status?: number): TagType => (status === undefined ? 'info' : orderStatusTagMap[status] || 'info')
-
-// 方案状态:0 待审核 1 已下发 2 执行中 3 已完成 4 已作废
-const planStatusLabelMap: Record<number, string> = { 0: '待审核', 1: '已下发', 2: '执行中', 3: '已完成', 4: '已作废' }
-const planStatusLabel = (status?: number) => (status === undefined ? '-' : planStatusLabelMap[status] || '未知')
-const planStatusTagMap: Record<number, TagType> = { 0: 'warning', 1: 'primary', 2: 'success', 3: 'info', 4: 'danger' }
-const planStatusTag = (status?: number): TagType => (status === undefined ? 'info' : planStatusTagMap[status] || 'info')
-
-// 派单方式:0 手工 1 智能
-const modeLabel = (mode?: number) => (mode === undefined ? '-' : mode === 1 ? '智能' : '手工')
-const modeTag = (mode?: number): TagType => (mode === 1 ? 'success' : 'info')
-
-// 经停动作:0 出发 1 接客 2 送客 3 派送 4 揽收 5 返回 6 经停
-const actionLabelMap: Record<number, string> = { 0: '出发', 1: '接客', 2: '送客', 3: '派送', 4: '揽收', 5: '返回', 6: '经停' }
-const actionLabel = (type?: number) => (type === undefined ? '-' : actionLabelMap[type] || '未知')
-const actionTagMap: Record<number, TagType> = { 0: 'info', 1: 'success', 2: 'warning', 3: 'primary', 4: 'primary', 5: 'info', 6: 'info' }
-const actionTag = (type?: number): TagType => (type === undefined ? 'info' : actionTagMap[type] || 'info')
+// 订单类型/状态/方案状态/派单方式/经停动作的标签映射已收敛到 ../constants.ts（单一来源，
+// 与后端 TransportOrderStatusEnum 对齐；原先本页与 order、dispatch-center 三处各写一套已漂移）
 
 // 站点/车辆精简列表
 const stationList = ref<StationApi.StationVO[]>([])
@@ -582,6 +573,8 @@ const handleSelectionChange = (rows: DispatchApi.DispatchOrderVO[]) => {
 const manualSelected = computed(() => selectedOrders.value.filter((o) => o.status === 1))
 
 /** 调度方案 */
+const routeProviderLabel = (p?: string) =>
+  p === 'FORMAL_ROAD' ? '路网正式' : p === 'STRAIGHT_ESTIMATE' ? '直线估算' : '—'
 const planLoading = ref(true)
 const planTotal = ref(0)
 const planList = ref<DispatchApi.DispatchPlanVO[]>([])
@@ -618,6 +611,16 @@ const collectDisabled = computed(() => poolQuery.status === 1 || collectableSele
 const submitCollectBySelection = async () => {
   if (!collectableSelected.value.length) {
     message.warning('请先选择待入池的订单')
+    return
+  }
+  // 二次确认：入池后订单进入调度池，下一步就会被派给车辆并通知司机，误点会打扰一线
+  try {
+    await ElMessageBox.confirm(
+      `确认将所选 ${collectableSelected.value.length} 条订单归集入池？入池后即可被调度派车。`,
+      '归集入池',
+      { type: 'warning', confirmButtonText: '确认入池', cancelButtonText: '再想想' }
+    )
+  } catch (e) {
     return
   }
   collectLoading.value = true
@@ -702,6 +705,16 @@ const openManual = () => {
 const submitManual = async () => {
   const valid = await manualFormRef.value?.validate()
   if (!valid) return
+  // 二次确认：派单一经生成就会占用车辆并推进订单到「已分配」，撤销要逐单回池
+  try {
+    await ElMessageBox.confirm(
+      `确认将所选 ${manualSelected.value.length} 条订单派给该车辆？`,
+      '手工派单',
+      { type: 'warning', confirmButtonText: '确认派单', cancelButtonText: '再想想' }
+    )
+  } catch (e) {
+    return
+  }
   manualLoading.value = true
   try {
     const planId = await DispatchApi.createManualPlan({
@@ -771,6 +784,16 @@ const markerDotClass = (t: string) =>
   t === 'BOARD' ? 'dot-green' : t === 'ALIGHT' ? 'dot-red' : 'dot-gold'
 /** 第 2 步：提交规划（ACO 参数为空则不传，用算法默认值） */
 const submitSmart = async () => {
+  // 二次确认：智能派单要调算法（最坏 10 秒超时）且结果直接落为派车方案，误点代价高
+  try {
+    await ElMessageBox.confirm(
+      `确认对 ${smartForm.value.vehicleIds?.length || 0} 辆候选车执行智能派单？算法求解可能需要十几秒。`,
+      '智能派单',
+      { type: 'warning', confirmButtonText: '开始派单', cancelButtonText: '再想想' }
+    )
+  } catch (e) {
+    return
+  }
   smartLoading.value = true
   try {
     const algorithmConfig = Object.entries(acoForm).reduce<Record<string, number>>((acc, [k, v]) => {
@@ -830,6 +853,17 @@ const runAutoPlans = async (onStage?: (text: string) => void): Promise<number[]>
 }
 
 const runAutoSmart = async () => {
+  // 二次确认：一键调度会按片区分批连跑多轮算法（每轮最坏 10 秒），且逐轮把订单派出去，
+  // 中途没有撤销入口，误点会一次性改动大量订单归属。
+  try {
+    await ElMessageBox.confirm(
+      '确认执行一键智能调度？将按片区分批生成多套派车方案并占用车辆，耗时可能较长。',
+      '一键智能调度',
+      { type: 'warning', confirmButtonText: '开始调度', cancelButtonText: '再想想' }
+    )
+  } catch (e) {
+    return
+  }
   smartLoading.value = true
   autoRunning.value = true
   autoProgress.value = 0
