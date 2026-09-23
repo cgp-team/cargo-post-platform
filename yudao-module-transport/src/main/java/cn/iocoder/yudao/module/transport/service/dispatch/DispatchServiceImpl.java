@@ -831,6 +831,15 @@ public class DispatchServiceImpl implements DispatchService {
         // planLegs 是 REQUIRES_NEW、已独立提交不受回滚影响，因此失败仍需手工补偿：
         // 任务置失败 + 清理段数据 + 抢占订单回池，保证「要么成方案、要么回池」。
         DispatchPlanDO[] planHolder = new DispatchPlanDO[1];
+        // lambda 捕获：vehicleWindows/taskWindow/pooledOrders 等在外层被重新赋值，
+        // 必须先取 effectively final 快照，否则 javac 报
+        // "local variables referenced from a lambda expression must be final or effectively final"
+        final Map<Long, VehicleWindow> vehicleWindowsFinal = vehicleWindows;
+        final LocalDateTime[] taskWindowFinal = taskWindow;
+        final List<String> windowReasonsFinal = windowReasons;
+        final List<String> backtrackingWarningsFinal = backtrackingWarnings;
+        final AlgorithmPlanRespDTO resultFinal = result;
+        final AlgorithmPlanReqDTO algorithmReqFinal = algorithmReq;
         try {
             Long planId = new TransactionTemplate(transactionManager).execute(status -> {
 
@@ -840,19 +849,19 @@ public class DispatchServiceImpl implements DispatchService {
         dispatchTaskMapper.updateById(task);
 
         // 总里程：仅 distanceUnit=km 为路网正式里程；degree 仅直线估算参考（routeProvider 标注，禁止展示为真实道路）
-        DistanceEstimate distanceEstimate = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
+        DistanceEstimate distanceEstimate = resolveTotalDistanceKm(resultFinal, buildCoordMap(algorithmReqFinal));
         if (!distanceEstimate.formalRoad()) {
             log.warn("[createSmartPlan] 算法 distanceUnit={}，总里程仅为直线估算下界，不得当作正式路网成本",
-                    result.getDistanceUnit());
+                    resultFinal.getDistanceUnit());
         }
 
         DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
 
-                distanceEstimate.km(), distanceEstimate.routeProvider(), result.getAlgorithmVersion(), result.getParameterVersion());
+                distanceEstimate.km(), distanceEstimate.routeProvider(), resultFinal.getAlgorithmVersion(), resultFinal.getParameterVersion());
 
         planHolder[0] = plan;
 
-        for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+        for (AlgorithmVehiclePlanDTO vehiclePlan : resultFinal.getVehiclePlans()) {
 
             insertPlanItems(plan.getId(), vehiclePlan.getVehicleId(), vehiclePlan.getStops());
 
@@ -864,9 +873,9 @@ public class DispatchServiceImpl implements DispatchService {
 
         Map<String, DispatchEstimationService.RoadSegment> roadSegments = new HashMap<>();
 
-        if (AlgorithmPlanRespDTO.DISTANCE_UNIT_KM.equals(result.getDistanceUnit())) {
+        if (AlgorithmPlanRespDTO.DISTANCE_UNIT_KM.equals(resultFinal.getDistanceUnit())) {
 
-            for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+            for (AlgorithmVehiclePlanDTO vehiclePlan : resultFinal.getVehiclePlans()) {
 
                 List<AlgorithmRouteStopDTO> stops = vehiclePlan.getStops();
 
@@ -902,24 +911,24 @@ public class DispatchServiceImpl implements DispatchService {
 
         // 方案解释先写"任务窗口 + 每台车这一班的线路行程"：调度员/答辩时一眼看清
         // "这一批是给哪个时间段排的、每台车跑到哪一站了、后面还会经过哪些站"。
-        reasons.add("任务窗口 " + formatWindow(taskWindow));
-        for (VehicleWindow window : vehicleWindows.values()) {
+        reasons.add("任务窗口 " + formatWindow(taskWindowFinal));
+        for (VehicleWindow window : vehicleWindowsFinal.values()) {
             reasons.add(window.label() + " 这一班在 " + window.currentStationName() + " 站之后，"
                     + "本窗口还会依次经过 " + window.stations().size() + " 站（已开过的站不派取货）");
         }
-        reasons.addAll(windowReasons);
+        reasons.addAll(windowReasonsFinal);
 
         // 疑似折返取货（只提示、不阻断）：调度员据此人工确认是否调整
-        if (!backtrackingWarnings.isEmpty()) {
+        if (!backtrackingWarningsFinal.isEmpty()) {
             reasons.add("提示：本班次可能折返取货（不阻断派单，建议人工确认）："
-                    + String.join("；", backtrackingWarnings));
+                    + String.join("；", backtrackingWarningsFinal));
         }
 
         // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
 
         Map<Long, Long[]> orderVehicleMap = new HashMap<>();
 
-        for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
+        for (AlgorithmVehiclePlanDTO vehiclePlan : resultFinal.getVehiclePlans()) {
 
             Long plannedVehicleId = vehiclePlan.getVehicleId();
 
