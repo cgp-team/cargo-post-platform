@@ -524,8 +524,23 @@ public class DispatchServiceImpl implements DispatchService {
 
      */
 
-    @Override
+    /** 单测可不注入 PlatformTransactionManager：null 时退化为同步执行。 */
+    private void runInTx(Runnable body) {
+        if (transactionManager == null) {
+            body.run();
+            return;
+        }
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> body.run());
+    }
 
+    private <T> T callInTx(java.util.function.Supplier<T> body) {
+        if (transactionManager == null) {
+            return body.get();
+        }
+        return new TransactionTemplate(transactionManager).execute(status -> body.get());
+    }
+
+    @Override
     public Long createSmartPlan(DispatchSmartPlanReqVO reqVO) {
         try {
             return doCreateSmartPlan(reqVO);
@@ -756,36 +771,8 @@ public class DispatchServiceImpl implements DispatchService {
         LocalDateTime[] batch = taskWindow;
         String taskNo = generateTaskNo();
 
-        // 调用算法（无事务）：此时尚未抢占订单、尚未建任务，算法异常直接透传、无需任何补偿；
-        // 关键是不再持有 DB 连接与 CAS 行锁——原先最长 15s 的算法调用在事务内，会把连接池和
-        // 并发派单一起拖住（P1 长事务根因）。代价是并发两次派单各自算一版，后提交者在下方
-        // CAS 处影响 0 行 → 走 DISPATCH_POOL_EMPTY（原先是在行锁上阻塞至先者提交，体验更差）。
-        AlgorithmPlanRespDTO result = algorithmAdapter.plan(algorithmReq);
-
-        if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
-            // 无可行解：只落任务终态（独立短事务，等价原 noRollbackFor=ServiceException 的落库意图）；
-            // 订单从未被抢占，无需回池。运力不足最容易"看不懂"：把本批的实际需求与候选车运力
-            // 一起回给前端，现场就能判断是"订单太多"还是"车辆容量太小/车辆选错"，不用再翻日志。
-            String reason = reasonCodeText(result.getReasonCode());
-            if (AlgorithmPlanRespDTO.REASON_OVER_CAPACITY.equals(result.getReasonCode())) {
-                reason = reason + "（" + describeBatchLoad(algorithmReq) + "）";
-            }
-            DispatchTaskDO infeasibleTask = DispatchTaskDO.builder()
-                    .taskNo(taskNo)
-                    .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
-                    .planningTime(LocalDateTime.now())
-                    .batchStart(batch[0]).batchEnd(batch[1])
-                    .scenario(reqVO.getScenario())
-                    .status(DispatchTaskStatusEnum.INFEASIBLE.getStatus())
-                    .build();
-            new TransactionTemplate(transactionManager)
-                    .executeWithoutResult(status -> dispatchTaskMapper.insert(infeasibleTask));
-            throw exception(DISPATCH_NO_FEASIBLE, reason);
-        }
-
-        // P1-004 并发防护：CAS 抢占订单池（仅已入池可推进为已分配），与建任务同一短事务。
-        // 抢占失败（含部分失败）抛异常 → 整事务回滚，不存在「抢了一半」的中间态，无需手工补偿；
-        // 算法已在此之前完成，本事务只含这几条写，毫秒级提交并释放连接。
+        // P1-004 并发防护：先 CAS 抢占订单池 + 建任务（独立短事务），**抢到单再调算法**。
+        // 抢占失败/部分失败 → 直接抛错，绝不白跑一次算法（测试回归：verify(plan, never())）。
         TransportOrderDO claim = new TransportOrderDO();
         claim.setStatus(TransportOrderStatusEnum.ASSIGNED.getStatus());
         DispatchTaskDO task = DispatchTaskDO.builder()
@@ -796,7 +783,7 @@ public class DispatchServiceImpl implements DispatchService {
                 .scenario(reqVO.getScenario())
                 .status(DispatchTaskStatusEnum.PLANNING.getStatus())
                 .build();
-        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+        runInTx(() -> {
             int claimed = orderMapper.update(claim, new LambdaQueryWrapperX<TransportOrderDO>()
                     .in(TransportOrderDO::getId, pooledIds)
                     .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
@@ -810,6 +797,34 @@ public class DispatchServiceImpl implements DispatchService {
             }
             dispatchTaskMapper.insert(task);
         });
+
+        // 调用算法（无事务）：已抢到单；算法异常/无解走补偿回池，不在事务里拖连接。
+        AlgorithmPlanRespDTO result;
+        try {
+            result = algorithmAdapter.plan(algorithmReq);
+        } catch (RuntimeException ex) {
+            releaseClaimedOrders(pooledIds);
+            throw ex;
+        }
+
+        if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
+            // 无可行解：订单回池 + 落任务终态（独立短事务），避免订单卡在 ASSIGNED。
+            String reason = reasonCodeText(result.getReasonCode());
+            if (AlgorithmPlanRespDTO.REASON_OVER_CAPACITY.equals(result.getReasonCode())) {
+                reason = reason + "（" + describeBatchLoad(algorithmReq) + "）";
+            }
+            releaseClaimedOrders(pooledIds);
+            DispatchTaskDO infeasibleTask = DispatchTaskDO.builder()
+                    .taskNo(taskNo)
+                    .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
+                    .planningTime(LocalDateTime.now())
+                    .batchStart(batch[0]).batchEnd(batch[1])
+                    .scenario(reqVO.getScenario())
+                    .status(DispatchTaskStatusEnum.INFEASIBLE.getStatus())
+                    .build();
+            runInTx(() -> dispatchTaskMapper.insert(infeasibleTask));
+            throw exception(DISPATCH_NO_FEASIBLE, reason);
+        }
 
         // 安全网（不折返）——**只提示，不再让整批派单失败**：
         // 已经告诉算法"这些车本窗口沿途会经过哪些站"（作为骨架/方向偏好），
@@ -841,7 +856,7 @@ public class DispatchServiceImpl implements DispatchService {
         final AlgorithmPlanRespDTO resultFinal = result;
         final AlgorithmPlanReqDTO algorithmReqFinal = algorithmReq;
         try {
-            Long planId = new TransactionTemplate(transactionManager).execute(status -> {
+            Long planId = callInTx(() -> {
 
         // 任务置成功：与方案落库同一短事务，原子生效（原实现这行在事务里但算法调用也在，
         // 失败时连同任务一起回滚——那才是真 bug；现在要么 SUCCESS+方案 都落，要么 FAILED+回池）

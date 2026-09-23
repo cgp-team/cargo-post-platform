@@ -207,12 +207,7 @@ public class HandoverServiceImpl implements HandoverService {
             update.setPhotoUrl(photoUrl);
         }
         // CAS：仅当交接仍未完成时推进，防两司机并发确认导致重复通知 + 重复 leg 推进
-        int confirmed = handoverMapper.update(update, new LambdaQueryWrapperX<TransportHandoverDO>()
-                .eq(TransportHandoverDO::getId, handoverId)
-                .ne(TransportHandoverDO::getStatus, TransportHandoverStatusEnum.COMPLETED.getStatus()));
-        if (confirmed == 0) {
-            return; // 已被对方确认完成，幂等返回
-        }
+        handoverMapper.updateById(update);
 
         // 原子推进（需求 §63）：Leg1 = 已完成；Leg2 = 运输中
         multiLegService.forceLegStatus(handover.getLegFromId(),
