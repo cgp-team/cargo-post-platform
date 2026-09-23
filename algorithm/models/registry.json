@@ -1,0 +1,13 @@
+{
+  "smoke-1k": {
+    "state": "CANDIDATE",
+    "model_version": "lgb-lambdarank-1790090740",
+    "metrics": {
+      "best_candidate_recall_20": 1.0,
+      "feasible_candidate_recall": 0.7272727272727273,
+      "ndcg_10": 0.6043996280372014,
+      "search_reduction": 0.0
+    },
+    "created_at": 1790090740.8867927
+  }
+}

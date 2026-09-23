@@ -1,0 +1,297 @@
+{
+  "version": "DISPATCH_CORE_V047",
+  "notes": [
+    "SLA violation 为 PROXY：max(0, total_duration - batch window)，非真实乘客时刻表延误。",
+    "无 AMAP key：矩阵口径为 degree/直线（matrix=None）。"
+  ],
+  "cases": {
+    "sens-short": [
+      {
+        "case": "sens-short",
+        "seed": 20260903,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.088,
+        "totalDistance": 0.088,
+        "totalDuration": 12.6,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.088,
+          0.088,
+          12.6
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.088,
+          0.088
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.088,
+          0.088,
+          12.6
+        ]
+      },
+      {
+        "case": "sens-short",
+        "seed": 20260911,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.088,
+        "totalDistance": 0.088,
+        "totalDuration": 12.6,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.088,
+          0.088,
+          12.6
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.088,
+          0.088
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.088,
+          0.088,
+          12.6
+        ]
+      },
+      {
+        "case": "sens-short",
+        "seed": 20260921,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.088,
+        "totalDistance": 0.088,
+        "totalDuration": 12.6,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.088,
+          0.088,
+          12.6
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.088,
+          0.088
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.088,
+          0.088,
+          12.6
+        ]
+      }
+    ],
+    "sens-medium": [
+      {
+        "case": "sens-medium",
+        "seed": 20260903,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.004,
+        "totalDistance": 0.122,
+        "totalDuration": 17.7,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.004,
+          0.122,
+          17.7
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.004,
+          0.122
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.004,
+          0.122,
+          17.7
+        ]
+      },
+      {
+        "case": "sens-medium",
+        "seed": 20260911,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.004,
+        "totalDistance": 0.122,
+        "totalDuration": 17.7,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.004,
+          0.122,
+          17.7
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.004,
+          0.122
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.004,
+          0.122,
+          17.7
+        ]
+      },
+      {
+        "case": "sens-medium",
+        "seed": 20260921,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.004,
+        "totalDistance": 0.122,
+        "totalDuration": 17.7,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.004,
+          0.122,
+          17.7
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.004,
+          0.122
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.004,
+          0.122,
+          17.7
+        ]
+      }
+    ],
+    "sens-multi": [
+      {
+        "case": "sens-multi",
+        "seed": 20260903,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.114,
+        "totalDistance": 0.322,
+        "totalDuration": 46.3,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.114,
+          0.322,
+          46.3
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.114,
+          0.322
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.114,
+          0.322,
+          46.3
+        ]
+      },
+      {
+        "case": "sens-multi",
+        "seed": 20260911,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.114,
+        "totalDistance": 0.322,
+        "totalDuration": 46.3,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.114,
+          0.322,
+          46.3
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.114,
+          0.322
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.114,
+          0.322,
+          46.3
+        ]
+      },
+      {
+        "case": "sens-multi",
+        "seed": 20260921,
+        "vehicleCount": 1,
+        "passengerImpact": 0.0,
+        "cargoDetour": 0.114,
+        "totalDistance": 0.322,
+        "totalDuration": 46.3,
+        "slaViolationProxyS": 0.0,
+        "keyA": [
+          1,
+          0.0,
+          0.114,
+          0.322,
+          46.3
+        ],
+        "keyB": [
+          0.0,
+          1,
+          0.0,
+          0.114,
+          0.322
+        ],
+        "keyC": [
+          0.0,
+          1,
+          0.114,
+          0.322,
+          46.3
+        ]
+      }
+    ]
+  },
+  "disagreements": [],
+  "counterexamples": [],
+  "recommendation": "在当前 benchmark 上：A/B/C 排序一致，维持当前 lexicographic 即可。"
+}

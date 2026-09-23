@@ -206,7 +206,13 @@ public class HandoverServiceImpl implements HandoverService {
         if (photoUrl != null && !photoUrl.isBlank()) {
             update.setPhotoUrl(photoUrl);
         }
-        handoverMapper.updateById(update);
+        // CAS：仅当交接仍未完成时推进，防两司机并发确认导致重复通知 + 重复 leg 推进
+        int confirmed = handoverMapper.update(update, new LambdaQueryWrapperX<TransportHandoverDO>()
+                .eq(TransportHandoverDO::getId, handoverId)
+                .ne(TransportHandoverDO::getStatus, TransportHandoverStatusEnum.COMPLETED.getStatus()));
+        if (confirmed == 0) {
+            return; // 已被对方确认完成，幂等返回
+        }
 
         // 原子推进（需求 §63）：Leg1 = 已完成；Leg2 = 运输中
         multiLegService.forceLegStatus(handover.getLegFromId(),
@@ -263,11 +269,17 @@ public class HandoverServiceImpl implements HandoverService {
         if (Objects.equals(handover.getStatus(), TransportHandoverStatusEnum.COMPLETED.getStatus())) {
             return;
         }
-        handoverMapper.updateById(TransportHandoverDO.builder()
+        // CAS：仅当交接未完成时才能置超时，防把已 COMPLETED 覆盖回 TIMEOUT
+        int timedOut = handoverMapper.update(TransportHandoverDO.builder()
                 .id(handoverId)
                 .status(TransportHandoverStatusEnum.TIMEOUT.getStatus())
                 .exceptionReason(remark != null ? remark : "换乘超时")
-                .build());
+                .build(), new LambdaQueryWrapperX<TransportHandoverDO>()
+                .eq(TransportHandoverDO::getId, handoverId)
+                .ne(TransportHandoverDO::getStatus, TransportHandoverStatusEnum.COMPLETED.getStatus()));
+        if (timedOut == 0) {
+            return; // 已 COMPLETED，幂等
+        }
         updateOrderStatus(handover.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
         orderEventService.record(handover.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
                 "换乘交接超时：" + (remark != null ? remark : "前序司机长时间未到达"));

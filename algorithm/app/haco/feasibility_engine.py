@@ -40,6 +40,42 @@ class FeasibilityResult:
     reason_code: str | None = None
 
 
+@dataclass(frozen=True)
+class FeasibilityContext:
+    """Immutable hard-constraint context shared by every feasibility caller.
+
+    Construction / ALNS / Local Search / Final Validation / Dynamic Dispatch must
+    all go through the SAME hard-constraint wording (DISPATCH_CORE_V047 section 22).
+    """
+
+    station_map: dict | None = None
+    matrix: object | None = None
+    max_duration: float | None = None
+    max_detour_km: float | None = None
+    trip_detour_remaining_m: float | None = None
+    expected_task_ids: set[str] | None = None
+
+    def merged_into(self, engine: "FeasibilityEngine") -> "FeasibilityContext":
+        return FeasibilityContext(
+            station_map=self.station_map if self.station_map is not None else engine._station_map,
+            matrix=self.matrix if self.matrix is not None else engine._matrix,
+            max_duration=(
+                self.max_duration if self.max_duration is not None else engine._max_duration
+            ),
+            max_detour_km=(
+                self.max_detour_km
+                if self.max_detour_km is not None
+                else engine._max_detour_km
+            ),
+            trip_detour_remaining_m=(
+                self.trip_detour_remaining_m
+                if self.trip_detour_remaining_m is not None
+                else engine._trip_detour_remaining_m
+            ),
+            expected_task_ids=self.expected_task_ids,
+        )
+
+
 class FeasibilityEngine:
     """统一可行性引擎。
 
@@ -54,10 +90,16 @@ class FeasibilityEngine:
         station_map=None,
         matrix=None,
         max_duration: float | None = None,
+        max_detour_km: float | None = None,
+        trip_detour_remaining_m: float | None = None,
+        context: "FeasibilityContext | None" = None,
     ):
         self._station_map = station_map
         self._matrix = matrix
         self._max_duration = max_duration
+        self._max_detour_km = max_detour_km
+        self._trip_detour_remaining_m = trip_detour_remaining_m
+        self._context = context
 
     def check(
         self,
@@ -70,14 +112,35 @@ class FeasibilityEngine:
         station_map=None,
         matrix=None,
         max_duration: float | None = None,
+        max_detour_km: float | None = None,
+        trip_detour_remaining_m: float | None = None,
+        context: "FeasibilityContext | None" = None,
     ) -> FeasibilityResult:
 
+        if context is None:
+            context = self._context
+        if context is not None:
+            merged = context.merged_into(self)
+            if station_map is None:
+                station_map = merged.station_map
+            if matrix is None:
+                matrix = merged.matrix
+            if max_duration is None:
+                max_duration = merged.max_duration
+            if max_detour_km is None:
+                max_detour_km = merged.max_detour_km
+            if trip_detour_remaining_m is None:
+                trip_detour_remaining_m = merged.trip_detour_remaining_m
         if station_map is None:
             station_map = self._station_map
         if matrix is None:
             matrix = self._matrix
         if max_duration is None:
             max_duration = self._max_duration
+        if max_detour_km is None:
+            max_detour_km = self._max_detour_km
+        if trip_detour_remaining_m is None:
+            trip_detour_remaining_m = self._trip_detour_remaining_m
 
         checks = (
             self._check_terminal_return(route),
@@ -111,6 +174,137 @@ class FeasibilityEngine:
                 max_duration,
             )
 
+            if not result.feasible:
+                return result
+
+        # Trip / 订单级绕行预算（硬约束，不软化成 penalty）
+        if (max_detour_km is not None or trip_detour_remaining_m is not None) and station_map is not None:
+            result = self._check_detour_budget(
+                route,
+                tasks_by_id,
+                station_map,
+                matrix,
+                max_detour_km=max_detour_km,
+                trip_detour_remaining_m=trip_detour_remaining_m,
+            )
+            if not result.feasible:
+                return result
+
+        return FeasibilityResult(True)
+
+    @staticmethod
+    def _check_detour_budget(
+        route: RouteGenome,
+        tasks_by_id: dict[str, TaskBlock],
+        station_map,
+        matrix,
+        max_detour_km: float | None,
+        trip_detour_remaining_m: float | None,
+    ) -> FeasibilityResult:
+        """货运绕行预算：max_detour_km 与 trip 剩余预算都是硬约束。"""
+        from .evaluator import evaluate_route_genome
+
+        metrics = evaluate_route_genome(
+            route, tasks_by_id, station_map, matrix
+        )
+        detour_m = metrics["cargo_detour"] * 1000.0
+
+        if max_detour_km is not None and metrics["cargo_detour"] > max_detour_km:
+            return FeasibilityResult(False, "DETOUR_BUDGET_EXCEEDED")
+        if trip_detour_remaining_m is not None and detour_m > trip_detour_remaining_m:
+            return FeasibilityResult(False, "TRIP_DETOUR_BUDGET_EXCEEDED")
+        return FeasibilityResult(True)
+
+    def validate_solution(
+        self,
+        routes: list[RouteGenome],
+        tasks_by_id: dict[str, TaskBlock],
+        passenger_capacities: dict[int, int],
+        cargo_capacities: dict[int, int],
+        initial_passenger_loads: dict[int, int],
+        initial_cargo_loads: dict[int, int],
+        station_map=None,
+        matrix=None,
+        max_duration: float | None = None,
+        expected_task_ids: set[str] | None = None,
+        max_detour_km: float | None = None,
+        trip_detour_remaining_m: float | None = None,
+        context: "FeasibilityContext | None" = None,
+    ) -> FeasibilityResult:
+        """对整个解做最终全面检查（Best RouteGenome 出口统一裁决）。
+
+        覆盖：task uniqueness、task completeness、event legality、
+        以及每条 route 的全部硬约束。任何一项失败都返回不可行。
+        """
+        if station_map is None:
+            station_map = self._station_map
+        if matrix is None:
+            matrix = self._matrix
+        if max_duration is None:
+            max_duration = self._max_duration
+        if context is None:
+            context = self._context
+        if context is not None:
+            merged = context.merged_into(self)
+            if station_map is None:
+                station_map = merged.station_map
+            if matrix is None:
+                matrix = merged.matrix
+            if max_duration is None:
+                max_duration = merged.max_duration
+            if max_detour_km is None:
+                max_detour_km = merged.max_detour_km
+            if trip_detour_remaining_m is None:
+                trip_detour_remaining_m = merged.trip_detour_remaining_m
+            if expected_task_ids is None:
+                expected_task_ids = merged.expected_task_ids
+        if max_detour_km is None:
+            max_detour_km = self._max_detour_km
+        if trip_detour_remaining_m is None:
+            trip_detour_remaining_m = self._trip_detour_remaining_m
+
+        seen: set[str] = set()
+        for route in routes:
+            for task_id in route.placements:
+                if task_id in seen:
+                    return FeasibilityResult(
+                        False,
+                        f"TASK_DUPLICATE_ACROSS_ROUTES:{task_id}",
+                    )
+                seen.add(task_id)
+
+        if expected_task_ids is not None:
+            missing = expected_task_ids - seen
+            extra = seen - expected_task_ids
+            if missing:
+                return FeasibilityResult(
+                    False,
+                    f"TASK_MISSING:{','.join(sorted(missing)[:5])}",
+                )
+            if extra:
+                return FeasibilityResult(
+                    False,
+                    f"TASK_EXTRA:{','.join(sorted(extra)[:5])}",
+                )
+
+        for route in routes:
+            ok, reason = route.assert_invariants()
+            if not ok:
+                return FeasibilityResult(False, f"INVARIANT:{reason}")
+
+            result = self.check(
+                route,
+                tasks_by_id,
+                passenger_capacities[route.vehicle_index],
+                cargo_capacities[route.vehicle_index],
+                initial_passenger_loads[route.vehicle_index],
+                initial_cargo_loads[route.vehicle_index],
+                station_map=station_map,
+                matrix=matrix,
+                max_duration=max_duration,
+                max_detour_km=max_detour_km,
+                trip_detour_remaining_m=trip_detour_remaining_m,
+            )
             if not result.feasible:
                 return result
 

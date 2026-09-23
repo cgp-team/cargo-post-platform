@@ -1,0 +1,90 @@
+{
+  "1000": {
+    "samples": 0,
+    "groups": 0,
+    "avg_candidates": 0.0,
+    "min_candidates": 0,
+    "max_candidates": 0,
+    "ranking_metrics": {
+      "groups": 0,
+      "ranking_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null,
+        "20": null,
+        "50": null
+      },
+      "best_candidate_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null,
+        "20": null,
+        "50": null
+      },
+      "best_feasible_candidate_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null,
+        "20": null,
+        "50": null
+      },
+      "ndcg": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null,
+        "20": null,
+        "50": null
+      },
+      "overall_feasible_candidate_recall": 0.0
+    },
+    "reduction_metrics": {
+      "weighted_reduction": 0.0,
+      "mean_reduction": 0.0,
+      "reduction_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null
+      },
+      "best_candidate_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null
+      },
+      "best_feasible_candidate_recall": {
+        "1": null,
+        "3": null,
+        "5": null,
+        "10": null
+      },
+      "total_candidates": 0,
+      "total_dropped": 0
+    },
+    "model_disagreement_hard_negatives": 0,
+    "boundary_hard_negatives": 0,
+    "quality": {
+      "total": 0,
+      "ok": 0,
+      "bad": 0,
+      "estimated_rejected": 0,
+      "uncertain_rejected": 0,
+      "duplicates": 0,
+      "leakage_rejected": 0,
+      "graph_version_mismatch": 0,
+      "reasons": {}
+    },
+    "const_features": 52,
+    "router_stats": {
+      "routed": 0,
+      "formal": 0,
+      "uncertain": 0,
+      "cached": 0
+    },
+    "scenario_unavailable_count": 19920
+  }
+}

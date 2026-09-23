@@ -6,9 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-# 国内 self-hosted runner 网络差，pip 走清华镜像 + 超时重试，避免 ortools 大 wheel 下载超时失败
+# pip 源做成构建参数：国内 self-hosted runner（deploy-dev）走默认清华镜像；
+# GitHub 托管 runner（ci container-validation）在海外，经 compose args / 环境变量切官方 PyPI，避免跨海拉镜像超时
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --no-cache-dir --timeout 120 --retries 5 \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -i "${PIP_INDEX_URL}" \
     --requirement requirements.txt
 
 COPY app ./app

@@ -1,0 +1,67 @@
+{
+  "dataset_version": "real1000",
+  "graph_version": "osm-pbf-137591hw-2287515e",
+  "training_samples": 0,
+  "ranking_metrics": {
+    "groups": 0,
+    "ranking_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null,
+      "20": null,
+      "50": null
+    },
+    "best_candidate_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null,
+      "20": null,
+      "50": null
+    },
+    "best_feasible_candidate_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null,
+      "20": null,
+      "50": null
+    },
+    "ndcg": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null,
+      "20": null,
+      "50": null
+    },
+    "overall_feasible_candidate_recall": 0.0
+  },
+  "reduction_metrics": {
+    "weighted_reduction": 0.0,
+    "mean_reduction": 0.0,
+    "reduction_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null
+    },
+    "best_candidate_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null
+    },
+    "best_feasible_candidate_recall": {
+      "1": null,
+      "3": null,
+      "5": null,
+      "10": null
+    },
+    "total_candidates": 0,
+    "total_dropped": 0
+  },
+  "model_disagreement_hard_negatives": 0,
+  "boundary_hard_negatives": 0
+}

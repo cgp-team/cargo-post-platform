@@ -207,10 +207,15 @@ public class DispatchServiceImpl implements DispatchService {
     @Resource private DepartureCheckMapper departureCheckMapper;
 
     @Resource private AlgorithmAdapter algorithmAdapter;
+    /** P1 长事务重构：createSmartPlan 拆段编排用（方法级 @Transactional 已移除，见 doCreateSmartPlan） */
+    @Resource private PlatformTransactionManager transactionManager;
 
     @Resource private DispatchEstimationService dispatchEstimationService;
 
     @Resource private MultiLegService multiLegService;
+    @Resource private CargoPricingService cargoPricingService;
+    @Resource private ReachabilityDecisionService reachabilityDecisionService;
+    @Resource private TaskSegmentCompletionService taskSegmentCompletionService;
     @Resource private cn.iocoder.yudao.module.transport.service.order.OrderEventService orderEventService;
 
     @Resource private cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService roadPolylineService;
@@ -503,13 +508,21 @@ public class DispatchServiceImpl implements DispatchService {
 
     /**
 
-     * 智能派单。任务终态（无可行解/失败）需要在异常抛出后仍然落库，故 ServiceException 不回滚。
+     * 智能派单。
+
+     * <p>事务策略（P1 长事务重构）：本方法整体不再包 @Transactional——算法 HTTP 调用（超时上限
+
+     * 15s）若发生在事务内，会同时占住 DB 连接与 CAS 抢占的行锁，并发派单会在行锁上串行阻塞。
+
+     * 现按「只读准备 → 调算法（无事务）→ 短事务抢占+建任务 → 短事务落库」四段执行，各段用
+
+     * TransactionTemplate 编排；任务终态落库由「各段独立短事务」保证（等价于原先
+
+     * noRollbackFor=ServiceException 的意图），算法失败/落库失败的补偿链见 doCreateSmartPlan。
 
      */
 
     @Override
-
-    @Transactional(noRollbackFor = ServiceException.class)
 
     public Long createSmartPlan(DispatchSmartPlanReqVO reqVO) {
         try {
@@ -737,120 +750,64 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-        // P1-004 并发防护：CAS 抢占订单池（仅已入池可推进为已分配）。InnoDB 行锁会串行化并发智能派单：
-
-        // 后到的派单在 CAS 上阻塞至先到提交，随后因订单已非 POOLED 而影响 0 行 → 走 DISPATCH_POOL_EMPTY。
-
-        // 抢占成功后订单即为 ASSIGNED，方案落库后无需再改状态；算法失败/无解需显式回滚抢占（本方法
-
-        // noRollbackFor=ServiceException 不回滚，必须手动释放，否则订单会滞留 ASSIGNED 而无方案）。
-
-        TransportOrderDO claim = new TransportOrderDO();
-
-        claim.setStatus(TransportOrderStatusEnum.ASSIGNED.getStatus());
-
-        int claimed = orderMapper.update(claim, new LambdaQueryWrapperX<TransportOrderDO>()
-
-                .in(TransportOrderDO::getId, pooledIds)
-
-                .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
-
-        if (claimed == 0) {
-
-            throw exception(DISPATCH_POOL_EMPTY); // 池已被并发派单抢占
-
-        }
-
-        if (claimed < pooledIds.size()) {
-
-            // 池被非智能派单路径并发修改（部分订单已非 POOLED）：抛非 ServiceException 触发整事务回滚，
-
-            // 撤销本次已抢占的订单，避免与其它路径的订单归属产生歧义。
-
-            throw new IllegalStateException("订单池状态并发变更，请刷新后重试");
-
-        }
-
-
-
         // 任务窗口（可显式指定，如早上 8-10 点）：任务/方案/运输段的时间口径一律用本次派单的窗口
         LocalDateTime[] batch = taskWindow;
-
         String taskNo = generateTaskNo();
 
-        DispatchTaskDO task = DispatchTaskDO.builder()
-
-                .taskNo(taskNo)
-
-                .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
-
-                .planningTime(LocalDateTime.now())
-
-                .batchStart(batch[0]).batchEnd(batch[1])
-
-                .scenario(reqVO.getScenario())
-
-                .status(DispatchTaskStatusEnum.PLANNING.getStatus())
-
-                .build();
-
-        // P0-1：抢占成功之后，任何落库动作失败都必须把订单释放回池子（本方法不回滚，见方法头注释）
-
-        try {
-
-            dispatchTaskMapper.insert(task);
-
-        } catch (RuntimeException ex) {
-
-            // 任务落库失败同样要释放：否则订单会停在「已分配」且订单池被清空，无法重跑
-
-            releaseClaimedOrders(pooledIds);
-
-            throw ex;
-
-        }
-
-
-
-        // 调用算法；失败时任务置 FAILED、订单回滚抢占后透传异常
-
-        AlgorithmPlanRespDTO result;
-
-        try {
-
-            result = algorithmAdapter.plan(algorithmReq);
-
-        } catch (RuntimeException ex) {
-
-            task.setStatus(DispatchTaskStatusEnum.FAILED.getStatus());
-
-            task.setErrorMessage(ex.getMessage());
-
-            dispatchTaskMapper.updateById(task);
-
-            releaseClaimedOrders(pooledIds);
-
-            throw ex;
-
-        }
+        // 调用算法（无事务）：此时尚未抢占订单、尚未建任务，算法异常直接透传、无需任何补偿；
+        // 关键是不再持有 DB 连接与 CAS 行锁——原先最长 15s 的算法调用在事务内，会把连接池和
+        // 并发派单一起拖住（P1 长事务根因）。代价是并发两次派单各自算一版，后提交者在下方
+        // CAS 处影响 0 行 → 走 DISPATCH_POOL_EMPTY（原先是在行锁上阻塞至先者提交，体验更差）。
+        AlgorithmPlanRespDTO result = algorithmAdapter.plan(algorithmReq);
 
         if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
-
-            task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
-
-            dispatchTaskMapper.updateById(task);
-
-            releaseClaimedOrders(pooledIds);
-
-            // 运力不足最容易"看不懂"：把本批的实际需求与候选车运力一起回给前端，
-            // 现场就能判断是"订单太多"还是"车辆容量太小/车辆选错"，不用再翻日志。
+            // 无可行解：只落任务终态（独立短事务，等价原 noRollbackFor=ServiceException 的落库意图）；
+            // 订单从未被抢占，无需回池。运力不足最容易"看不懂"：把本批的实际需求与候选车运力
+            // 一起回给前端，现场就能判断是"订单太多"还是"车辆容量太小/车辆选错"，不用再翻日志。
             String reason = reasonCodeText(result.getReasonCode());
             if (AlgorithmPlanRespDTO.REASON_OVER_CAPACITY.equals(result.getReasonCode())) {
                 reason = reason + "（" + describeBatchLoad(algorithmReq) + "）";
             }
+            DispatchTaskDO infeasibleTask = DispatchTaskDO.builder()
+                    .taskNo(taskNo)
+                    .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
+                    .planningTime(LocalDateTime.now())
+                    .batchStart(batch[0]).batchEnd(batch[1])
+                    .scenario(reqVO.getScenario())
+                    .status(DispatchTaskStatusEnum.INFEASIBLE.getStatus())
+                    .build();
+            new TransactionTemplate(transactionManager)
+                    .executeWithoutResult(status -> dispatchTaskMapper.insert(infeasibleTask));
             throw exception(DISPATCH_NO_FEASIBLE, reason);
-
         }
+
+        // P1-004 并发防护：CAS 抢占订单池（仅已入池可推进为已分配），与建任务同一短事务。
+        // 抢占失败（含部分失败）抛异常 → 整事务回滚，不存在「抢了一半」的中间态，无需手工补偿；
+        // 算法已在此之前完成，本事务只含这几条写，毫秒级提交并释放连接。
+        TransportOrderDO claim = new TransportOrderDO();
+        claim.setStatus(TransportOrderStatusEnum.ASSIGNED.getStatus());
+        DispatchTaskDO task = DispatchTaskDO.builder()
+                .taskNo(taskNo)
+                .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
+                .planningTime(LocalDateTime.now())
+                .batchStart(batch[0]).batchEnd(batch[1])
+                .scenario(reqVO.getScenario())
+                .status(DispatchTaskStatusEnum.PLANNING.getStatus())
+                .build();
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            int claimed = orderMapper.update(claim, new LambdaQueryWrapperX<TransportOrderDO>()
+                    .in(TransportOrderDO::getId, pooledIds)
+                    .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.POOLED.getStatus()));
+            if (claimed == 0) {
+                throw exception(DISPATCH_POOL_EMPTY); // 池已被并发派单抢占
+            }
+            if (claimed < pooledIds.size()) {
+                // 池被非智能派单路径并发修改（部分订单已非 POOLED）：整事务回滚撤销抢占，
+                // 避免与其它路径的订单归属产生歧义。
+                throw new IllegalStateException("订单池状态并发变更，请刷新后重试");
+            }
+            dispatchTaskMapper.insert(task);
+        });
 
         // 安全网（不折返）——**只提示，不再让整批派单失败**：
         // 已经告诉算法"这些车本窗口沿途会经过哪些站"（作为骨架/方向偏好），
@@ -864,28 +821,34 @@ public class DispatchServiceImpl implements DispatchService {
             log.warn("[createSmartPlan] 检测到疑似折返取货（仅提示，不阻断）：{}", backtrackingWarnings);
         }
 
-        // 可行：任务置成功，方案与经停明细落库（订单已在 CAS 抢占时置为已分配）
-
+        // 可行：任务置成功，方案与经停明细落库（订单已在上方短事务 CAS 抢占时置为已分配）
         task.setStatus(DispatchTaskStatusEnum.SUCCESS.getStatus());
-
         task.setAlgorithmJobId(result.getRequestId());
+
+        // P0-1：以下进入「方案落库阶段」（独立短事务）。事务回滚保证 plan/明细/估算原子落库；
+        // planLegs 是 REQUIRES_NEW、已独立提交不受回滚影响，因此失败仍需手工补偿：
+        // 任务置失败 + 清理段数据 + 抢占订单回池，保证「要么成方案、要么回池」。
+        DispatchPlanDO[] planHolder = new DispatchPlanDO[1];
+        try {
+            Long planId = new TransactionTemplate(transactionManager).execute(status -> {
+
+        // 任务置成功：与方案落库同一短事务，原子生效（原实现这行在事务里但算法调用也在，
+        // 失败时连同任务一起回滚——那才是真 bug；现在要么 SUCCESS+方案 都落，要么 FAILED+回池）
 
         dispatchTaskMapper.updateById(task);
 
-        // P0-1：以下进入「方案落库阶段」。本方法所在事务 noRollbackFor=ServiceException，异常不会自动
-        // 回滚，因此这里显式兜底：任何异常 → 清理半成品方案 + 抢占订单回池，保证「要么成方案、要么回池」。
+        // 总里程：仅 distanceUnit=km 为路网正式里程；degree 仅直线估算参考（routeProvider 标注，禁止展示为真实道路）
+        DistanceEstimate distanceEstimate = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
+        if (!distanceEstimate.formalRoad()) {
+            log.warn("[createSmartPlan] 算法 distanceUnit={}，总里程仅为直线估算下界，不得当作正式路网成本",
+                    result.getDistanceUnit());
+        }
 
-        DispatchPlanDO plan = null;
+        DispatchPlanDO plan = createPlan(task, DispatchPlanModeEnum.SMART,
 
-        try {
+                distanceEstimate.km(), distanceEstimate.routeProvider(), result.getAlgorithmVersion(), result.getParameterVersion());
 
-        // 总里程：按算法返回的里程单位处理——degree 时按经停站点坐标 Haversine 换算真实公里，km 时直接使用
-
-        BigDecimal totalDistanceKm = resolveTotalDistanceKm(result, buildCoordMap(algorithmReq));
-
-        plan = createPlan(task, DispatchPlanModeEnum.SMART,
-
-                totalDistanceKm, result.getAlgorithmVersion(), result.getParameterVersion());
+        planHolder[0] = plan;
 
         for (AlgorithmVehiclePlanDTO vehiclePlan : result.getVehiclePlans()) {
 
@@ -1060,14 +1023,19 @@ public class DispatchServiceImpl implements DispatchService {
 
         return plan.getId();
 
+            });
+
+            return planId;
+
         } catch (RuntimeException ex) {
 
-            // P0-1 兜底：清理半成品方案 + 抢占订单回池，绝不留下「已分配但无方案」的脏订单。
-            // 顺序说明：先清方案（此时订单仍为已分配，删除不会误伤在途数据），再放订单回池。
+            // P0-1 兜底：plan/明细/估算已随短事务回滚，这里只清理「REQUIRES_NEW 已独立提交」的
+            // 运输段数据 + 抢占订单回池，绝不留下「已分配但无方案」的脏订单。
+            // 顺序说明：先清段（此时订单仍为已分配，删除不会误伤在途数据），再放订单回池。
 
             failDispatchTask(task, ex);
 
-            cleanupPartialPlan(plan);
+            cleanupPartialPlan(planHolder[0]);
 
             releaseClaimedOrders(pooledIds);
 
@@ -2845,25 +2813,36 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
-    /** 方案总里程解析：算法返回 km（路网距离）时直接使用；degree（或缺省，欧氏直线）时按经停坐标 Haversine 换算 */
+    /** 路线成本来源：FORMAL_ROAD=路网正式；STRAIGHT_ESTIMATE=Haversine 下界参考（非正式） */
+    private record DistanceEstimate(BigDecimal km, String routeProvider) {
+        boolean formalRoad() {
+            return "FORMAL_ROAD".equals(routeProvider);
+        }
+    }
 
-    private static BigDecimal resolveTotalDistanceKm(AlgorithmPlanRespDTO result, Map<String, double[]> coordMap) {
+    private static final String ROUTE_PROVIDER_FORMAL = "FORMAL_ROAD";
+    private static final String ROUTE_PROVIDER_STRAIGHT = "STRAIGHT_ESTIMATE";
+
+    /**
+     * 方案总里程解析。km→FORMAL_ROAD；degree/缺省→STRAIGHT_ESTIMATE（非正式成本，禁止冒充路网里程）。
+     */
+    private static DistanceEstimate resolveTotalDistanceKm(AlgorithmPlanRespDTO result, Map<String, double[]> coordMap) {
 
         if (AlgorithmPlanRespDTO.DISTANCE_UNIT_KM.equals(result.getDistanceUnit())) {
 
             double km = result.getTotalDistance() != null ? result.getTotalDistance() : 0;
 
-            return BigDecimal.valueOf(Math.round(km * 1000) / 1000.0);
+            return new DistanceEstimate(BigDecimal.valueOf(Math.round(km * 1000) / 1000.0), ROUTE_PROVIDER_FORMAL);
 
         }
 
-        return computeTotalDistanceKm(result.getVehiclePlans(), coordMap);
+        return new DistanceEstimate(computeTotalDistanceKm(result.getVehiclePlans(), coordMap), ROUTE_PROVIDER_STRAIGHT);
 
     }
 
 
 
-    /** 按各车经停序列用 Haversine 累加真实公里数；坐标缺失的分段跳过（不记里程） */
+    /** 按各车经停序列Haversine 累加估算公里（直线参考，非正式道路里程）；坐标缺失的分段跳过（不记里程） */
 
     private static BigDecimal computeTotalDistanceKm(List<AlgorithmVehiclePlanDTO> vehiclePlans,
 
@@ -3297,6 +3276,8 @@ public class DispatchServiceImpl implements DispatchService {
 
                     .itemCount(getItemCount(order, cargoMap, postalMap))
 
+                    .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
+
                     .build());
 
         }
@@ -3314,6 +3295,8 @@ public class DispatchServiceImpl implements DispatchService {
                     .stationId(String.valueOf(order.getDeliveryStationId()))
 
                     .itemCount(getItemCount(order, cargoMap, postalMap))
+
+                    .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
 
                     .build());
 
@@ -3337,6 +3320,7 @@ public class DispatchServiceImpl implements DispatchService {
                 .deliveryStationId(String.valueOf(order.getDeliveryStationId()))
 
                 .quantity(getItemCount(order, cargoMap, postalMap))
+                .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
 
                 .weightKg(cargo != null && cargo.getWeightKg() != null ? cargo.getWeightKg().doubleValue() : null)
 
@@ -3504,6 +3488,26 @@ public class DispatchServiceImpl implements DispatchService {
 
     }
 
+    /**
+     * 用 CargoPricingService 真实报价填充算法 economicValue（可选、向后兼容）。
+     * 无报价/异常时返回 null，算法侧不造假价格。
+     */
+    private Double resolveEconomicValue(TransportOrderDO order, Map<Long, CargoOrderDO> cargoMap,
+                                        Map<Long, PostalOrderDO> postalMap) {
+        try {
+            if (order == null || order.getPickupStationId() == null || order.getDeliveryStationId() == null) {
+                return null;
+            }
+            int itemCount = getItemCount(order, cargoMap, postalMap);
+            CargoPricingService.CargoQuote quote = cargoPricingService.quote(
+                    order.getPickupStationId(), order.getDeliveryStationId(), itemCount);
+            return quote != null && quote.amount() != null ? quote.amount().doubleValue() : null;
+        } catch (Exception ex) {
+            log.warn("[resolveEconomicValue] skip economic value for order {}", order != null ? order.getId() : null, ex);
+            return null;
+        }
+    }
+
 
 
     private AlgorithmRouteStopDTO buildStop(Long stationId, String orderId, String action) {
@@ -3523,8 +3527,7 @@ public class DispatchServiceImpl implements DispatchService {
 
 
     private DispatchPlanDO createPlan(DispatchTaskDO task, DispatchPlanModeEnum mode, BigDecimal totalDistance,
-
-                                      String algorithmVersion, String parameterVersion) {
+                                      String routeProvider, String algorithmVersion, String parameterVersion) {
 
         DispatchPlanDO plan = DispatchPlanDO.builder()
 
@@ -3540,6 +3543,8 @@ public class DispatchServiceImpl implements DispatchService {
 
                 .totalDistance(totalDistance)
 
+                .routeProvider(routeProvider)
+
                 .status(DispatchPlanStatusEnum.PENDING.getStatus())
 
                 .build();
@@ -3548,6 +3553,11 @@ public class DispatchServiceImpl implements DispatchService {
 
         return plan;
 
+    }
+
+    private DispatchPlanDO createPlan(DispatchTaskDO task, DispatchPlanModeEnum mode, BigDecimal totalDistance,
+                                      String algorithmVersion, String parameterVersion) {
+        return createPlan(task, mode, totalDistance, null, algorithmVersion, parameterVersion);
     }
 
 
@@ -4212,5 +4222,11 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
+
+    @Override
+    public java.util.Map<String, Object> allocateDynamic(java.util.Map<String, Object> payload) {
+        // 前端不直连算法；此处唯一出口。失败由 AlgorithmClient 重试/冷却语义处理。
+        return algorithmAdapter.allocateRaw(payload);
+    }
 }
 

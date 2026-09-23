@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.service.transport.driver;
 
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.*;
+import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 
 import java.util.List;
 
@@ -55,6 +56,15 @@ public interface DriverAppService {
     /** 上报车辆实时位置（按车辆 upsert） */
     void reportLocation(AppDriverLocationReqVO reqVO);
 
+    /**
+     * 车辆接近目的站时给下单用户发"即将送达"提醒（按 订单+距离档位 幂等）。
+     *
+     * 对外部（定时任务 {@code ApproachingNotifyJob}）暴露：司机端切后台后小程序会停掉定位定时器，
+     * 位置上报随之中断，仅靠 reportLocation 触发会让提醒断流；由定时任务按车辆最后已知位置兜底补发。
+     * 幂等键保证重复调用不会重复通知用户。
+     */
+    void notifyApproachingOrders(Long vehicleId, double longitude, double latitude);
+
     /** 待确认的货物交接任务（多段联运换乘站交接；交出/接收司机均可看到） */
     List<AppDriverHandoverRespVO> handovers(Long driverId);
 
@@ -77,4 +87,11 @@ public interface DriverAppService {
      * 司机车辆当前位置：仅返回真实上报位置（REAL）。
      */
     AppDriverPositionRespVO getPosition(Long driverId);
+
+    /**
+     * 归属校验：以登录会员身份解析当前司机，并校验传入 driverId 与之一致。
+     * 司机端所有按 driverId 查询的接口（含 /messages、/messages/unread-count）都必须先调用本方法，
+     * 否则任意登录会员可传任意 driverId 越权拉取该司机的站内通知（订单号 / 收件人手机等 PII 泄露）。
+     */
+    DriverDO requireCurrentDriver(Long driverId);
 }

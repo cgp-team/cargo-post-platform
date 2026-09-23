@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import time
 from dataclasses import dataclass
 from math import asin, cos, hypot, radians, sin, sqrt
@@ -124,6 +125,8 @@ class AmapDistanceProvider:
         self._cache: dict[str, _CacheEntry] = cache if cache is not None else {}
         # 单路线（含 polyline）缓存：key = "lon,lat→lon,lat"，TTL 24h（RoadSegment 缓存，禁止每车每 5s 打高德）
         self._route_cache: dict[str, tuple[RouteResult, float]] = {}
+        # 串行化高德请求：key QPS 低（实测 ~3/s）+ 共享连接池，多线程并发会触发限流/缓存复合操作竞态
+        self._lock = threading.Lock()
 
     def get_route_with_polyline(self, origin: Station, destination: Station) -> RouteResult:
         """单点对路网路径（含真实道路 polyline），供车辆沿真实道路运行。
@@ -133,21 +136,22 @@ class AmapDistanceProvider:
         polyline 仅起终点两点，明确标注不伪装真实道路）。
         缓存：按起终点坐标（RoadSegment 口径），TTL 24h，命中 0 次外部调用。
         """
-        cache_key = f"{self._coord(origin)}→{self._coord(destination)}"
-        entry = self._route_cache.get(cache_key)
-        if entry is not None and entry[1] > time.time():
-            return entry[0]
-        try:
-            km, seconds, polyline = self._fetch_driving_route(origin, destination)
-            result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds,
-                                 provider="amap", polyline=polyline)
-        except AmapUnavailable as exc:
-            if exc.unreachable:
-                result = RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
-            else:
-                result = self._euclidean_route_with_polyline(origin, destination)
-        self._route_cache[cache_key] = (result, time.time() + CACHE_TTL_SECONDS)
-        return result
+        with self._lock:
+            cache_key = f"{self._coord(origin)}→{self._coord(destination)}"
+            entry = self._route_cache.get(cache_key)
+            if entry is not None and entry[1] > time.time():
+                return entry[0]
+            try:
+                km, seconds, polyline = self._fetch_driving_route(origin, destination)
+                result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds,
+                                     provider="amap", polyline=polyline)
+            except AmapUnavailable as exc:
+                if exc.unreachable:
+                    result = RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
+                else:
+                    result = self._euclidean_route_with_polyline(origin, destination)
+            self._route_cache[cache_key] = (result, time.time() + CACHE_TTL_SECONDS)
+            return result
 
     def _fetch_driving_route(self, origin: Station, destination: Station) -> tuple[float, float, list[RoutePoint]]:
         """高德驾车路径：返回 (公里, 秒, 坐标点序列)。单点不可达抛 unreachable=True。"""
@@ -217,24 +221,25 @@ class AmapDistanceProvider:
         return cls(key) if key else None
 
     def get_matrix(self, points: list[Station]) -> DistanceMatrix:
-        self._evict_expired()
-        cache_key = self._cache_key(points)
-        entry = self._cache.get(cache_key)
-        if entry is not None:
-            return entry.matrix
-        if len(points) > AMAP_MAX_ORIGINS:
-            raise AmapUnavailable(f"坐标对 {len(points)} 超过高德单请求上限 {AMAP_MAX_ORIGINS}")
-        coords = [self._coord(point) for point in points]
-        matrix: DistanceMatrix = {}
-        for index, destination in enumerate(coords):
-            if index > 0:
-                # 限速间隔：高德 key QPS 很低（实测 ~3/s），连续请求会触发 10021 限流
-                time.sleep(AMAP_PACE_SECONDS)
-            pairs = self._fetch_to_destination(coords, destination)
-            for origin_index, (km, seconds) in enumerate(pairs):
-                matrix[(points[origin_index].stationId, points[index].stationId)] = (km, seconds)
-        self._cache[cache_key] = _CacheEntry(matrix=matrix, created_at=time.time())
-        return matrix
+        with self._lock:
+            self._evict_expired()
+            cache_key = self._cache_key(points)
+            entry = self._cache.get(cache_key)
+            if entry is not None:
+                return entry.matrix
+            if len(points) > AMAP_MAX_ORIGINS:
+                raise AmapUnavailable(f"坐标对 {len(points)} 超过高德单请求上限 {AMAP_MAX_ORIGINS}")
+            coords = [self._coord(point) for point in points]
+            matrix: DistanceMatrix = {}
+            for index, destination in enumerate(coords):
+                if index > 0:
+                    # 限速间隔：高德 key QPS 很低（实测 ~3/s），连续请求会触发 10021 限流
+                    time.sleep(AMAP_PACE_SECONDS)
+                pairs = self._fetch_to_destination(coords, destination)
+                for origin_index, (km, seconds) in enumerate(pairs):
+                    matrix[(points[origin_index].stationId, points[index].stationId)] = (km, seconds)
+            self._cache[cache_key] = _CacheEntry(matrix=matrix, created_at=time.time())
+            return matrix
 
     def get_route(self, origin: Station, destination: Station) -> RouteResult:
         """单点对路网距离/时长（Route Preview 用），薄封装 get_matrix，恒返回 km。

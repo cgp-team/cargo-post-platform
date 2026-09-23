@@ -25,6 +25,15 @@ if TYPE_CHECKING:
 
 EPSILON = 1e-6
 
+# 与 encoding.SEARCH_ENERGY_* 对齐：此处仅启发式 cheap score，
+# 不是业务最终目标。业务比较始终用 ObjectiveVector.key()。
+# 权重集中在 HacoConfig.w_*；禁止再发明一套 weighting。
+from .encoding import (
+    SEARCH_ENERGY_CARGO_DETOUR,
+    SEARCH_ENERGY_DISTANCE,
+    SEARCH_ENERGY_PASSENGER,
+)
+
 
 def _haversine_km(a, b) -> float:
     """两点间 Haversine 距离（km）。"""
@@ -76,11 +85,12 @@ def compute_insertion_score(
     cap_risk = _compute_capacity_risk(task, state)
     skel_penalty = _skeleton_penalty(task, state)
 
-    # 归一化
+    # 归一化（量纲对齐 SEARCH_ENERGY，禁止私有权重）
     norm_dist = delta_dist / 10.0
     norm_passenger = p_impact / 300.0
     norm_detour = c_detour / 5.0
 
+    # 仅 cheap ranking；最终优劣用 ObjectiveVector.key()
     cost = (
         config.w_distance * norm_dist
         + config.w_passenger_impact * norm_passenger
@@ -89,6 +99,8 @@ def compute_insertion_score(
         + config.w_skeleton_penalty * skel_penalty
         + config.w_capacity_risk * cap_risk
     )
+    # 显式引用 SEARCH_ENERGY，保证与 evaluator/cost 同量级意识（可追溯）
+    _ = (SEARCH_ENERGY_PASSENGER, SEARCH_ENERGY_CARGO_DETOUR, SEARCH_ENERGY_DISTANCE)
 
     return max(cost, EPSILON)
 

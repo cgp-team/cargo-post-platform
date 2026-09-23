@@ -495,6 +495,7 @@ def generate_insertion_candidates(
     candidate_size: int,
     deadline: SearchDeadline | None = None,
     max_detour_km: float | None = None,
+    per_vehicle_max_detour: dict[int, float] | None = None,
 ) -> list[InsertionCandidate]:
     """为 task 生成可行插入候选（两阶段筛选）。
 
@@ -530,6 +531,12 @@ def generate_insertion_candidates(
 
     pickup_station = station_map.get(task.pickup_station)
     delivery_station = station_map.get(task.delivery_station)
+
+    def _detour_limit(vehicle_index: int) -> float | None:
+        """该车辆的绕行上限：每车阈值优先，缺省回退全局 max_detour_km。"""
+        if per_vehicle_max_detour is not None:
+            return per_vehicle_max_detour.get(vehicle_index, max_detour_km)
+        return max_detour_km
 
     for route in routes:
         event_count = len(route.events)
@@ -603,12 +610,15 @@ def generate_insertion_candidates(
                             dd_delivery = max(0.0, d_new_del - d_orig_del)
 
                         dd = dd_pickup + dd_delivery
-                        # 绕行硬约束只约束货运任务（DELIVERY/PICKUP/SHIPMENT）：
-                        # 偏离运营路线超过上限的插入直接跳过（订单留给多段联运）。
-                        # 乘客任务沿公交线路上下车，无"偏离运营路线取送"语义，不受此约束。
+                        # 绕行硬约束只约束「有公交骨架的车辆的货运任务」：
+                        # 偏离运营路线超过该车上限的插入直接跳过（订单留给多段联运）。
+                        # 纯 VRP 车辆（无骨架）没有"运营路线"，不存在"绕行"语义，不受此约束；
+                        # 乘客任务沿公交线路上下车，无"偏离运营路线取送"语义，也不受此约束。
+                        _limit = _detour_limit(route.vehicle_index)
                         if (
-                            max_detour_km is not None
-                            and dd > max_detour_km
+                            route.skeleton
+                            and _limit is not None
+                            and dd > _limit
                             and task.task_type in (TaskType.DELIVERY, TaskType.PICKUP, TaskType.SHIPMENT)
                         ):
                             continue
@@ -666,8 +676,10 @@ def generate_insertion_candidates(
                         + compute_distance(pickup_station, to_station, matrix)
                     )
                     dd = max(0.0, d_new - d_orig)
-                    # 绕行硬约束：偏离运营路线超过上限的插入直接跳过（订单留给多段联运）
-                    if max_detour_km is not None and dd > max_detour_km:
+                    # 绕行硬约束只约束「有公交骨架的车辆」：偏离运营路线超过该车上限的插入直接跳过。
+                    # 纯 VRP 车辆（无骨架）没有"运营路线"，不存在"绕行"语义，不受此约束。
+                    _limit = _detour_limit(route.vehicle_index)
+                    if route.skeleton and _limit is not None and dd > _limit:
                         continue
                     t_orig = compute_duration(from_station, to_station, matrix)
                     t_new = (
@@ -694,16 +706,15 @@ def generate_insertion_candidates(
     # For _cheapest_insertion (candidate_size=10000): pool=64, cost=~64 evals/task.
     # With 50 tasks: 50*64=3200 evals, ~1-2s total — fits in 4s budget.
     pool_size = min(max(candidate_size * 4, 16), 64)
+    cheap_quota = max(pool_size // 2, min(pool_size, candidate_size + 4))
+    diversity_quota = max(1, pool_size - cheap_quota)
+    screened_count = len(cheap_slots)
 
     if grouped_by_pickup:
-        # Paired task: vehicle diversity + global cheap_score ranking.
-        # Strategy: collect the best slot per vehicle (guaranteed diversity),
-        # then fill remaining pool with globally cheapest slots.
         vehicles_with_slots: dict[int, list[_CheapSlot]] = {}
         for s in cheap_slots:
             vehicles_with_slots.setdefault(s.vehicle_index, []).append(s)
 
-        # Step 1: guarantee at least 1 slot per vehicle in the pool
         protected: list[_CheapSlot] = []
         protected_set: set[tuple[int, int, int | None]] = set()
         for vi, vi_slots in vehicles_with_slots.items():
@@ -712,8 +723,6 @@ def generate_insertion_candidates(
             protected.append(best)
             protected_set.add((best.vehicle_index, best.pickup_index, best.delivery_index))
 
-        # Step 2: add more slots per vehicle-pickup group for diversity,
-        # but cap total protected to leave room in pool_size
         per_vp_quota = max(1, min(candidate_size // 2, 4))
         for pickup_key, slots in grouped_by_pickup.items():
             slots.sort(key=lambda s: s.cheap_score)
@@ -723,29 +732,52 @@ def generate_insertion_candidates(
                     protected.append(s)
                     protected_set.add(key)
 
-        # Step 3: sort remaining by cheap_score and fill pool
         remaining = [s for s in cheap_slots if (s.vehicle_index, s.pickup_index, s.delivery_index) not in protected_set]
         remaining.sort(key=lambda s: s.cheap_score)
-
-        # Build pool: protected (diversity-first) + remaining (cheapest-first)
-        # Sort protected by cheap_score so best protected slots come first
         protected.sort(key=lambda s: s.cheap_score)
-        top_pool = (protected + remaining)[:pool_size]
+        top_pool = (protected + remaining)[:cheap_quota]
 
-        # Step 4: post-truncation vehicle diversity guarantee
-        # If any vehicle was completely cut from top_pool, add its best slot
+        selected_keys = {
+            (s.vehicle_index, s.pickup_index, s.delivery_index) for s in top_pool
+        }
+        leftover = [
+            s for s in cheap_slots
+            if (s.vehicle_index, s.pickup_index, s.delivery_index) not in selected_keys
+        ]
+        if leftover:
+            by_group: dict[tuple[int, int], list[_CheapSlot]] = {}
+            for s in leftover:
+                by_group.setdefault((s.vehicle_index, s.pickup_index), []).append(s)
+            group_keys = sorted(by_group.keys())
+            for i in range(diversity_quota):
+                gk = group_keys[i % len(group_keys)]
+                bucket = by_group[gk]
+                pick = bucket[(i // max(1, len(group_keys))) % len(bucket)]
+                key = (pick.vehicle_index, pick.pickup_index, pick.delivery_index)
+                if key not in selected_keys:
+                    top_pool.append(pick)
+                    selected_keys.add(key)
+
         pool_vehicles = {s.vehicle_index for s in top_pool}
         for vi, vi_slots in vehicles_with_slots.items():
             if vi not in pool_vehicles and vi_slots:
                 best = min(vi_slots, key=lambda s: s.cheap_score)
                 top_pool.append(best)
     else:
-        # Single-event task: simple sort and truncate
         cheap_slots.sort(key=lambda s: s.cheap_score)
-        top_pool = cheap_slots[:pool_size]
+        top_pool = cheap_slots[:cheap_quota]
+        leftover = cheap_slots[cheap_quota:]
+        if leftover:
+            step = max(1, len(leftover) // max(1, diversity_quota))
+            for i in range(0, len(leftover), step):
+                if len(top_pool) >= cheap_quota + diversity_quota:
+                    break
+                top_pool.append(leftover[i])
 
-    # ─── Stage B: full FeasibilityEngine + ObjectiveVector ──────
     candidates: list[InsertionCandidate] = []
+    feasible_count = 0
+    route_task_base = dict(tasks_by_id)
+    route_task_base[task.task_id] = task
 
     for slot in top_pool:
         if deadline is not None and deadline.expired():
@@ -763,7 +795,7 @@ def generate_insertion_candidates(
 
         result = feasibility_engine.check(
             candidate_route,
-            tasks_by_id | {task.task_id: task},
+            route_task_base,
             passenger_capacities[route.vehicle_index],
             cargo_capacities[route.vehicle_index],
             initial_passenger_loads[route.vehicle_index],
@@ -774,12 +806,47 @@ def generate_insertion_candidates(
         if not result.feasible:
             continue
 
+        feasible_count += 1
+
         metrics = evaluate_route_genome(
             candidate_route,
-            tasks_by_id | {task.task_id: task},
+            route_task_base,
             station_map,
             matrix,
+            initial_passenger_load=initial_passenger_loads[route.vehicle_index],
         )
+
+        from .encoding import (
+            SEARCH_ENERGY_CARGO_DETOUR,
+            SEARCH_ENERGY_DISTANCE,
+            SEARCH_ENERGY_DURATION,
+            SEARCH_ENERGY_PASSENGER,
+        )
+        # 搜索内部能量（与 encoding.SEARCH_ENERGY 对齐），供 cheap/full ranking。
+        # 业务最终比较仍用 ObjectiveVector.key()。
+        heuristic_score = (
+            metrics["passenger_impact"] * SEARCH_ENERGY_PASSENGER
+            + metrics["cargo_detour"] * SEARCH_ENERGY_CARGO_DETOUR
+            + metrics["distance"] * SEARCH_ENERGY_DISTANCE
+            + metrics["duration"] * SEARCH_ENERGY_DURATION
+        )
+        # 边际成本 + 可选性价比（不改 heuristic_score 量纲，避免与 exhaustive 不可比）
+        try:
+            from ..dispatch_opt.marginal_cost import MarginalCostEvaluator
+
+            _mc = MarginalCostEvaluator().evaluate(
+                delta_distance_m=metrics["distance"] * 1000.0,
+                delta_duration_s=metrics["duration"],
+                delta_passenger_impact_s=metrics["passenger_impact"],
+                delta_cargo_usage=getattr(task, "size", 1),
+            )
+            _econ = getattr(task, "economic_value", None)
+            if _econ is not None and _mc.total_incremental_cost > 0:
+                # 性价比仅作次级调整：效率越高分数略降（±5% 内，不主导排序）
+                eff = float(_econ) / _mc.total_incremental_cost
+                heuristic_score = heuristic_score / (1.0 + min(0.05, max(-0.05, (eff - 1.0) * 0.01)))
+        except Exception:
+            pass
 
         candidates.append(InsertionCandidate(
             vehicle_index=route.vehicle_index,
@@ -789,15 +856,17 @@ def generate_insertion_candidates(
             delta_duration=metrics["duration"],
             passenger_impact=metrics["passenger_impact"],
             cargo_detour=metrics["cargo_detour"],
-            heuristic_score=(
-                metrics["distance"]
-                + metrics["passenger_impact"] * 0.01
-                + metrics["cargo_detour"] * 10.0
-            ),
+            heuristic_score=heuristic_score,
         ))
 
     candidates.sort(key=lambda x: x.heuristic_score)
-    return candidates[:max(1, candidate_size)]
+    selected = candidates[:max(1, candidate_size)]
+    generate_insertion_candidates.last_stats = {
+        "screened_count": screened_count,
+        "feasible_count": feasible_count,
+        "selected_count": len(selected),
+    }
+    return selected
 
 
 def construct_ant_solution_v14(
@@ -818,6 +887,7 @@ def construct_ant_solution_v14(
     beta: float = 3.0,
     candidate_size: int = 8,
     deadline: SearchDeadline | None = None,
+    per_vehicle_max_detour: dict[int, float] | None = None,
 ) -> list[RouteGenome]:
     """1.4.0 蚂蚁构造：基于 RouteGenome + FeasibilityEngine + alpha/beta。"""
     working_routes = [r.copy() for r in routes]
@@ -868,6 +938,7 @@ def construct_ant_solution_v14(
             candidate_size,
             deadline=deadline,
             max_detour_km=config.max_detour_km,
+            per_vehicle_max_detour=per_vehicle_max_detour,
         )
 
         if not candidates:

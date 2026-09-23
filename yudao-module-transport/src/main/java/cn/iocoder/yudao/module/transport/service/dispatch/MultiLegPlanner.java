@@ -36,11 +36,11 @@ public class MultiLegPlanner {
     /** 乡村班线平均时速(km/h) */
     static final double AVG_SPEED_KMH = GeoDistanceUtil.DEFAULT_AVG_SPEED_KMH;
     /** 每次换乘惩罚(分钟)：换乘需要等待与装卸，等效时间成本 */
-    static final int TRANSFER_PENALTY_MINUTES = 15;
+    static final int TRANSFER_PENALTY_MINUTES = 15; // soft preference only; dwell time is HANDOVER_DWELL
     /** 绕行惩罚(分钟/km)：绕行带来的额外成本 */
     static final double DETOUR_PENALTY_MINUTES_PER_KM = 2.0;
     /** 换乘站作业停留(分钟) */
-    static final int HANDOVER_DWELL_MINUTES = 20;
+    static final int HANDOVER_DWELL_MINUTES = 20; // physical handover dwell, counted once per transfer
     /** 首段准备时间(分钟) */
     static final int PREPARE_MINUTES = 10;
     /** 直达可接受最大里程(km)：超过视为"直达不合理" */
@@ -153,12 +153,13 @@ public class MultiLegPlanner {
 
         // 5) 仍无解：按取送站直达兜底，并在理由里说明"本地线网无解"（不伪造换乘）
         if (candidates.isEmpty()) {
+            // Haversine direct is NOT proven road-feasible. Tag as TRANSPORT_UNCERTAIN.
             Candidate fallback = new Candidate(DispatchPlanningModeEnum.DIRECT.getMode(),
                     DispatchPlanningModeEnum.DIRECT.getName(), 1, 0, round2(directKm),
                     durationOf(List.of(directKm)), score(1, 0, 0, directKm),
                     List.of(new LegDraft(1, pickup.getId(), delivery.getId(), round2(directKm),
                             travelMinutes(directKm), false)),
-                    null, "本地公交线网未覆盖该起终点，按取送站直送兜底（建议人工核实或补充线路数据）");
+                    null, "[TRANSPORT_UNCERTAIN] 本地公交线网未覆盖该起终点，按取送站直送兜底（建议人工核实或补充线路数据）");
             candidates.add(fallback);
         }
 
@@ -375,6 +376,24 @@ public class MultiLegPlanner {
     }
 
     // ==================== 计算辅助 ====================
+
+
+    /** Transport confidence of a candidate. Fallback Haversine direct is UNCERTAIN, not proven feasible. */
+    public static String transportStatus(Candidate c) {
+        if (c == null) {
+            return "TRANSPORT_INFEASIBLE";
+        }
+        String reason = c.reason() == null ? "" : c.reason();
+        if (reason.contains("TRANSPORT_UNCERTAIN") || reason.contains("\u515c\u5e95")) {
+            return "TRANSPORT_UNCERTAIN";
+        }
+        if (DispatchPlanningModeEnum.DIRECT.getMode().equals(c.mode()) && c.transferCount() == 0) {
+            // direct from route index is FEASIBLE only when sameRoute was proven earlier;
+            // fallback direct carries UNCERTAIN tag in reason.
+            return reason.contains("TRANSPORT_UNCERTAIN") ? "TRANSPORT_UNCERTAIN" : "TRANSPORT_FEASIBLE";
+        }
+        return "TRANSPORT_FEASIBLE";
+    }
 
     static double score(int legCount, int transferCount, double detourKm, double totalKm) {
         double travel = totalKm / AVG_SPEED_KMH * 60;

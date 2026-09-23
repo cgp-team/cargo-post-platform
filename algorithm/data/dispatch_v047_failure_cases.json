@@ -1,0 +1,112 @@
+{
+  "version": "DISPATCH_CORE_V047",
+  "round": "baseline",
+  "total": 9,
+  "worst20": [
+    {
+      "case_id": "S0_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S0",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S1_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S1",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S2_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S2",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S3_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S3",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S4_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S4",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S5_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S5",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S6_nonformal_cost",
+      "category": "ROUTING_FALLBACK",
+      "order_id": "S6",
+      "candidate_type": "",
+      "reason_code": "COST_NOT_FORMAL",
+      "severity": 2.0,
+      "detail": {
+        "note": "no OSM/GraphHopper or AMAP backend on this host"
+      }
+    },
+    {
+      "case_id": "S4_hold",
+      "category": "UNKNOWN",
+      "order_id": "S4",
+      "candidate_type": "",
+      "reason_code": "HOLD_NO_FEASIBLE_CANDIDATE",
+      "severity": 1.0,
+      "detail": {
+        "length": "MEDIUM",
+        "flavor": "complex"
+      }
+    },
+    {
+      "case_id": "S6_hold",
+      "category": "UNKNOWN",
+      "order_id": "S6",
+      "candidate_type": "",
+      "reason_code": "HOLD_NO_FEASIBLE_CANDIDATE",
+      "severity": 1.0,
+      "detail": {
+        "length": "LONG",
+        "flavor": "gap"
+      }
+    }
+  ],
+  "byCategory": {
+    "ROUTING_FALLBACK": 7,
+    "UNKNOWN": 2
+  }
+}

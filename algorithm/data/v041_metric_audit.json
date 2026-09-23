@@ -1,0 +1,1379 @@
+{
+  "audit_id": "v0.4.1-metric-audit",
+  "status": "METRIC_AUDIT_PASSED",
+  "seeds": [
+    42,
+    123,
+    3407,
+    2026,
+    8888
+  ],
+  "n_od": 250,
+  "n_cands": 16,
+  "checks": {
+    "definition_denominator_is_|T|": true,
+    "no_duplicate_edge_id": true,
+    "no_label_conflict": true,
+    "hard_bound_recall_le_max": true,
+    "topK_never_exceeds_K": true,
+    "shuffle_same_candidate_pool": true,
+    "shuffle_golden_near_random": true,
+    "random_uses_same_macro_aggregation": true,
+    "no_K_mixup_in_recall_field": true,
+    "report_fields_match_evaluator": true
+  },
+  "clarification": [
+    "Recall 分母是 teacher_candidate_count=|label==1|（本实验均值≈8），不是 candidate_count=16。",
+    "因此 Recall@5 理论上限 = min(1, 5/|T|) = 5/8 = 0.625，而不是 5/16=0.3125；0.527 在定义下不越界。",
+    "random_expected_recall = K/n = 5/16 = 0.3125 与 macro 聚合一致（E[|topK∩T|/|T|]=K/n）。",
+    "报告原文「/ |teacher_cands|」措辞把 |T| 误读成池大小 n，是表述歧义；evaluator 公式未改。"
+  ],
+  "teacher_candidate_count_means": [
+    8.0,
+    7.984126984126984,
+    8.0,
+    8.0,
+    8.0
+  ],
+  "candidate_count_means": [
+    16.0,
+    16.0,
+    16.0,
+    16.0,
+    16.0
+  ],
+  "per_seed": [
+    {
+      "seed": 42,
+      "status": "OK",
+      "groups_train": 187,
+      "groups_test": 63,
+      "n_cands_requested": 16,
+      "gen_s": 22.39,
+      "train_s": 2.31,
+      "gh_calls": 1250,
+      "definitions": {
+        "recall": "|topK ∩ T| / |T|",
+        "T": "label==1 candidates in pool",
+        "teacher_candidate_count": "|T| (recall denominator)",
+        "candidate_count": "pool size n",
+        "random_expected_recall": "K/n",
+        "theoretical_max_recall": "min(1, K/|T|)",
+        "aggregation_macro": "mean over test groups",
+        "aggregation_micro": "sum(intersection)/sum(|T|)"
+      },
+      "duplicate_edge_id_groups": 0,
+      "label_conflict_groups": 0,
+      "max_bound_violations": 0,
+      "definition_consistent": true,
+      "shuffle_golden_ok": true,
+      "candidate_count_distribution": {
+        "n": 63,
+        "mean": 16.0,
+        "median": 16.0,
+        "std": 0.0,
+        "p90": 16.0,
+        "min": 16.0,
+        "max": 16.0
+      },
+      "teacher_candidate_count_distribution": {
+        "n": 63,
+        "mean": 8.0,
+        "median": 8.0,
+        "std": 0.0,
+        "p90": 8.0,
+        "min": 8.0,
+        "max": 8.0
+      },
+      "teacher_path_edge_count_distribution": {
+        "n": 63,
+        "mean": 131.1904761904762,
+        "median": 130.0,
+        "std": 38.630055386166894,
+        "p90": 190.0,
+        "min": 47.0,
+        "max": 229.0
+      },
+      "topK_actual_count_distribution": {
+        "1": {
+          "n": 63,
+          "mean": 1.0,
+          "median": 1.0,
+          "std": 0.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "3": {
+          "n": 63,
+          "mean": 3.0,
+          "median": 3.0,
+          "std": 0.0,
+          "p90": 3.0,
+          "min": 3.0,
+          "max": 3.0
+        },
+        "5": {
+          "n": 63,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 0.0,
+          "p90": 5.0,
+          "min": 5.0,
+          "max": 5.0
+        },
+        "10": {
+          "n": 63,
+          "mean": 10.0,
+          "median": 10.0,
+          "std": 0.0,
+          "p90": 10.0,
+          "min": 10.0,
+          "max": 10.0
+        }
+      },
+      "macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.1130952380952381,
+          "median": 0.125,
+          "std": 0.03669294049386296,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.1130952380952381
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.31746031746031744,
+          "median": 0.375,
+          "std": 0.07327851314531503,
+          "p90": 0.375,
+          "min": 0.125,
+          "max": 0.375,
+          "micro_recall": 0.31746031746031744
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.5238095238095238,
+          "median": 0.5,
+          "std": 0.10878373144343491,
+          "p90": 0.625,
+          "min": 0.25,
+          "max": 0.625,
+          "micro_recall": 0.5238095238095238
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.8690476190476191,
+          "median": 0.875,
+          "std": 0.12876968840942818,
+          "p90": 1.0,
+          "min": 0.5,
+          "max": 1.0,
+          "micro_recall": 0.8690476190476191
+        }
+      },
+      "shuffled_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.06944444444444445,
+          "median": 0.125,
+          "std": 0.062112999374994156,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.06944444444444445
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.21031746031746032,
+          "median": 0.25,
+          "std": 0.10871132961748194,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.21031746031746032
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3134920634920635,
+          "median": 0.25,
+          "std": 0.13886054132478326,
+          "p90": 0.5,
+          "min": 0.0,
+          "max": 0.625,
+          "micro_recall": 0.3134920634920635
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.6309523809523809,
+          "median": 0.625,
+          "std": 0.13256581816261956,
+          "p90": 0.875,
+          "min": 0.375,
+          "max": 1.0,
+          "micro_recall": 0.6309523809523809
+        }
+      },
+      "random_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0625,
+          "median": 0.0625,
+          "std": 0.0,
+          "p90": 0.0625,
+          "min": 0.0625,
+          "max": 0.0625,
+          "micro_recall": 0.0625
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.1875,
+          "median": 0.1875,
+          "std": 0.0,
+          "p90": 0.1875,
+          "min": 0.1875,
+          "max": 0.1875,
+          "micro_recall": 0.1875
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3125,
+          "median": 0.3125,
+          "std": 0.0,
+          "p90": 0.3125,
+          "min": 0.3125,
+          "max": 0.3125,
+          "micro_recall": 0.3125
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.625,
+          "median": 0.625,
+          "std": 0.0,
+          "p90": 0.625,
+          "min": 0.625,
+          "max": 0.625,
+          "micro_recall": 0.625
+        }
+      },
+      "path_edge_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.007798922644263286,
+          "median": 0.007692307692307693,
+          "std": 0.00407620230774144,
+          "p90": 0.012195121951219513,
+          "min": 0.0,
+          "max": 0.02127659574468085
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.021838737648741786,
+          "median": 0.02040816326530612,
+          "std": 0.011076332531174937,
+          "p90": 0.036585365853658534,
+          "min": 0.005263157894736842,
+          "max": 0.06382978723404255
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.03609586655453734,
+          "median": 0.03225806451612903,
+          "std": 0.018305629956191477,
+          "p90": 0.06097560975609756,
+          "min": 0.010526315789473684,
+          "max": 0.10638297872340426
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.05894072853502266,
+          "median": 0.05426356589147287,
+          "std": 0.02575732952477554,
+          "p90": 0.08602150537634409,
+          "min": 0.02631578947368421,
+          "max": 0.1702127659574468
+        }
+      },
+      "distance_regret": {
+        "n": 63,
+        "mean": 0.20311682935379896,
+        "median": 0.0,
+        "std": 0.4143049967440411,
+        "p90": 0.6138776167845279,
+        "min": 0.0,
+        "max": 2.1732490159341897
+      },
+      "real_recall5": 0.5238095238095238,
+      "shuffled_recall5": 0.3134920634920635,
+      "random_recall5": 0.3125
+    },
+    {
+      "seed": 123,
+      "status": "OK",
+      "groups_train": 187,
+      "groups_test": 63,
+      "n_cands_requested": 16,
+      "gen_s": 22.64,
+      "train_s": 0.08,
+      "gh_calls": 1250,
+      "definitions": {
+        "recall": "|topK ∩ T| / |T|",
+        "T": "label==1 candidates in pool",
+        "teacher_candidate_count": "|T| (recall denominator)",
+        "candidate_count": "pool size n",
+        "random_expected_recall": "K/n",
+        "theoretical_max_recall": "min(1, K/|T|)",
+        "aggregation_macro": "mean over test groups",
+        "aggregation_micro": "sum(intersection)/sum(|T|)"
+      },
+      "duplicate_edge_id_groups": 0,
+      "label_conflict_groups": 0,
+      "max_bound_violations": 0,
+      "definition_consistent": true,
+      "shuffle_golden_ok": true,
+      "candidate_count_distribution": {
+        "n": 63,
+        "mean": 16.0,
+        "median": 16.0,
+        "std": 0.0,
+        "p90": 16.0,
+        "min": 16.0,
+        "max": 16.0
+      },
+      "teacher_candidate_count_distribution": {
+        "n": 63,
+        "mean": 7.984126984126984,
+        "median": 8.0,
+        "std": 0.12498425196844144,
+        "p90": 8.0,
+        "min": 7.0,
+        "max": 8.0
+      },
+      "teacher_path_edge_count_distribution": {
+        "n": 63,
+        "mean": 136.71428571428572,
+        "median": 145.0,
+        "std": 45.51728385186995,
+        "p90": 187.0,
+        "min": 7.0,
+        "max": 221.0
+      },
+      "topK_actual_count_distribution": {
+        "1": {
+          "n": 63,
+          "mean": 1.0,
+          "median": 1.0,
+          "std": 0.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "3": {
+          "n": 63,
+          "mean": 3.0,
+          "median": 3.0,
+          "std": 0.0,
+          "p90": 3.0,
+          "min": 3.0,
+          "max": 3.0
+        },
+        "5": {
+          "n": 63,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 0.0,
+          "p90": 5.0,
+          "min": 5.0,
+          "max": 5.0
+        },
+        "10": {
+          "n": 63,
+          "mean": 10.0,
+          "median": 10.0,
+          "std": 0.0,
+          "p90": 10.0,
+          "min": 10.0,
+          "max": 10.0
+        }
+      },
+      "macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.12131519274376418,
+          "median": 0.125,
+          "std": 0.022079752941213657,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.14285714285714285,
+          "micro_recall": 0.12127236580516898
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.3358843537414966,
+          "median": 0.375,
+          "std": 0.07927797293065758,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.3359840954274354
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.5365646258503401,
+          "median": 0.5,
+          "std": 0.101984111228333,
+          "p90": 0.625,
+          "min": 0.25,
+          "max": 0.625,
+          "micro_recall": 0.536779324055666
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.8764172335600907,
+          "median": 0.875,
+          "std": 0.11534644454252621,
+          "p90": 1.0,
+          "min": 0.5,
+          "max": 1.0,
+          "micro_recall": 0.8767395626242545
+        }
+      },
+      "shuffled_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0496031746031746,
+          "median": 0.0,
+          "std": 0.06115490082310492,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.04970178926441352
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.16695011337868482,
+          "median": 0.125,
+          "std": 0.10672436837848072,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.16699801192842942
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.2885487528344671,
+          "median": 0.25,
+          "std": 0.11790292989891761,
+          "p90": 0.5,
+          "min": 0.125,
+          "max": 0.5,
+          "micro_recall": 0.2882703777335984
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.594671201814059,
+          "median": 0.625,
+          "std": 0.15333707401302007,
+          "p90": 0.75,
+          "min": 0.25,
+          "max": 0.875,
+          "micro_recall": 0.5944333996023857
+        }
+      },
+      "random_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0625,
+          "median": 0.0625,
+          "std": 0.0,
+          "p90": 0.0625,
+          "min": 0.0625,
+          "max": 0.0625,
+          "micro_recall": 0.0625
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.1875,
+          "median": 0.1875,
+          "std": 0.0,
+          "p90": 0.1875,
+          "min": 0.1875,
+          "max": 0.1875,
+          "micro_recall": 0.1875
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3125,
+          "median": 0.3125,
+          "std": 0.0,
+          "p90": 0.3125,
+          "min": 0.3125,
+          "max": 0.3125,
+          "micro_recall": 0.3125
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.625,
+          "median": 0.625,
+          "std": 0.0,
+          "p90": 0.625,
+          "min": 0.625,
+          "max": 0.625,
+          "micro_recall": 0.625
+        }
+      },
+      "path_edge_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.010314935273111163,
+          "median": 0.006666666666666667,
+          "std": 0.017604754220846838,
+          "p90": 0.013513513513513514,
+          "min": 0.0,
+          "max": 0.14285714285714285
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.02628480689196718,
+          "median": 0.01910828025477707,
+          "std": 0.034882955296803964,
+          "p90": 0.04054054054054054,
+          "min": 0.0,
+          "max": 0.2857142857142857
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.04214709942716154,
+          "median": 0.03164556962025317,
+          "std": 0.05255319784973975,
+          "p90": 0.06329113924050633,
+          "min": 0.013793103448275862,
+          "max": 0.42857142857142855
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.06994187432676187,
+          "median": 0.050955414012738856,
+          "std": 0.08898056102358537,
+          "p90": 0.0945945945945946,
+          "min": 0.02702702702702703,
+          "max": 0.7142857142857143
+        }
+      },
+      "distance_regret": {
+        "n": 63,
+        "mean": 0.13286366952287587,
+        "median": 0.0,
+        "std": 0.2271717580623913,
+        "p90": 0.4292018302796285,
+        "min": 0.0,
+        "max": 1.066710535357368
+      },
+      "real_recall5": 0.5365646258503401,
+      "shuffled_recall5": 0.2885487528344671,
+      "random_recall5": 0.3125
+    },
+    {
+      "seed": 3407,
+      "status": "OK",
+      "groups_train": 187,
+      "groups_test": 63,
+      "n_cands_requested": 16,
+      "gen_s": 21.34,
+      "train_s": 0.17,
+      "gh_calls": 1250,
+      "definitions": {
+        "recall": "|topK ∩ T| / |T|",
+        "T": "label==1 candidates in pool",
+        "teacher_candidate_count": "|T| (recall denominator)",
+        "candidate_count": "pool size n",
+        "random_expected_recall": "K/n",
+        "theoretical_max_recall": "min(1, K/|T|)",
+        "aggregation_macro": "mean over test groups",
+        "aggregation_micro": "sum(intersection)/sum(|T|)"
+      },
+      "duplicate_edge_id_groups": 0,
+      "label_conflict_groups": 0,
+      "max_bound_violations": 0,
+      "definition_consistent": true,
+      "shuffle_golden_ok": true,
+      "candidate_count_distribution": {
+        "n": 63,
+        "mean": 16.0,
+        "median": 16.0,
+        "std": 0.0,
+        "p90": 16.0,
+        "min": 16.0,
+        "max": 16.0
+      },
+      "teacher_candidate_count_distribution": {
+        "n": 63,
+        "mean": 8.0,
+        "median": 8.0,
+        "std": 0.0,
+        "p90": 8.0,
+        "min": 8.0,
+        "max": 8.0
+      },
+      "teacher_path_edge_count_distribution": {
+        "n": 63,
+        "mean": 146.47619047619048,
+        "median": 148.0,
+        "std": 49.446092866608204,
+        "p90": 210.0,
+        "min": 15.0,
+        "max": 256.0
+      },
+      "topK_actual_count_distribution": {
+        "1": {
+          "n": 63,
+          "mean": 1.0,
+          "median": 1.0,
+          "std": 0.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "3": {
+          "n": 63,
+          "mean": 3.0,
+          "median": 3.0,
+          "std": 0.0,
+          "p90": 3.0,
+          "min": 3.0,
+          "max": 3.0
+        },
+        "5": {
+          "n": 63,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 0.0,
+          "p90": 5.0,
+          "min": 5.0,
+          "max": 5.0
+        },
+        "10": {
+          "n": 63,
+          "mean": 10.0,
+          "median": 10.0,
+          "std": 0.0,
+          "p90": 10.0,
+          "min": 10.0,
+          "max": 10.0
+        }
+      },
+      "macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.1111111111111111,
+          "median": 0.125,
+          "std": 0.039283710065919304,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.1111111111111111
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.3392857142857143,
+          "median": 0.375,
+          "std": 0.0719228926999677,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.3392857142857143
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.5257936507936508,
+          "median": 0.625,
+          "std": 0.11606718890642592,
+          "p90": 0.625,
+          "min": 0.25,
+          "max": 0.625,
+          "micro_recall": 0.5257936507936508
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.8670634920634921,
+          "median": 0.875,
+          "std": 0.12374973118660854,
+          "p90": 1.0,
+          "min": 0.5,
+          "max": 1.0,
+          "micro_recall": 0.8670634920634921
+        }
+      },
+      "shuffled_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.05357142857142857,
+          "median": 0.0,
+          "std": 0.06185895741317419,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.05357142857142857
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.18253968253968253,
+          "median": 0.25,
+          "std": 0.11535271312498915,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.18253968253968253
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.33134920634920634,
+          "median": 0.375,
+          "std": 0.12824890961263738,
+          "p90": 0.5,
+          "min": 0.0,
+          "max": 0.625,
+          "micro_recall": 0.33134920634920634
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.6091269841269841,
+          "median": 0.625,
+          "std": 0.1167772934092235,
+          "p90": 0.75,
+          "min": 0.25,
+          "max": 0.875,
+          "micro_recall": 0.6091269841269841
+        }
+      },
+      "random_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0625,
+          "median": 0.0625,
+          "std": 0.0,
+          "p90": 0.0625,
+          "min": 0.0625,
+          "max": 0.0625,
+          "micro_recall": 0.0625
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.1875,
+          "median": 0.1875,
+          "std": 0.0,
+          "p90": 0.1875,
+          "min": 0.1875,
+          "max": 0.1875,
+          "micro_recall": 0.1875
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3125,
+          "median": 0.3125,
+          "std": 0.0,
+          "p90": 0.3125,
+          "min": 0.3125,
+          "max": 0.3125,
+          "micro_recall": 0.3125
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.625,
+          "median": 0.625,
+          "std": 0.0,
+          "p90": 0.625,
+          "min": 0.625,
+          "max": 0.625,
+          "micro_recall": 0.625
+        }
+      },
+      "path_edge_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.007796666480084229,
+          "median": 0.006578947368421052,
+          "std": 0.008654788932871933,
+          "p90": 0.011111111111111112,
+          "min": 0.0,
+          "max": 0.06666666666666667
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.02384728859703986,
+          "median": 0.01910828025477707,
+          "std": 0.025302977831577065,
+          "p90": 0.03333333333333333,
+          "min": 0.0,
+          "max": 0.2
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.036909885476949005,
+          "median": 0.029239766081871343,
+          "std": 0.04108102589454239,
+          "p90": 0.05555555555555555,
+          "min": 0.01276595744680851,
+          "max": 0.3333333333333333
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.06079096313425043,
+          "median": 0.047058823529411764,
+          "std": 0.06545821991913002,
+          "p90": 0.0898876404494382,
+          "min": 0.0234375,
+          "max": 0.5333333333333333
+        }
+      },
+      "distance_regret": {
+        "n": 63,
+        "mean": 0.12288409189459454,
+        "median": 0.0,
+        "std": 0.2706074752989987,
+        "p90": 0.42703442664408947,
+        "min": 0.0,
+        "max": 1.444389323237838
+      },
+      "real_recall5": 0.5257936507936508,
+      "shuffled_recall5": 0.33134920634920634,
+      "random_recall5": 0.3125
+    },
+    {
+      "seed": 2026,
+      "status": "OK",
+      "groups_train": 187,
+      "groups_test": 63,
+      "n_cands_requested": 16,
+      "gen_s": 22.94,
+      "train_s": 0.08,
+      "gh_calls": 1250,
+      "definitions": {
+        "recall": "|topK ∩ T| / |T|",
+        "T": "label==1 candidates in pool",
+        "teacher_candidate_count": "|T| (recall denominator)",
+        "candidate_count": "pool size n",
+        "random_expected_recall": "K/n",
+        "theoretical_max_recall": "min(1, K/|T|)",
+        "aggregation_macro": "mean over test groups",
+        "aggregation_micro": "sum(intersection)/sum(|T|)"
+      },
+      "duplicate_edge_id_groups": 0,
+      "label_conflict_groups": 0,
+      "max_bound_violations": 0,
+      "definition_consistent": true,
+      "shuffle_golden_ok": true,
+      "candidate_count_distribution": {
+        "n": 63,
+        "mean": 16.0,
+        "median": 16.0,
+        "std": 0.0,
+        "p90": 16.0,
+        "min": 16.0,
+        "max": 16.0
+      },
+      "teacher_candidate_count_distribution": {
+        "n": 63,
+        "mean": 8.0,
+        "median": 8.0,
+        "std": 0.0,
+        "p90": 8.0,
+        "min": 8.0,
+        "max": 8.0
+      },
+      "teacher_path_edge_count_distribution": {
+        "n": 63,
+        "mean": 140.4920634920635,
+        "median": 150.0,
+        "std": 47.022410400456764,
+        "p90": 199.0,
+        "min": 11.0,
+        "max": 232.0
+      },
+      "topK_actual_count_distribution": {
+        "1": {
+          "n": 63,
+          "mean": 1.0,
+          "median": 1.0,
+          "std": 0.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "3": {
+          "n": 63,
+          "mean": 3.0,
+          "median": 3.0,
+          "std": 0.0,
+          "p90": 3.0,
+          "min": 3.0,
+          "max": 3.0
+        },
+        "5": {
+          "n": 63,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 0.0,
+          "p90": 5.0,
+          "min": 5.0,
+          "max": 5.0
+        },
+        "10": {
+          "n": 63,
+          "mean": 10.0,
+          "median": 10.0,
+          "std": 0.0,
+          "p90": 10.0,
+          "min": 10.0,
+          "max": 10.0
+        }
+      },
+      "macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.12301587301587301,
+          "median": 0.125,
+          "std": 0.01562303149605518,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.12301587301587301
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.34325396825396826,
+          "median": 0.375,
+          "std": 0.058791795198527994,
+          "p90": 0.375,
+          "min": 0.125,
+          "max": 0.375,
+          "micro_recall": 0.34325396825396826
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.5357142857142857,
+          "median": 0.625,
+          "std": 0.10547645920636518,
+          "p90": 0.625,
+          "min": 0.25,
+          "max": 0.625,
+          "micro_recall": 0.5357142857142857
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.8551587301587301,
+          "median": 0.875,
+          "std": 0.12441599529040383,
+          "p90": 1.0,
+          "min": 0.5,
+          "max": 1.0,
+          "micro_recall": 0.8551587301587301
+        }
+      },
+      "shuffled_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.08134920634920635,
+          "median": 0.125,
+          "std": 0.05958991038762383,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.08134920634920635
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.20436507936507936,
+          "median": 0.25,
+          "std": 0.10517744667221089,
+          "p90": 0.375,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.20436507936507936
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.35119047619047616,
+          "median": 0.375,
+          "std": 0.12766434874718582,
+          "p90": 0.5,
+          "min": 0.125,
+          "max": 0.625,
+          "micro_recall": 0.35119047619047616
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.6646825396825397,
+          "median": 0.625,
+          "std": 0.13330616692254624,
+          "p90": 0.875,
+          "min": 0.375,
+          "max": 1.0,
+          "micro_recall": 0.6646825396825397
+        }
+      },
+      "random_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0625,
+          "median": 0.0625,
+          "std": 0.0,
+          "p90": 0.0625,
+          "min": 0.0625,
+          "max": 0.0625,
+          "micro_recall": 0.0625
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.1875,
+          "median": 0.1875,
+          "std": 0.0,
+          "p90": 0.1875,
+          "min": 0.1875,
+          "max": 0.1875,
+          "micro_recall": 0.1875
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3125,
+          "median": 0.3125,
+          "std": 0.0,
+          "p90": 0.3125,
+          "min": 0.3125,
+          "max": 0.3125,
+          "micro_recall": 0.3125
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.625,
+          "median": 0.625,
+          "std": 0.0,
+          "p90": 0.625,
+          "min": 0.625,
+          "max": 0.625,
+          "micro_recall": 0.625
+        }
+      },
+      "path_edge_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.009434519131868213,
+          "median": 0.006666666666666667,
+          "std": 0.01132821543783714,
+          "p90": 0.015625,
+          "min": 0.0,
+          "max": 0.09090909090909091
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.025086730100582155,
+          "median": 0.019867549668874173,
+          "std": 0.023244378576729046,
+          "p90": 0.039473684210526314,
+          "min": 0.008064516129032258,
+          "max": 0.18181818181818182
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.039768847596754066,
+          "median": 0.031055900621118012,
+          "std": 0.04443565612481416,
+          "p90": 0.06172839506172839,
+          "min": 0.01293103448275862,
+          "max": 0.36363636363636365
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.06465330440687524,
+          "median": 0.04827586206896552,
+          "std": 0.0775082101746111,
+          "p90": 0.10526315789473684,
+          "min": 0.02512562814070352,
+          "max": 0.6363636363636364
+        }
+      },
+      "distance_regret": {
+        "n": 63,
+        "mean": 0.20185714363623616,
+        "median": 0.0014660566837251272,
+        "std": 0.4460616683918373,
+        "p90": 0.5722488863696576,
+        "min": 0.0,
+        "max": 2.2544768477938986
+      },
+      "real_recall5": 0.5357142857142857,
+      "shuffled_recall5": 0.35119047619047616,
+      "random_recall5": 0.3125
+    },
+    {
+      "seed": 8888,
+      "status": "OK",
+      "groups_train": 187,
+      "groups_test": 63,
+      "n_cands_requested": 16,
+      "gen_s": 22.37,
+      "train_s": 0.07,
+      "gh_calls": 1250,
+      "definitions": {
+        "recall": "|topK ∩ T| / |T|",
+        "T": "label==1 candidates in pool",
+        "teacher_candidate_count": "|T| (recall denominator)",
+        "candidate_count": "pool size n",
+        "random_expected_recall": "K/n",
+        "theoretical_max_recall": "min(1, K/|T|)",
+        "aggregation_macro": "mean over test groups",
+        "aggregation_micro": "sum(intersection)/sum(|T|)"
+      },
+      "duplicate_edge_id_groups": 0,
+      "label_conflict_groups": 0,
+      "max_bound_violations": 0,
+      "definition_consistent": true,
+      "shuffle_golden_ok": true,
+      "candidate_count_distribution": {
+        "n": 63,
+        "mean": 16.0,
+        "median": 16.0,
+        "std": 0.0,
+        "p90": 16.0,
+        "min": 16.0,
+        "max": 16.0
+      },
+      "teacher_candidate_count_distribution": {
+        "n": 63,
+        "mean": 8.0,
+        "median": 8.0,
+        "std": 0.0,
+        "p90": 8.0,
+        "min": 8.0,
+        "max": 8.0
+      },
+      "teacher_path_edge_count_distribution": {
+        "n": 63,
+        "mean": 135.4126984126984,
+        "median": 135.0,
+        "std": 47.98565755320862,
+        "p90": 195.0,
+        "min": 29.0,
+        "max": 236.0
+      },
+      "topK_actual_count_distribution": {
+        "1": {
+          "n": 63,
+          "mean": 1.0,
+          "median": 1.0,
+          "std": 0.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "3": {
+          "n": 63,
+          "mean": 3.0,
+          "median": 3.0,
+          "std": 0.0,
+          "p90": 3.0,
+          "min": 3.0,
+          "max": 3.0
+        },
+        "5": {
+          "n": 63,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 0.0,
+          "p90": 5.0,
+          "min": 5.0,
+          "max": 5.0
+        },
+        "10": {
+          "n": 63,
+          "mean": 10.0,
+          "median": 10.0,
+          "std": 0.0,
+          "p90": 10.0,
+          "min": 10.0,
+          "max": 10.0
+        }
+      },
+      "macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.11507936507936507,
+          "median": 0.125,
+          "std": 0.03378846501175873,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.11507936507936507
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.32142857142857145,
+          "median": 0.375,
+          "std": 0.08247860988423225,
+          "p90": 0.375,
+          "min": 0.125,
+          "max": 0.375,
+          "micro_recall": 0.32142857142857145
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.5238095238095238,
+          "median": 0.5,
+          "std": 0.11755010510792559,
+          "p90": 0.625,
+          "min": 0.125,
+          "max": 0.625,
+          "micro_recall": 0.5238095238095238
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.8492063492063492,
+          "median": 0.875,
+          "std": 0.13016840846711686,
+          "p90": 1.0,
+          "min": 0.5,
+          "max": 1.0,
+          "micro_recall": 0.8492063492063492
+        }
+      },
+      "shuffled_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.051587301587301584,
+          "median": 0.0,
+          "std": 0.06153993023520168,
+          "p90": 0.125,
+          "min": 0.0,
+          "max": 0.125,
+          "micro_recall": 0.051587301587301584
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.16865079365079366,
+          "median": 0.125,
+          "std": 0.09490683129445554,
+          "p90": 0.25,
+          "min": 0.0,
+          "max": 0.375,
+          "micro_recall": 0.16865079365079366
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.2976190476190476,
+          "median": 0.25,
+          "std": 0.1268290223372769,
+          "p90": 0.5,
+          "min": 0.0,
+          "max": 0.5,
+          "micro_recall": 0.2976190476190476
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.6031746031746031,
+          "median": 0.625,
+          "std": 0.11473676424445206,
+          "p90": 0.75,
+          "min": 0.25,
+          "max": 0.875,
+          "micro_recall": 0.6031746031746031
+        }
+      },
+      "random_macro_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0625,
+          "median": 0.0625,
+          "std": 0.0,
+          "p90": 0.0625,
+          "min": 0.0625,
+          "max": 0.0625,
+          "micro_recall": 0.0625
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.1875,
+          "median": 0.1875,
+          "std": 0.0,
+          "p90": 0.1875,
+          "min": 0.1875,
+          "max": 0.1875,
+          "micro_recall": 0.1875
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.3125,
+          "median": 0.3125,
+          "std": 0.0,
+          "p90": 0.3125,
+          "min": 0.3125,
+          "max": 0.3125,
+          "micro_recall": 0.3125
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.625,
+          "median": 0.625,
+          "std": 0.0,
+          "p90": 0.625,
+          "min": 0.625,
+          "max": 0.625,
+          "micro_recall": 0.625
+        }
+      },
+      "path_edge_recall": {
+        "1": {
+          "n": 63,
+          "mean": 0.0075473383277223005,
+          "median": 0.007142857142857143,
+          "std": 0.003980428944756601,
+          "p90": 0.011494252873563218,
+          "min": 0.0,
+          "max": 0.02
+        },
+        "3": {
+          "n": 63,
+          "mean": 0.021908553878997258,
+          "median": 0.019801980198019802,
+          "std": 0.011210601421074669,
+          "p90": 0.03571428571428571,
+          "min": 0.00425531914893617,
+          "max": 0.06896551724137931
+        },
+        "5": {
+          "n": 63,
+          "mean": 0.035904620082297424,
+          "median": 0.031746031746031744,
+          "std": 0.01803775852253585,
+          "p90": 0.05357142857142857,
+          "min": 0.00851063829787234,
+          "max": 0.10344827586206896
+        },
+        "10": {
+          "n": 63,
+          "mean": 0.06127344665996822,
+          "median": 0.05319148936170213,
+          "std": 0.03820314785029321,
+          "p90": 0.10606060606060606,
+          "min": 0.02127659574468085,
+          "max": 0.2413793103448276
+        }
+      },
+      "distance_regret": {
+        "n": 63,
+        "mean": 0.10103595805618591,
+        "median": 0.0,
+        "std": 0.22788591201216152,
+        "p90": 0.3157113244800924,
+        "min": 0.0,
+        "max": 1.3107739096674003
+      },
+      "real_recall5": 0.5238095238095238,
+      "shuffled_recall5": 0.2976190476190476,
+      "random_recall5": 0.3125
+    }
+  ],
+  "long_training_allowed": true,
+  "next_after_pass": "candidate pool sweep 16→32→64→128→256 (Path-Edge Recall / Search Reduction / Runtime)"
+}

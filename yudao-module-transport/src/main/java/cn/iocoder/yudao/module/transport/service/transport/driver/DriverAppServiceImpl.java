@@ -66,6 +66,8 @@ import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.beans.factory.annotation.Value;
 import java.math.BigDecimal;
@@ -624,7 +626,8 @@ public class DriverAppServiceImpl implements DriverAppService {
             execution.setCurrentStationId(firstStationId);
             shiftExecutionMapper.updateById(execution);
         }
-        // 该司机名下已下发/执行中派单的已分配货运订单推进为已发车（与装车/妥投归属校验一致）
+        // 该司机名下已下发/执行中派单的已分配订单推进为已发车（与装车/妥投归属校验一致）。
+        // 对齐 admin departureCheck 全推口径：不区分订单类型（货运/邮快件/客运），否则邮快件/客运在司机端发车后仍停留 ASSIGNED
         Set<Long> orderIds = listAssignedOrderIds(driver.getId());
         if (orderIds.isEmpty()) {
             return;
@@ -633,7 +636,6 @@ public class DriverAppServiceImpl implements DriverAppService {
         updateObj.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
         transportOrderMapper.update(updateObj, new LambdaQueryWrapperX<TransportOrderDO>()
                 .in(TransportOrderDO::getId, orderIds)
-                .eq(TransportOrderDO::getOrderType, ORDER_TYPE_CARGO)
                 .eq(TransportOrderDO::getStatus, TransportOrderStatusEnum.ASSIGNED.getStatus()));
     }
 
@@ -840,11 +842,16 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 +1
+        // 已装件数 +1（CAS：仅当 loadedCount 仍为读取时的值才 +1，防连点超容/丢更新）
         ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
         loadedUpdate.setId(execution.getId());
         loadedUpdate.setLoadedCount(loaded + 1);
-        shiftExecutionMapper.updateById(loadedUpdate);
+        int loadedAffected = shiftExecutionMapper.update(loadedUpdate, new LambdaQueryWrapperX<ShiftExecutionDO>()
+                .eq(ShiftExecutionDO::getId, execution.getId())
+                .eq(ShiftExecutionDO::getLoadedCount, loaded));
+        if (loadedAffected == 0) {
+            throw exception(DRIVER_CARGO_FULL);
+        }
     }
 
     @Override
@@ -1033,8 +1040,29 @@ public class DriverAppServiceImpl implements DriverAppService {
                     .build());
         }
         // P1-F：车辆接近目的站时给下单用户发"即将送达"站内通知（按 订单+距离档位 幂等，同一档只推一次）
+        //
+        // 长事务修：提醒链路内含外部 HTTP（会员查询 + 微信订阅消息），放在 @Transactional 内会把
+        // 数据库连接一直占住——HTTP 慢或超时时最坏拖垮连接池。改为事务提交后再触发；
+        // 事务回滚（位置落库失败）时自然不会发提醒，语义不受影响。
         if (reqVO.getLongitude() != null && reqVO.getLatitude() != null) {
-            notifyApproachingOrders(vehicleId, reqVO.getLongitude().doubleValue(), reqVO.getLatitude().doubleValue());
+            double lon = reqVO.getLongitude().doubleValue();
+            double lat = reqVO.getLatitude().doubleValue();
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        try {
+                            notifyApproachingOrders(vehicleId, lon, lat);
+                        } catch (Exception ex) {
+                            // 提醒失败不得影响位置上报结果（幂等键保证下次可补发）
+                            log.warn("[reportLocation] 到站提醒发送失败 vehicleId={}：{}", vehicleId, ex.getMessage());
+                        }
+                    }
+                });
+            } else {
+                // 无事务（单元测试等场景）直接执行
+                notifyApproachingOrders(vehicleId, lon, lat);
+            }
         }
     }
 
@@ -1051,7 +1079,8 @@ public class DriverAppServiceImpl implements DriverAppService {
      * 按距离分级（2km/1km/0.5km）触发，eventId = CARRIER_APPROACHING:ORDER-{id}:STAGE-{档}，
      * 同一订单同一档位只落一条通知（transport_user_notification 唯一键去重）。
      */
-    private void notifyApproachingOrders(Long vehicleId, double longitude, double latitude) {
+    @Override
+    public void notifyApproachingOrders(Long vehicleId, double longitude, double latitude) {
         if (vehicleId == null || dispatchPlanItemMapper == null) {
             return;
         }
@@ -1279,9 +1308,21 @@ public class DriverAppServiceImpl implements DriverAppService {
 
     /** 完成配送/取货：最后一段完成 → 订单完成 + 通知（需求 §6 禁止第一段完成即整单完成） */
     private void completeLeg(TransportLegDO leg) {
-        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.COMPLETED);
         List<TransportLegDO> all = multiLegService.getLegsByOrderId(leg.getOrderId());
-        boolean allDone = all.stream().allMatch(l -> Objects.equals(l.getStatus(),
+        // 守卫：中间段不允许直接"完成"。中间段的正确出口是换乘交接（handover-start/confirm），
+        // 若在这里放行，剩余段会失去货物来源 → 货物滞留在换乘站，而订单侧又没到终态，查无可查。
+        int maxSeq = all.stream().map(l -> l.getLegSequence() == null ? 0 : l.getLegSequence())
+                .max(Integer::compareTo).orElse(0);
+        int curSeq = leg.getLegSequence() == null ? 0 : leg.getLegSequence();
+        if (curSeq < maxSeq) {
+            throw exception(LEG_TRANSITION_ILLEGAL, "当前不是最后一段，请先在换乘站完成交接");
+        }
+        // 注：并发安全由 MultiLegServiceImpl#applyLegStatus 的 CAS 条件更新保证
+        // （仅当段状态仍为读取时的旧值才推进），此处无需再加乐观锁。
+        multiLegService.advanceLegStatus(leg.getId(), TransportLegStatusEnum.COMPLETED);
+        // 推进后重新读取：以库中最新状态判断是否真的全部完成（不信任本次内存里的 all）
+        List<TransportLegDO> latest = multiLegService.getLegsByOrderId(leg.getOrderId());
+        boolean allDone = latest.stream().allMatch(l -> Objects.equals(l.getStatus(),
                 TransportLegStatusEnum.COMPLETED.getStatus()));
         if (!allDone) {
             return; // 还有后续段：订单保持"部分完成/运输中"，绝不置完成
@@ -1434,7 +1475,7 @@ public class DriverAppServiceImpl implements DriverAppService {
      * 以登录会员身份解析当前司机（member_user.mobile → transport_driver.mobile）。
      * 客户端传入的 driverId 仅做一致性校验，不作为身份来源。
      */
-    private DriverDO requireCurrentDriver(Long clientDriverId) {
+    public DriverDO requireCurrentDriver(Long clientDriverId) {
         DriverDO driver = currentDriverOrNull();
         if (driver == null) {
             throw exception(DRIVER_NOT_FOUND);

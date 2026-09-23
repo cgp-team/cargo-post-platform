@@ -47,6 +47,13 @@ public class DispatchController {
         return success(dispatchService.cancelPoolOrders(orderIds));
     }
 
+    @PostMapping("/allocate")
+    @Operation(summary = "动态插单调度（新订单 → Candidate/Reachability/TripLock/MarginalCost → DispatchPlan）")
+    @PreAuthorize("@ss.hasPermission('transport:dispatch:smart-plan')")
+    public CommonResult<java.util.Map<String, Object>> allocateOrder(@RequestBody java.util.Map<String, Object> payload) {
+        return success(dispatchService.allocateDynamic(payload));
+    }
+
     @PostMapping("/plan/manual")
     @Operation(summary = "手工派单")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:manual-plan')")

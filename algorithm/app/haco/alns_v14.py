@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .deadline import SearchDeadline
-from .encoding import TaskBlock, TaskType
+from .encoding import ObjectiveVector, TaskBlock, TaskType
 from .evaluator import evaluate_route_genome, evaluate_route_states
 from .feasibility_engine import FeasibilityEngine
 from .route_genome import EventType, RouteGenome
@@ -545,6 +545,68 @@ def _insertion_score(
     )
 
 
+# ─── SA Acceptance ──────────────────────────────────────────
+
+
+def sa_accept(
+    current_obj: ObjectiveVector,
+    candidate_obj: ObjectiveVector,
+    temperature: float,
+    rng: random.Random,
+) -> bool:
+    """SA 接受准则：更好/相等必接受；更差以 exp(-delta / T) 接受。
+
+    - delta 来自 ObjectiveVector.scalar_delta_worse（搜索内部能量差，不是业务 key）。
+    - 硬约束不可行（infeasibility > 0）不得靠 SA 无限接受：直接拒绝。
+    - temperature <= 0 或非有限时，只接受非更差解。
+    - delta 非有限 / 溢出下溢安全处理，绝不产生 NaN。
+    """
+    if candidate_obj.infeasibility > 0.0:
+        return False
+
+    # lexicographic 业务序：更好或相等
+    if candidate_obj.key() <= current_obj.key():
+        return True
+
+    if not math.isfinite(temperature) or temperature <= 0.0:
+        return False
+
+    delta = candidate_obj.scalar_delta_worse(current_obj)
+    if delta <= 0.0:
+        return True
+    if not math.isfinite(delta):
+        return False
+
+    # exp(-delta/T) overflow/underflow 保护
+    exponent = -delta / temperature
+    if exponent < -700.0:
+        return False
+    if exponent > 0.0:
+        return True
+
+    prob = math.exp(exponent)
+    if not math.isfinite(prob) or prob <= 0.0:
+        return False
+    return rng.random() < prob
+
+
+def _task_set_preserved(
+    before_routes: list[RouteGenome],
+    after_routes: list[RouteGenome],
+) -> bool:
+    """destroy/repair 后任务集合必须完全恢复，不允许丢失或复制。"""
+    before: set[str] = set()
+    after: set[str] = set()
+    for r in before_routes:
+        before.update(r.placements.keys())
+    for r in after_routes:
+        for tid in r.placements.keys():
+            if tid in after:
+                return False  # duplicate
+            after.add(tid)
+    return before == after
+
+
 # ─── ALNS Main Loop ─────────────────────────────────────────
 
 
@@ -570,7 +632,10 @@ def alns_search(
     selector = AdaptiveOperatorSelector(destroy_names, repair_names)
 
     best_routes = [r.copy() for r in routes]
-    best_obj = evaluate_route_states(best_routes, tasks_by_id, station_map, matrix)
+    best_obj = evaluate_route_states(
+        best_routes, tasks_by_id, station_map, matrix,
+        initial_passenger_loads=initial_passenger_loads,
+    )
 
     current_routes = [r.copy() for r in routes]
     current_obj = best_obj
@@ -635,14 +700,18 @@ def alns_search(
 
         # 评估
         repaired_obj = evaluate_route_states(
-            repaired, tasks_by_id, station_map, matrix
+            repaired, tasks_by_id, station_map, matrix,
+            initial_passenger_loads=initial_passenger_loads,
         )
 
-        # 接受准则
+        # 接受准则：业务比较用 key()，SA 用真实能量差
         accept = False
         reward_type = None
 
-        if repaired_obj < current_obj:
+        # destroy/repair 不得静默丢任务：不完整解按不可行处理
+        if not _task_set_preserved(current_routes, repaired):
+            accept = False
+        elif repaired_obj.key() < current_obj.key():
             accept = True
             reward_type = "accepted_better"
 
@@ -650,14 +719,12 @@ def alns_search(
                 best_routes = [r.copy() for r in repaired]
                 best_obj = repaired_obj
                 reward_type = "global_best"
-        else:
-            # SA 接受
-            delta = repaired_obj.key() > current_obj.key()
-            if temperature > 0.01:
-                prob = math.exp(-1.0 / temperature)
-                if rng.random() < prob:
-                    accept = True
-                    reward_type = "accepted_feasible"
+        elif repaired_obj.key() == current_obj.key():
+            accept = True
+            reward_type = "accepted_feasible"
+        elif sa_accept(current_obj, repaired_obj, temperature, rng):
+            accept = True
+            reward_type = "accepted_feasible"
 
         if accept:
             current_routes = repaired
@@ -666,8 +733,11 @@ def alns_search(
             if reward_type:
                 selector.reward(destroy_name, repair_name, reward_type)
 
-        # 冷却
-        temperature *= cooling_rate
+        # 冷却（不低于 temperature_min）
+        temperature = max(
+            temperature * cooling_rate,
+            getattr(config, "temperature_min", 0.01),
+        )
 
         # 更新权重
         if iteration % 10 == 0:

@@ -1,0 +1,17 @@
+{
+  "stage": "done_1000",
+  "dataset_version": "lsr20",
+  "graph_version": "osm-pbf-137591hw-2287515e",
+  "route_version": "local-v1",
+  "dataset_size": 0,
+  "generated_samples": 0,
+  "current_target": 1000,
+  "seed": 20260921,
+  "model_version": "",
+  "best_metric": 0.0,
+  "last_completed_step": "generate_1000",
+  "hard_negative_pool_size": 0,
+  "amap_usage_file": "",
+  "started_at": 1790092296.795045,
+  "deadline_at": 1790351496.7950442
+}

@@ -910,6 +910,9 @@ def _compact_solution(
         if t.task_type in (TaskType.PICKUP, TaskType.SHIPMENT)
     )
 
+    # DISPATCH_CORE_V047 (section 25): compaction must never replace a better HACO solution.
+    current_obj = evaluate_route_states(routes, tasks_by_id, station_map, matrix)
+
     for m in range(1, used_n + 1):
         if deadline is not None and deadline.expired():
             return routes  # 超时，返回当前最优解
@@ -933,6 +936,11 @@ def _compact_solution(
             initial_passenger_loads, initial_cargo_loads,
             station_map, matrix,
         ):
+            # Safe replacement guard: complete AND feasible AND
+            # vehicle_count <= current AND ObjectiveVector <= current.
+            cand_obj = evaluate_route_states(cand.routes, tasks_by_id, station_map, matrix)
+            if cand_obj > current_obj:
+                continue
             return cand.routes  # m 是从小到大，首个可行即贪心能找到的最小可行车数
 
     return routes
@@ -968,12 +976,14 @@ def _adapt_parameters(
 def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
     tasks = []
     for order in request.orders:
+        econ = getattr(order, "economicValue", None)
         if order.orderType == OrderType.PASSENGER:
             tasks.append(TaskBlock(
                 task_id=f"P:{order.orderId}", task_type=TaskType.PASSENGER,
                 pickup_station=order.boardingStationId,
                 delivery_station=order.alightingStationId,
                 size=1, order_ids=[order.orderId],
+                economic_value=econ,
             ))
         elif order.orderType == OrderType.DELIVERY:
             tasks.append(TaskBlock(
@@ -982,6 +992,7 @@ def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
                 delivery_station=order.stationId,
                 size=order.itemCount, order_ids=[order.orderId],
                 cargo_source=order.cargoSource,
+                economic_value=econ,
             ))
         elif order.orderType == OrderType.PICKUP:
             tasks.append(TaskBlock(
@@ -990,13 +1001,16 @@ def _encode_tasks(request: PlanRequest) -> list[TaskBlock]:
                 delivery_station=order.stationId,
                 size=order.itemCount, order_ids=[order.orderId],
                 cargo_source=order.cargoSource,
+                economic_value=econ,
             ))
     for shipment in request.shipments:
+        econ = getattr(shipment, "economicValue", None)
         tasks.append(TaskBlock(
             task_id=f"S:{shipment.shipmentId}", task_type=TaskType.SHIPMENT,
             pickup_station=shipment.pickupStationId,
             delivery_station=shipment.deliveryStationId,
             size=shipment.quantity, order_ids=[shipment.shipmentId],
+            economic_value=econ,
         ))
     return tasks
 

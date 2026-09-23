@@ -1,0 +1,23 @@
+{
+  "status": "GENERATING_1000",
+  "stage": "GENERATING",
+  "dataset_size": 0,
+  "target": 1000,
+  "groups": 0,
+  "avg_candidates": 0.0,
+  "min_candidates": 0,
+  "max_candidates": 0,
+  "dataset_version": "lsr20",
+  "graph_version": "osm-pbf-137591hw-2287515e",
+  "route_version": "local-v1",
+  "model_version": "",
+  "elapsed_seconds": 2.363469123840332,
+  "samples_per_second": 0.0,
+  "ranking_metrics": {},
+  "reduction_metrics": {},
+  "hard_negative_count": 0,
+  "amap_used_today": 0,
+  "amap_remaining_today": 5000,
+  "checkpoint": "..\\algorithm\\learning\\data\\checkpoint.json",
+  "last_error": null
+}

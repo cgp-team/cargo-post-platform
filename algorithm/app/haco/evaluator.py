@@ -20,28 +20,34 @@ if TYPE_CHECKING:
     from .encoding import TaskBlock
 
 
-def evaluate_route_genome(
+def calculate_passenger_impact(
     route: RouteGenome,
     tasks_by_id: dict[str, TaskBlock],
     station_map: dict,
     matrix,
+    initial_passenger_load: int = 0,
 ) -> dict:
-    """基于 RouteGenome.events 计算单车真实指标。
+    """统一 passenger / cargo 影响计算（Construction 与 Final Evaluator 共用）。
 
-    Returns:
-        dict with keys: distance, duration, passenger_impact, cargo_detour
+    定义（代理指标，非真实乘客延误）：
+    - current_passengers 从 initial_passenger_load 起步
+    - BOARD +1 / ALIGHT -1（每位 PASSENGER 任务各一次）
+    - cargo 插入（PICKUP/DELIVER）造成的 detour 按
+      ``detour_km / 25kmh * 3600 * current_passengers`` 计入 passenger_impact
+    - cargo_detour 为 detour_km 累计
+
+    局限：这是 detour 折算的乘客时间代理，不是基于时刻表的真实到站延误。
+    Construction cheap score 与最终 evaluator 必须都调用本函数，避免口径分裂。
     """
     total_distance = 0.0
     total_duration = 0.0
     passenger_impact = 0.0
     cargo_detour = 0.0
 
-    current_passengers = 0
-
+    current_passengers = initial_passenger_load
     events = route.events
 
     for i in range(1, len(events)):
-
         previous = events[i - 1]
         current = events[i]
 
@@ -68,19 +74,10 @@ def evaluate_route_genome(
             continue
 
         if current.event_type == EventType.ALIGHT:
-            current_passengers = max(
-                0,
-                current_passengers - 1,
-            )
+            current_passengers = max(0, current_passengers - 1)
             continue
 
-        if (
-            current.event_type
-            not in (
-                EventType.PICKUP,
-                EventType.DELIVER,
-            )
-        ):
+        if current.event_type not in (EventType.PICKUP, EventType.DELIVER):
             continue
 
         if not current.task_id:
@@ -93,49 +90,21 @@ def evaluate_route_genome(
         if i + 1 >= len(events):
             continue
 
-        next_station = station_map[
-            events[i + 1].station_id
-        ]
+        next_station = station_map[events[i + 1].station_id]
 
-        direct = compute_distance(
-            from_station,
-            next_station,
-            matrix,
-        )
-
+        direct = compute_distance(from_station, next_station, matrix)
         via = (
-            compute_distance(
-                from_station,
-                to_station,
-                matrix,
-            )
-            +
-            compute_distance(
-                to_station,
-                next_station,
-                matrix,
-            )
+            compute_distance(from_station, to_station, matrix)
+            + compute_distance(to_station, next_station, matrix)
         )
+        detour = max(0.0, via - direct)
 
-        detour = max(
-            0.0,
-            via - direct,
-        )
-
-        if task.task_type.value in (
-            "DELIVERY",
-            "PICKUP",
-            "SHIPMENT",
-        ):
+        if task.task_type.value in ("DELIVERY", "PICKUP", "SHIPMENT"):
             cargo_detour += detour
 
             if current_passengers > 0:
-                passenger_impact += (
-                    detour
-                    / 25.0
-                    * 3600.0
-                    * current_passengers
-                )
+                # 代理指标：绕行距离按 25km/h 折算秒数 × 车上乘客数
+                passenger_impact += detour / 25.0 * 3600.0 * current_passengers
 
     return {
         "distance": total_distance,
@@ -145,11 +114,29 @@ def evaluate_route_genome(
     }
 
 
+def evaluate_route_genome(
+    route: RouteGenome,
+    tasks_by_id: dict[str, TaskBlock],
+    station_map: dict,
+    matrix,
+    initial_passenger_load: int = 0,
+) -> dict:
+    """基于 RouteGenome.events 计算单车真实指标。
+
+    Returns:
+        dict with keys: distance, duration, passenger_impact, cargo_detour
+    """
+    return calculate_passenger_impact(
+        route, tasks_by_id, station_map, matrix, initial_passenger_load
+    )
+
+
 def evaluate_route_states(
     routes: list[RouteGenome],
     tasks_by_id: dict[str, TaskBlock],
     station_map: dict,
     matrix,
+    initial_passenger_loads: dict[int, int] | None = None,
 ) -> ObjectiveVector:
     """评估一组 RouteGenome 路线，返回 ObjectiveVector。"""
     used_vehicles = 0
@@ -168,11 +155,16 @@ def evaluate_route_states(
 
         used_vehicles += 1
 
+        init_load = 0
+        if initial_passenger_loads is not None:
+            init_load = initial_passenger_loads.get(route.vehicle_index, 0)
+
         metrics = evaluate_route_genome(
             route,
             tasks_by_id,
             station_map,
             matrix,
+            initial_passenger_load=init_load,
         )
 
         for key in total:

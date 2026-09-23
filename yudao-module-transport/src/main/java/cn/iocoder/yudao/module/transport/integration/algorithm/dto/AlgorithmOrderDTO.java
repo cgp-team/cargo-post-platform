@@ -47,4 +47,10 @@ public class AlgorithmOrderDTO {
     /** 货源类型：PRELOADED（场站预装）/ SHIPMENT（配对揽派，历史兼容）；省略时算法按上下文推断 */
     private String cargoSource;
 
+    /**
+     * 可选经济价值（向后兼容）：由业务层用 CargoPricingService 真实报价填充。
+     * 算法侧缺失时不报错、不造假价格；仅用于性价比比较，不突破硬约束。
+     */
+    private Double economicValue;
+
 }
