@@ -133,7 +133,7 @@ public class AlgorithmClient {
             }
             sleep(properties.getRetryBackoff().toMillis());
         }
-        throw new ServiceException("算法动态调度服务暂不可用");
+        throw new ServiceException(500, "算法动态调度服务暂不可用");
     }
 
     public AlgorithmDistanceRespDTO distance(AlgorithmDistanceReqDTO request) {
