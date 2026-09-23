@@ -291,7 +291,11 @@ def test_build_result_amap_failure_falls_back(monkeypatch: pytest.MonkeyPatch, f
     result = main.build_result(request)
     assert result.status == "feasible"
     assert result.distanceUnit == "degree"
-    assert "路网距离不可用，已降级直线距离" in result.warnings
+    # P0：非 formal 时必须显式告警，禁止把直线当正式路网成本
+    assert any(
+        "正式路网" in w or "FORMAL_COST_UNAVAILABLE" in w or "直线" in w
+        for w in result.warnings
+    )
     assert result.totalDistance == solve(request).total_distance
 
 

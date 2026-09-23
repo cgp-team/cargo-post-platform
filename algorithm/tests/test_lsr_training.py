@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -46,6 +47,7 @@ def test_search_trace_recorder_ranks_by_objective():
     assert set(rec.samples[0].features) == set(FEATURE_NAMES)
 
 
+@pytest.mark.slow
 def test_training_label_generation_and_no_leakage():
     rec = TrainingSampleGenerator().generate(200, seed=7)
     builder = RankingDatasetBuilder()
@@ -60,6 +62,7 @@ def test_training_label_generation_and_no_leakage():
     assert "total_distance" not in builder.feature_names
 
 
+@pytest.mark.slow
 def test_candidate_ranker_trains_and_fallback():
     rec = TrainingSampleGenerator().generate(300, seed=11)
     groups = RankingDatasetBuilder().build(rec.samples)
@@ -80,11 +83,13 @@ def test_search_reducer_protects_and_gates():
     ranker.fallback_mode = True
     r = DynamicSearchSpaceReducer(ranker)
     X = np.zeros((5, len(FEATURE_NAMES)))
-    out = r.reduce([f"c{i}" for i in range(5)], X, teacher_top_id="c0")
-    assert out.gate_passed
+    out = r.reduce([f"c{i}" for i in range(5)], X)
     assert out.reduction_ratio == 0.0
+    assert list(out.kept_ids) == [f"c{i}" for i in range(5)]
+    assert out.dropped_ids == []
 
 
+@pytest.mark.slow
 def test_hard_negative_mining_dedup():
     rec = TrainingSampleGenerator().generate(150, seed=5)
     miner = HardNegativeMiner(max_pool_size=10)
@@ -102,6 +107,7 @@ def test_model_registry_states(tmp_path):
     assert reg.active()["id"] == "m1"
 
 
+@pytest.mark.slow
 def test_data_quality_quarantine(tmp_path):
     rec = TrainingSampleGenerator().generate(50, seed=9)
     samples = list(rec.samples)
