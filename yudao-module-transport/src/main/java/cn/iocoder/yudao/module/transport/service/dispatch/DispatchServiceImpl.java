@@ -808,21 +808,15 @@ public class DispatchServiceImpl implements DispatchService {
         }
 
         if (AlgorithmPlanRespDTO.STATUS_INFEASIBLE.equals(result.getStatus())) {
-            // 无可行解：订单回池 + 落任务终态（独立短事务），避免订单卡在 ASSIGNED。
+            // 无可行解：订单回池 + 把**已创建的** PLANNING 任务标记 INFEASIBLE（updateById，不新插一条）。
             String reason = reasonCodeText(result.getReasonCode());
             if (AlgorithmPlanRespDTO.REASON_OVER_CAPACITY.equals(result.getReasonCode())) {
                 reason = reason + "（" + describeBatchLoad(algorithmReq) + "）";
             }
             releaseClaimedOrders(pooledIds);
-            DispatchTaskDO infeasibleTask = DispatchTaskDO.builder()
-                    .taskNo(taskNo)
-                    .snapshotId(taskNo) // 快照编号暂用任务号，保证唯一约束
-                    .planningTime(LocalDateTime.now())
-                    .batchStart(batch[0]).batchEnd(batch[1])
-                    .scenario(reqVO.getScenario())
-                    .status(DispatchTaskStatusEnum.INFEASIBLE.getStatus())
-                    .build();
-            runInTx(() -> dispatchTaskMapper.insert(infeasibleTask));
+            task.setStatus(DispatchTaskStatusEnum.INFEASIBLE.getStatus());
+            task.setAlgorithmJobId(result.getRequestId());
+            runInTx(() -> dispatchTaskMapper.updateById(task));
             throw exception(DISPATCH_NO_FEASIBLE, reason);
         }
 

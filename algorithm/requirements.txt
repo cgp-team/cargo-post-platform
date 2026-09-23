@@ -4,3 +4,6 @@ pydantic==2.13.4
 ortools==9.15.6755
 httpx==0.28.1
 pytest==8.4.1
+# RouteSearchRanker / CandidateRanker 的 train 与 load 都依赖 LightGBM；
+# 不装则模型无法加载（永久 fallback），训练契约测试也会红。numpy 由 lightgbm/ortools 带入。
+lightgbm==4.6.0

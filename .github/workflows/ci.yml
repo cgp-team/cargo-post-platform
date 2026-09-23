@@ -165,6 +165,21 @@ jobs:
         run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
       - name: Build Algorithm image
         run: docker compose --env-file .env -f deploy/docker-compose.yml build algorithm
+      - name: Smoke algorithm health
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env -f deploy/docker-compose.yml up -d algorithm
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18081/health >/dev/null 2>&1; then
+              echo "algorithm health ok (attempt ${i})"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "ERROR: algorithm failed health within 60s" >&2
+          docker compose --env-file .env -f deploy/docker-compose.yml logs --tail=100 algorithm || true
+          docker compose --env-file .env -f deploy/docker-compose.yml ps algorithm || true
+          exit 1
 
   # 始终运行：必需文件与生成物漂移检查（低成本），保证分支保护至少有一项必报检查
   drift-check:

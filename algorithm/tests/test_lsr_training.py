@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.haco.encoding import ObjectiveVector
+from app.routing.local_routing import RoadEdge, RoadGraph, haversine_m
 from learning.training import (
     AMapQuotaScheduler,
     CandidateRanker,
@@ -23,6 +24,33 @@ from learning.training import (
     TrainingDataQualityChecker,
     TrainingSampleGenerator,
 )
+from learning.training.generate_training_samples import REAL_STATIONS, RealRoadRouter
+
+
+def _fixture_graph() -> RoadGraph:
+    """真实坐标站点 + 连通局部路网。
+
+    用途仅限训练管线契约（无泄漏/分组切分/质量隔离）；不产出正式路网指标。
+    """
+    g = RoadGraph()
+    names = sorted(REAL_STATIONS)
+    for n in names:
+        la, lo = REAL_STATIONS[n]
+        g.add_node(n, la, lo)
+    for i, a in enumerate(names):
+        b = names[(i + 1) % len(names)]
+        la1, lo1 = REAL_STATIONS[a]
+        la2, lo2 = REAL_STATIONS[b]
+        d = haversine_m((la1, lo1), (la2, lo2)) * 1.25
+        g.add_edge(RoadEdge(a, b, d, d / 8.0, ((la1, lo1), (la2, lo2))))
+    return g
+
+
+def _pipeline_generator() -> TrainingSampleGenerator:
+    return TrainingSampleGenerator(
+        router=RealRoadRouter(graph=_fixture_graph()),
+        stations=dict(REAL_STATIONS),
+    )
 
 
 def test_search_trace_recorder_ranks_by_objective():
@@ -49,7 +77,7 @@ def test_search_trace_recorder_ranks_by_objective():
 
 @pytest.mark.slow
 def test_training_label_generation_and_no_leakage():
-    rec = TrainingSampleGenerator().generate(200, seed=7)
+    rec = _pipeline_generator().generate(200, seed=7)
     builder = RankingDatasetBuilder()
     groups = builder.build(rec.samples)
     assert groups
@@ -64,16 +92,20 @@ def test_training_label_generation_and_no_leakage():
 
 @pytest.mark.slow
 def test_candidate_ranker_trains_and_fallback():
-    rec = TrainingSampleGenerator().generate(300, seed=11)
+    # 每个 search_state 一个 group；fixture 全 formal 时 group 数 ≈ samples/cands
+    rec = _pipeline_generator().generate(240, seed=11)
     groups = RankingDatasetBuilder().build(rec.samples)
+    assert len(groups) >= 4
     ranker = CandidateRanker()
     assert ranker.fallback_mode
-    ranker.train(groups[:20], groups[20:25], n_estimators=30, early_stopping_rounds=5)
+    split = max(1, len(groups) - 1)
+    valid = groups[split:] or groups[-1:]
+    ranker.train(groups[:split], valid, n_estimators=30, early_stopping_rounds=5)
     assert not ranker.fallback_mode
     X = groups[0].X
     scores = ranker.predict(X)
     assert scores.shape[0] == X.shape[0]
-    metrics = ranker.evaluate(groups[:10])
+    metrics = ranker.evaluate(groups[: min(3, len(groups))])
     assert 0.0 <= metrics["overall_feasible_candidate_recall"] <= 1.0
     assert "best_feasible_candidate_recall" in metrics
 
@@ -91,7 +123,8 @@ def test_search_reducer_protects_and_gates():
 
 @pytest.mark.slow
 def test_hard_negative_mining_dedup():
-    rec = TrainingSampleGenerator().generate(150, seed=5)
+    rec = _pipeline_generator().generate(150, seed=5)
+    assert rec.samples
     miner = HardNegativeMiner(max_pool_size=10)
     miner.mine(rec.samples)
     combined = miner.combined_dataset(rec.samples)
@@ -109,8 +142,9 @@ def test_model_registry_states(tmp_path):
 
 @pytest.mark.slow
 def test_data_quality_quarantine(tmp_path):
-    rec = TrainingSampleGenerator().generate(50, seed=9)
+    rec = _pipeline_generator().generate(50, seed=9)
     samples = list(rec.samples)
+    assert samples
     samples[0].features["roadDistance"] = float("nan")
     good, rep = TrainingDataQualityChecker().filter(samples, tmp_path / "q")
     assert rep.bad >= 1

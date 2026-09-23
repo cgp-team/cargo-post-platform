@@ -6,3 +6,10 @@ tests/
 *.md
 .gitignore
 pytest.ini
+# 镜像只 COPY app/ 与 requirements.txt；训练数据/模型/实验产物不进构建上下文
+data/
+learning/
+artifacts/
+*.jsonl
+*.zip
+tools/

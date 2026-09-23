@@ -42,7 +42,28 @@ class CandidateRanker:
         import lightgbm as lgb
 
         builder = RankingDatasetBuilder(self.feature_names)
-        dtrain = builder.to_lgb_dataset(train_groups)
+        # train/valid 必须共用同一套标签映射：各组独立压成 0..k-1 时，
+        # valid 的 grade 会超出 train 的 num_label，LightGBM 直接 Fatal。
+        all_groups = list(train_groups) + list(val_groups or ())
+        uniq = sorted({int(v) for g in all_groups for v in (g.y.tolist() if g.y is not None else ())})
+        grade_map = {v: i for i, v in enumerate(uniq)}
+
+        def _with_grades(groups: Sequence[RankingGroup]) -> list[RankingGroup]:
+            out: list[RankingGroup] = []
+            for g in groups:
+                y = np.asarray([grade_map[int(v)] for v in g.y], dtype=np.int32)
+                out.append(RankingGroup(
+                    group_id=g.group_id,
+                    candidate_ids=list(g.candidate_ids),
+                    X=g.X, y=y,
+                    scenario_id=g.scenario_id,
+                    route_pattern=g.route_pattern,
+                    random_seed=g.random_seed,
+                    teacher_order=list(g.teacher_order),
+                ))
+            return out
+
+        dtrain = builder.to_lgb_dataset(_with_grades(train_groups))
         params = {
             "objective": objective,
             "metric": ["ndcg", "map"],
@@ -59,7 +80,7 @@ class CandidateRanker:
         valid_names = ["train"]
         callbacks = []
         if val_groups:
-            valid_sets.append(builder.to_lgb_dataset(val_groups))
+            valid_sets.append(builder.to_lgb_dataset(_with_grades(val_groups)))
             valid_names.append("val")
             callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
         self.model = lgb.train(
