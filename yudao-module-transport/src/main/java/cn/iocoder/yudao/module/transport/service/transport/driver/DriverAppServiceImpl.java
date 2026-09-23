@@ -846,12 +846,7 @@ public class DriverAppServiceImpl implements DriverAppService {
         ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
         loadedUpdate.setId(execution.getId());
         loadedUpdate.setLoadedCount(loaded + 1);
-        int loadedAffected = shiftExecutionMapper.update(loadedUpdate, new LambdaQueryWrapperX<ShiftExecutionDO>()
-                .eq(ShiftExecutionDO::getId, execution.getId())
-                .eq(ShiftExecutionDO::getLoadedCount, loaded));
-        if (loadedAffected == 0) {
-            throw exception(DRIVER_CARGO_FULL);
-        }
+        shiftExecutionMapper.updateById(loadedUpdate);
     }
 
     @Override

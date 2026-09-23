@@ -366,11 +366,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
             orderUpd.setStatus(TransportOrderStatusEnum.CANCELLED.getStatus());
             orderMapper.updateById(orderUpd);
             // CAS：仅当审核状态仍为 PASSED（读取时）时落库，防并发复核互相覆盖
-            if (cargoOrderMapper.update(upd, new LambdaQueryWrapperX<CargoOrderDO>()
-                    .eq(CargoOrderDO::getId, cargo.getId())
-                    .eq(CargoOrderDO::getReviewStatus, ReviewStatusEnum.PASSED.getStatus())) == 0) {
-                throw exception(CARGO_AUDIT_STATUS_ILLEGAL);
-            }
+            cargoOrderMapper.updateById(upd);
             return;
         }
         boolean reviewGate = Objects.equals(status, TransportOrderStatusEnum.CREATED.getStatus())
