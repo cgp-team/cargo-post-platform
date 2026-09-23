@@ -1,4 +1,4 @@
-"""交接可行性与运输链评估（包装 MultiLeg，不重写 MultiLegPlanner）。"""
+"""交接可行性与运输链评估（**司机对司机同站交接**，禁止远距步行换乘）。（包装 MultiLeg，不重写 MultiLegPlanner）。"""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ def can_handover(
     shift_conflict: bool = False,
     order_wait_limit_s: float | None = None,
     handover_travel_speed_m_s: float = 1.2,
+    handling_time_s: float = 300.0,
+    timetable_buffer_s: float = 120.0,
 ) -> HandoverDecision:
     """检查两段之间是否可交接。"""
     if not cargo_present:
@@ -44,9 +46,9 @@ def can_handover(
         kind = HandoverKind.NEARBY_STATION
         transfer_d = station_distance_m
 
-    handling = 300.0  # 5min 装卸
+    handling = max(0.0, handling_time_s)
     travel = transfer_d / max(handover_travel_speed_m_s, 0.1)
-    total_needed = handover_dwell_s + travel + handling
+    total_needed = handover_dwell_s + travel + handling + max(0.0, timetable_buffer_s)
     # P0-5: readiness must include transfer travel + dwell + handling, not just arrival<=departure.
     ready_time = from_arrival_time + total_needed
     waiting = max(0.0, to_departure_time - ready_time)

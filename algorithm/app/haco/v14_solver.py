@@ -124,6 +124,14 @@ def solve(
 
     station_map = {s.stationId: s for s in request.stations}
     station_map[request.depot.stationId] = request.depot
+    for v in request.vehicles:
+        for sid in (v.skeleton or []):
+            if sid not in station_map:
+                return SolveOutcome(
+                    status="infeasible",
+                    reason_code="SKELETON_STATION_MISSING",
+                    warnings=[f"SKELETON_STATION_NOT_IN_REQUEST:{sid}"],
+                )
 
     tasks = _encode_tasks(request)
     if not tasks:
@@ -1046,11 +1054,22 @@ def _precheck(request: PlanRequest) -> SolveOutcome | None:
         v.passengerCapacity - v.initialPassengerLoad
         for v in request.vehicles
     )
-    total_ccap = sum(
-        v.cargoCapacity - v.initialCargoLoad for v in request.vehicles
-    )
-    if passengers > total_pcap or deliveries > total_ccap or pickups > total_ccap:
+    if passengers > total_pcap:
         return SolveOutcome(status="infeasible", reason_code="OVER_CAPACITY")
+
+    total_ccap = sum(v.cargoCapacity for v in request.vehicles)
+    # 总需求硬上界（明显装不下直接拒）：配送需求 / 揽收需求 任一超总货仓
+    if deliveries > total_ccap or pickups > total_ccap:
+        return SolveOutcome(status="infeasible", reason_code="OVER_CAPACITY")
+
+    # 峰值载重预检（出程派送 → 返程揽收 timeline）：揽派复用时不按总和误判
+    peak = _estimate_peak_cargo_load(request)
+    if peak > total_ccap:
+        return SolveOutcome(
+            status="infeasible",
+            reason_code="OVER_CAPACITY",
+            warnings=[f"PEAK_CARGO_LOAD={peak}>{total_ccap}"],
+        )
 
     total_preloaded_delivery = sum(
         o.itemCount for o in request.orders
@@ -1071,6 +1090,42 @@ def _precheck(request: PlanRequest) -> SolveOutcome | None:
             status="infeasible", reason_code="TIME_WINDOW_EXCEEDED"
         )
     return None
+
+
+
+def _estimate_peak_cargo_load(request: PlanRequest) -> int:
+    """峰值载重：出程派送在前、返程揽收在后（净载荷复用货仓）。"""
+    peaks: list[int] = []
+    for v in request.vehicles:
+        stations = list(v.skeleton or [])
+        load = v.initialCargoLoad
+        peak = load
+        evs: list[tuple[int, int]] = []
+
+        def _sidx(sid: str | None) -> int:
+            if not sid:
+                return 10 ** 6
+            try:
+                return stations.index(sid)
+            except ValueError:
+                return 10 ** 5
+
+        for o in request.orders:
+            if o.orderType == OrderType.DELIVERY:
+                if o.cargoSource == CargoSource.PRELOADED:
+                    evs.append((0, +o.itemCount))  # 预装起点占用
+                evs.append((_sidx(o.stationId), -o.itemCount))
+            elif o.orderType == OrderType.PICKUP:
+                evs.append((_sidx(o.stationId) + 10_000, +o.itemCount))
+        for s in request.shipments:
+            evs.append((_sidx(s.pickupStationId) * 2, +s.quantity))
+            evs.append((_sidx(s.deliveryStationId) * 2 + 1, -s.quantity))
+        evs.sort(key=lambda x: x[0])
+        for _, delta in evs:
+            load += delta
+            peak = max(peak, load)
+        peaks.append(peak)
+    return max(peaks) if peaks else 0
 
 
 # ─── RouteGenome → VehiclePlan ───────────────────────────────

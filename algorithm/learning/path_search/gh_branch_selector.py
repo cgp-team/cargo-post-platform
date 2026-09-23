@@ -121,17 +121,91 @@ class SelectorStats:
 
 
 class MLWorthwhileGate:
-    """expected_saved_GH_cost <= ML_cost → 直接 Full GH，不调 ML。"""
+    """expected_saved_GH_cost <= ML_cost → 直接 Full GH，不调 ML。
+
+    规模自适应（针对县域单批 ≤3 车/≤25 单）：
+    候选数 <= SMALL_POOL_THRESHOLD 时 ML 排序收益为负（特征+推理开销 > 省下的 GH 调用），
+    直接走廉价业务序启发式，纯启发式几秒就能搜完。
+    """
+
+    # 县域规模下 ML 无收益的候选池阈值（benchmark 标定：12 个 via 以内纯启发式已足够）
+    SMALL_POOL_THRESHOLD = 12
 
     def __init__(self, ml_cost_ms: float = 0.3, gh_cost_ms_per_call: float = 15.0):
         self.ml_cost_ms = ml_cost_ms
         self.gh_cost_ms_per_call = gh_cost_ms_per_call
 
     def worth(self, n_cands: int, expected_keep: int) -> tuple[bool, float, float]:
+        # 小池直接不调 ML：分支数撑不起排序收益（规模不匹配）
+        if n_cands <= self.SMALL_POOL_THRESHOLD:
+            est_ml = self.ml_cost_ms + 0.02 * n_cands
+            est_saved = self.gh_cost_ms_per_call * max(0, n_cands - expected_keep)
+            return False, est_saved, est_ml
         # 一次 batch ML vs 预计省下的 (n-keep) 次 GH
         est_ml = self.ml_cost_ms + 0.02 * n_cands
         est_saved = self.gh_cost_ms_per_call * max(0, n_cands - expected_keep)
         return est_saved > est_ml, est_saved, est_ml
+
+
+class RankerCapability:
+    """排序 / 削减能力解耦（训练不完整时只降级削减，不废掉排序）。
+
+    - ranking：只重排探索顺序，有 Quality Fuse + expand-K 兜底，recall 要求可放宽
+    - pruning：硬砍候选，必须过 0.99 安全门，否则保持关闭
+    """
+
+    RANK_MIN_RECALL = 0.80
+    PRUNE_MIN_RECALL = 0.99
+
+    @classmethod
+    def from_metrics(cls, metrics: dict | None) -> "RankerCapability":
+        m = metrics or {}
+        best_rec = (
+            m.get("best_candidate_recall")
+            or m.get("best_candidate_recall_20")
+            or m.get("ranking_recall", {}).get("20")
+        )
+        feas_rec = m.get("feasible_candidate_recall") or m.get("overall_feasible_candidate_recall")
+        # 取两者较小值作为能力下限
+        rec = None
+        if best_rec is not None and feas_rec is not None:
+            rec = min(float(best_rec), float(feas_rec))
+        elif best_rec is not None:
+            rec = float(best_rec)
+        elif feas_rec is not None:
+            rec = float(feas_rec)
+        if rec is None:
+            return cls(False, False, rec)
+        return cls(rec >= cls.RANK_MIN_RECALL, rec >= cls.PRUNE_MIN_RECALL, rec)
+
+    def __init__(self, can_rank: bool, can_prune: bool, recall: float | None):
+        self.can_rank = can_rank
+        self.can_prune = can_prune
+        self.recall = recall
+
+    def as_dict(self) -> dict:
+        return {"can_rank": self.can_rank, "can_prune": self.can_prune, "recall": self.recall}
+
+
+def business_heuristic_scores(X: np.ndarray) -> np.ndarray:
+    """无 ML 时的业务序启发式评分（越高越好）。
+
+    对齐 ObjectiveVector 业务优先级（lexicographic）：
+    绕行/里程小 > 顺路（heading 小）> 时长短。保证纯启发式搜索顺序也贴合
+    「少绕行、少耽误乘客」的客货邮业务目标，而不是只看 detour 一维。
+    """
+    if X.size == 0:
+        return np.zeros(0)
+    # 特征列：0=candidate_distance, 5=heading_difference, 9=detour_estimate
+    detour = X[:, 9]
+    dist = X[:, 0]
+    heading = X[:, 5]
+    # 归一化后加权：绕行最重（业务硬约束），其次总里程，再次顺路程度
+    def _norm(v):
+        rng = float(v.max() - v.min())
+        return (v - v.min()) / rng if rng > 1e-9 else np.zeros_like(v)
+    score = 1.0 * (1.0 - _norm(detour)) + 0.5 * (1.0 - _norm(dist)) + 0.3 * (1.0 - _norm(heading))
+    return score
 
 
 class AdaptiveKPolicy:
@@ -217,15 +291,21 @@ class GHBranchSelector:
         n = X.shape[0]
         if bypass or self.ranker is None or getattr(self.ranker, "fallback", True):
             self.stats.ml_bypass_count += 1
-            # 无模型时按 detour 升序（特征列 9）
-            return -X[:, 9] if n else np.zeros(0)
+            # 无模型时走业务序启发式（绕行/里程/顺路），而非单维 detour
+            return business_heuristic_scores(X)
+        # 排序/削减解耦：只允许 ranking 的模型不做硬砍，但仍可重排
+        cap = getattr(self.ranker, "capability", None)
+        if cap is not None and not getattr(cap, "can_rank", True):
+            self.stats.ml_bypass_count += 1
+            self.stats.fallback_reasons["rank_gate_blocked"] = self.stats.fallback_reasons.get("rank_gate_blocked", 0) + 1
+            return business_heuristic_scores(X)
         t0 = time.perf_counter()
         try:
             scores = np.asarray(self.ranker.predict(X), dtype=float).reshape(-1)
         except Exception:
             self.stats.fallback_count += 1
             self.stats.fallback_reasons["predict_error"] = self.stats.fallback_reasons.get("predict_error", 0) + 1
-            scores = -X[:, 9]
+            scores = business_heuristic_scores(X)
         self.stats.ml_ms += (time.perf_counter() - t0) * 1000
         return scores
 

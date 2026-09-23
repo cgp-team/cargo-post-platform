@@ -159,11 +159,21 @@ public class HandoverServiceImpl implements HandoverService {
             handoverMapper.updateById(TransportHandoverDO.builder()
                     .id(handoverId).toDriverId(driverId).build());
         }
-        handoverMapper.updateById(TransportHandoverDO.builder()
+        // CAS：仅当交接仍处于可开始状态时推进，防并发重复改写/回退
+        TransportHandoverDO startUpdate = TransportHandoverDO.builder()
                 .id(handoverId)
                 .status(TransportHandoverStatusEnum.HANDOVER.getStatus())
                 .handoverStartedAt(LocalDateTime.now())
-                .build());
+                .build();
+        int started = handoverMapper.update(startUpdate, new LambdaQueryWrapperX<TransportHandoverDO>()
+                .eq(TransportHandoverDO::getId, handoverId)
+                .in(TransportHandoverDO::getStatus,
+                        TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus(),
+                        TransportHandoverStatusEnum.TARGET_WAITING.getStatus(),
+                        TransportHandoverStatusEnum.HANDOVER.getStatus()));
+        if (started == 0) {
+            return; // 已被并发推进/终态，幂等
+        }
         if (handover.getLegToId() != null) {
             multiLegService.forceLegStatus(handover.getLegToId(),
                     TransportLegStatusEnum.ARRIVED_ORIGIN, "接收司机已到达换乘站");
@@ -206,8 +216,12 @@ public class HandoverServiceImpl implements HandoverService {
         if (photoUrl != null && !photoUrl.isBlank()) {
             update.setPhotoUrl(photoUrl);
         }
-        // CAS：仅当交接仍未完成时推进，防两司机并发确认导致重复通知 + 重复 leg 推进
-        handoverMapper.updateById(update);
+        int completed = handoverMapper.update(update, new LambdaQueryWrapperX<TransportHandoverDO>()
+                .eq(TransportHandoverDO::getId, handoverId)
+                .ne(TransportHandoverDO::getStatus, TransportHandoverStatusEnum.COMPLETED.getStatus()));
+        if (completed == 0) {
+            return; // 已被并发确认，幂等
+        }
 
         // 原子推进（需求 §63）：Leg1 = 已完成；Leg2 = 运输中
         multiLegService.forceLegStatus(handover.getLegFromId(),

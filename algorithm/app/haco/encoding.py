@@ -57,6 +57,9 @@ class TaskBlock:
     cargo_source: CargoSource | None = None
     # 可选经济价值（业务层真实运费/结算；缺失=None，不造假）
     economic_value: float | None = None
+    # DISPATCH_CORE_V047 §19-3：重量/体积（未配置时仍走 itemCount 口径）
+    weight_kg: float | None = None
+    volume_m3: float | None = None
 
     # 运行时计算的属性
     pickup_station_obj: Station | None = None

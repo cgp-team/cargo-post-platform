@@ -40,6 +40,7 @@ class StopAction(str, Enum):
     ALIGHT = "ALIGHT"
     DELIVER = "DELIVER"
     PICKUP = "PICKUP"
+    # 计划停靠拉客（骨架站每站必停），不是「路过不停」
     PASS = "PASS"
     RETURN = "RETURN"
 

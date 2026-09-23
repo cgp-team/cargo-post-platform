@@ -32,6 +32,25 @@ public class AppDriverRouteRespVO {
     @Schema(description = "是否偏航（>100m，Phase 9 只报警不自动改方案）")
     private Boolean deviated;
 
+    @Schema(description = "车辆实时位置经度")
+    private Double currentLongitude;
+    @Schema(description = "车辆实时位置纬度")
+    private Double currentLatitude;
+
+    @Schema(description = "下一动作：GO_STOP 去站点 / COMPLETE_ORDER 完成订单 / PICKUP 揽收 / HANDOVER 交接")
+    private String nextAction;
+    @Schema(description = "下一动作名称（中文）")
+    private String nextActionName;
+    @Schema(description = "下一站/任务点名称")
+    private String nextStopName;
+    @Schema(description = "距下一任务点直线米")
+    private Double nextStopDistanceMeters;
+    @Schema(description = "到下一任务点预计秒数（路网/均速）")
+    private Double nextStopEtaSeconds;
+
+    @Schema(description = "当前任务段真实道路 polyline（导航用）")
+    private List<Point> currentSegmentPolyline;
+
     @Schema(description = "经停点")
     @Data
     public static class Stop {

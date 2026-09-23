@@ -520,6 +520,13 @@ public class DriverAppServiceImpl implements DriverAppService {
         vo.setPolyline(fullPolyline.stream()
                 .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
         vo.setRouteProvider(provider);
+        // 实时地图：下一动作 + 当前任务段导航（真实道路）
+        VehicleLocationDO liveLoc0 = vehicleLocationMapper.selectByVehicleId(vehicleId);
+        if (liveLoc0 != null && liveLoc0.getLongitude() != null && liveLoc0.getLatitude() != null) {
+            vo.setCurrentLongitude(liveLoc0.getLongitude().doubleValue());
+            vo.setCurrentLatitude(liveLoc0.getLatitude().doubleValue());
+        }
+        fillNextActionAndNav(vo, items, stationMap, operatingRouteId, vehicleId);
         // 偏航判定：车辆当前上报位置 → 距规划 polyline 最小距离（>100m 标记 ROUTE_DEVIATED，只报警）
         VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
         if (loc != null && loc.getLongitude() != null && loc.getLatitude() != null && fullPolyline.size() >= 2) {
@@ -529,6 +536,62 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setDeviated(dev > GeoDistanceUtil.DEVIATION_THRESHOLD_METERS);
         }
         return vo;
+    }
+
+    /** 实时地图：下一动作（完成订单/去站点/揽收/交接）+ 当前任务段导航 polyline。 */
+    private void fillNextActionAndNav(AppDriverRouteRespVO vo, List<DispatchPlanItemDO> items,
+                                      Map<Long, StationDO> stationMap, Long operatingRouteId, Long vehicleId) {
+        DispatchPlanItemDO next = null;
+        DispatchPlanItemDO prevDone = null;
+        for (DispatchPlanItemDO item : items) {
+            boolean done = item.getStatus() != null && item.getStatus() >= 2; // 假设 2+ 已完成
+            if (!done && next == null) {
+                next = item;
+                break;
+            }
+            if (done) {
+                prevDone = item;
+            }
+        }
+        if (next == null) {
+            vo.setNextAction("DONE");
+            vo.setNextActionName("本班任务已完成");
+            return;
+        }
+        Integer action = next.getActionType();
+        String actionName = ACTION_NAMES.getOrDefault(action, "");
+        vo.setNextStopName(next.getStationName() != null ? next.getStationName() : actionName);
+        // 2=送客/派送 3=派送 4=揽收 1=到站停靠（按现有 actionType 口径）
+        if (action != null && action == 4) {
+            vo.setNextAction("PICKUP");
+            vo.setNextActionName("去揽收");
+        } else if (action != null && (action == 2 || action == 3)) {
+            vo.setNextAction("COMPLETE_ORDER");
+            vo.setNextActionName("去完成订单（派送）");
+        } else {
+            vo.setNextAction("GO_STOP");
+            vo.setNextActionName("去站点 " + vo.getNextStopName());
+        }
+        if (vo.getCurrentLongitude() != null && next.getStationId() != null) {
+            StationDO st = stationMap.get(next.getStationId());
+            if (st != null && st.getLongitude() != null && st.getLatitude() != null) {
+                double km = GeoDistanceUtil.haversineKm(vo.getCurrentLongitude(), vo.getCurrentLatitude(),
+                        st.getLongitude().doubleValue(), st.getLatitude().doubleValue());
+                vo.setNextStopDistanceMeters(Math.round(km * 1000 * 10) / 10.0);
+                // 城区均速 25km/h
+                vo.setNextStopEtaSeconds((double) Math.round(km / 25.0 * 3600));
+            }
+        }
+        // 当前任务段真实道路（上一完成点 → 下一任务点）
+        if (prevDone != null && next != null) {
+            StationDO from = prevDone.getStationId() != null ? stationMap.get(prevDone.getStationId()) : null;
+            StationDO to = next.getStationId() != null ? stationMap.get(next.getStationId()) : null;
+            RouteFetch seg = fetchRoutePolyline(operatingRouteId, prevDone.getStationId(), next.getStationId(), from, to);
+            if (seg != null && seg.points() != null) {
+                vo.setCurrentSegmentPolyline(seg.points().stream()
+                        .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
+            }
+        }
     }
 
     /** 单段真实道路 polyline 抓取结果 */
@@ -842,11 +905,10 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 +1（CAS：仅当 loadedCount 仍为读取时的值才 +1，防连点超容/丢更新）
-        ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
-        loadedUpdate.setId(execution.getId());
-        loadedUpdate.setLoadedCount(loaded + 1);
-        shiftExecutionMapper.updateById(loadedUpdate);
+        // 已装件数 +1（SQL 原子自增，防连点丢更新）
+        if (execution != null && execution.getId() != null) {
+            shiftExecutionMapper.incrementLoadedCount(execution.getId());
+        }
     }
 
     @Override
@@ -873,13 +935,10 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 -1（地板 0）：执行记录口径同装车（明细没写班次时按司机实际发车记录兜底）
+        // 已装件数 -1（地板 0，SQL 原子自减）：执行记录口径同装车（明细没写班次时按司机实际发车记录兜底）
         ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
-        if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
-            ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
-            loadedUpdate.setId(execution.getId());
-            loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
-            shiftExecutionMapper.updateById(loadedUpdate);
+        if (execution != null && execution.getId() != null) {
+            shiftExecutionMapper.decrementLoadedCount(execution.getId());
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
         maybeCompletePlan(planItem.getPlanId());
@@ -941,16 +1000,13 @@ public class DriverAppServiceImpl implements DriverAppService {
         upd.setPickedUpTime(LocalDateTime.now());
         upd.setPickerMemberUserId(SecurityFrameworkUtils.getLoginUserId());
         postalOrderMapper.updateById(upd);
-        // 已装件数 -1（地板 0），与 deliver 的回减口径一致
+        // 已装件数 -1（地板 0，SQL 原子自减），与 deliver 的回减口径一致
         Long shiftId = planItem.getShiftId();
         if (shiftId != null) {
             ShiftExecutionDO execution = shiftExecutionMapper.selectByShiftAndDriverAndDate(
                     shiftId, driver.getId(), LocalDate.now());
-            if (execution != null && execution.getLoadedCount() != null && execution.getLoadedCount() > 0) {
-                ShiftExecutionDO loadedUpdate = new ShiftExecutionDO();
-                loadedUpdate.setId(execution.getId());
-                loadedUpdate.setLoadedCount(execution.getLoadedCount() - 1);
-                shiftExecutionMapper.updateById(loadedUpdate);
+            if (execution != null && execution.getId() != null) {
+                shiftExecutionMapper.decrementLoadedCount(execution.getId());
             }
         }
         // 方案内订单全部完成 → 方案置为已完成（P1-003：补 COMPLETED 终态流转）
@@ -1323,10 +1379,25 @@ public class DriverAppServiceImpl implements DriverAppService {
             return; // 还有后续段：订单保持"部分完成/运输中"，绝不置完成
         }
         updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.COMPLETED);
+        // 多段联运最后一段完成后，同样检查方案是否可终态（原仅妥投/取件核销路径会触发）
+        maybeCompletePlanByOrder(leg.getOrderId());
         orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED, "全部运输段完成，订单完成");
         userNotificationService.sendToOrderUser(leg.getOrderId(), TransportOrderEventTypeEnum.COMPLETED,
                 cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.SUCCESS, false,
                 "订单已完成", "您的货物已完成全部运输段，感谢使用");
+    }
+
+    /** 按订单反查方案后做终态检查（多段 completeLeg 没有 planId 上下文时使用）。 */
+    private void maybeCompletePlanByOrder(Long orderId) {
+        if (orderId == null) {
+            return;
+        }
+        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                .eq(DispatchPlanItemDO::getOrderId, orderId)
+                .isNotNull(DispatchPlanItemDO::getPlanId));
+        for (DispatchPlanItemDO item : items) {
+            maybeCompletePlan(item.getPlanId());
+        }
     }
 
     private TransportHandoverDO requireHandoverOfLeg(TransportLegDO leg) {

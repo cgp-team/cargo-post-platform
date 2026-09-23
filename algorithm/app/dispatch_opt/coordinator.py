@@ -48,7 +48,7 @@ from .reachability import (
     classify_candidate_reachability,
 )
 from .route_cost_provider import RouteCostProvider
-from .trip_lock import TripLockPolicy
+from .trip_lock import TripLockPolicy, is_on_planned_route
 
 
 @dataclass
@@ -308,9 +308,20 @@ class DynamicDispatchCoordinator:
             cand.reason_code = "ETA_MISSED"
             return False
 
+        view = cand.detail.get("trip_view")
+        on_route = req.order.on_planned_route
+        if on_route is None:
+            remaining = getattr(view, "remaining_planned_stops", ()) or ()
+            on_route = is_on_planned_route(
+                pickup=cand.pickup_service_point,
+                delivery=cand.delivery_service_point,
+                remaining_planned_stops=remaining,
+            )
+
         lock = self.lock_policy.decide_candidate(
             cand.execution_state,
             is_high_value=req.order.is_high_value,
+            on_planned_route=on_route,
             cost_is_formal=cand.cost_is_formal,
             marginal_distance_m=cand.detour_distance_m,
             marginal_duration_s=cand.detour_duration_s,

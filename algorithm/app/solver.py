@@ -85,16 +85,21 @@ def _solve_hybrid(
     request: PlanRequest,
     matrix: DistanceMatrix | None = None,
 ) -> SolveOutcome:
-    """HYBRID：同时跑 HACO-1.4 与 OR-Tools baseline，取更优者（portfolio）。
+    """HYBRID：并行跑 HACO-1.4 与 OR-Tools baseline，取更优者（portfolio）。
 
-    排序键：统一 6 维 ObjectiveVector（infeasibility > vehicle_count >
-    passenger_impact > cargo_detour > total_distance > total_duration）。
+    并行执行可把 wall-clock 从「两者之和」压到「较慢者」，在 10s 契约预算内
+    留出更多搜索时间。排序键：统一 6 维 ObjectiveVector。
     绝不把 baseline 结果标成 haco 版本。
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     from .objective_compare import solution_key
 
-    haco = _solve_haco(request, matrix)
-    baseline = _solve_baseline(request, matrix)
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="hybrid-portfolio") as pool:
+        haco_future = pool.submit(_solve_haco, request, matrix)
+        baseline_future = pool.submit(_solve_baseline, request, matrix)
+        haco = haco_future.result()
+        baseline = baseline_future.result()
 
     if solution_key(baseline) < solution_key(haco):
         # baseline 严格更优 → 返回 baseline，如实标 ortools-1.3.0

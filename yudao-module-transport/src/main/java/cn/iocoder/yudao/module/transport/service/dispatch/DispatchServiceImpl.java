@@ -934,55 +934,47 @@ public class DispatchServiceImpl implements DispatchService {
         }
 
         // 订单 → 算法分配到的车辆/司机（同一辆车可拼多单；取货段按"该订单所属车辆"派车）
-
         Map<Long, Long[]> orderVehicleMap = new HashMap<>();
-
         for (AlgorithmVehiclePlanDTO vehiclePlan : resultFinal.getVehiclePlans()) {
-
             Long plannedVehicleId = vehiclePlan.getVehicleId();
-
             Long plannedDriverId = resolveDriverId(plannedVehicleId);
-
             for (AlgorithmRouteStopDTO stop : vehiclePlan.getStops()) {
-
                 Long businessOrderId = stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null;
-
                 if (businessOrderId != null) {
-
                     orderVehicleMap.putIfAbsent(businessOrderId, new Long[]{plannedVehicleId, plannedDriverId});
-
                 }
-
             }
+        }
 
+        // unassigned → MultiLeg 自动接力：算法部分可行时未分配单不整批失败，
+        // 无单车辆上下文也走 MultiLegPlanner 拆段（直达/2段/3段）。
+        Set<String> unassignedFromAlgo = resultFinal.getUnassignedOrderIds() == null
+                ? Set.of() : new HashSet<>(resultFinal.getUnassignedOrderIds());
+        List<Long> multilegRelayOrders = new ArrayList<>();
+        for (Long orderId : pooledIds) {
+            if (!orderVehicleMap.containsKey(orderId)) {
+                multilegRelayOrders.add(orderId);
+            }
+        }
+        if (!multilegRelayOrders.isEmpty() || !unassignedFromAlgo.isEmpty()) {
+            reasons.add("算法未直接分配 " + multilegRelayOrders.size()
+                    + " 单，已自动交多段联运（MultiLeg）拆段接力，不整批失败");
         }
 
         for (Long orderId : pooledIds) {
-
             try {
-
                 Long[] plannedVehicle = orderVehicleMap.get(orderId);
-
+                boolean relay = plannedVehicle == null;
                 allLegs.addAll(multiLegService.planLegs(orderId, plan.getId(),
-
                         plannedVehicle != null ? plannedVehicle[0] : null,
-
                         plannedVehicle != null ? plannedVehicle[1] : null));
-
                 MultiLegPlanner.PlanResult preview = multiLegService.preview(orderId);
-
                 if (!reasons.contains(preview.reason())) {
-
-                    reasons.add(preview.reason());
-
+                    reasons.add((relay ? "[多段接力] " : "") + preview.reason());
                 }
-
             } catch (Exception ex) {
-
                 log.warn("[createSmartPlan] 订单 {} 运输段规划失败：{}", orderId, ex.getMessage());
-
             }
-
         }
 
         if (!allLegs.isEmpty()) {
@@ -2546,27 +2538,39 @@ public class DispatchServiceImpl implements DispatchService {
 
 
 
+    /**
+     * settlement schema 漂移兜底：缺列导致的 SQL/映射异常转成可读业务错误，
+     * 并指向 sql/incremental/V023__settlement_schema_check.sql（根治 settlement-500）。
+     */
+    private RuntimeException wrapSettlementSchemaError(RuntimeException ex) {
+        String msg = String.valueOf(ex.getMessage());
+        if (msg.contains("Unknown column") || msg.contains("BadSqlGrammar")
+                || msg.contains("can not find lambda cache") || msg.contains("doesn't exist")) {
+            log.error("[settlement] 数据库 schema 与 DO 不一致，请先执行 sql/incremental/V023__settlement_schema_check.sql "
+                    + "并补齐 V012–V015/V019 迁移列", ex);
+            return exception(BAD_REQUEST, "结算数据表结构不完整，请先执行数据库迁移（见 sql/incremental/V023）");
+        }
+        return ex;
+    }
+
     @Override
-
     public DispatchSettlementRespVO settlement(DispatchSettlementReqVO reqVO) {
-
         if (reqVO.getBatchStart() == null || reqVO.getBatchEnd() == null
-
                 || !reqVO.getBatchStart().isBefore(reqVO.getBatchEnd())) {
-
             throw exception(BAD_REQUEST);
-
         }
 
-        // 执行中/已完成方案（返程结算口径：方案状态 IN (2 执行中, 3 已完成)；方案 COMPLETED 流转留待后续迭代，当前终态为执行中）
-
-        List<DispatchPlanDO> plans = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
-
-                .in(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.RUNNING.getStatus(),
-
-                        DispatchPlanStatusEnum.COMPLETED.getStatus())
-
-                .between(DispatchPlanDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
+        // 执行中/已完成方案（返程结算口径含 COMPLETED）。
+        // schema 缺列时 wrapSettlementSchemaError 转可读错误，指向 V023 检查脚本（根治 settlement-500）。
+        List<DispatchPlanDO> plans;
+        try {
+            plans = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
+                    .in(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.RUNNING.getStatus(),
+                            DispatchPlanStatusEnum.COMPLETED.getStatus())
+                    .between(DispatchPlanDO::getCreateTime, reqVO.getBatchStart(), reqVO.getBatchEnd()));
+        } catch (RuntimeException ex) {
+            throw wrapSettlementSchemaError(ex);
+        }
 
         DispatchSettlementRespVO respVO = new DispatchSettlementRespVO();
 
@@ -2592,9 +2596,13 @@ public class DispatchServiceImpl implements DispatchService {
 
                 .collect(Collectors.toMap(DispatchPlanDO::getId, java.util.function.Function.identity()));
 
-        List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
-
-                .in(DispatchPlanItemDO::getPlanId, planIds));
+        List<DispatchPlanItemDO> items;
+        try {
+            items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
+                    .in(DispatchPlanItemDO::getPlanId, planIds));
+        } catch (RuntimeException ex) {
+            throw wrapSettlementSchemaError(ex);
+        }
 
 
 
@@ -4245,8 +4253,56 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
     public java.util.Map<String, Object> allocateDynamic(java.util.Map<String, Object> payload) {
-        // 前端不直连算法；此处唯一出口。失败由 AlgorithmClient 重试/冷却语义处理。
+        // 发车后顺路插入：缺 remainingPlannedStops 时从本车 DispatchPlanItem 回填
+        try {
+            enrichOnRouteFields(payload);
+        } catch (Exception ignore) {
+            // 回填失败不阻断调度
+        }
         return algorithmAdapter.allocateRaw(payload);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichOnRouteFields(java.util.Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        Object tripsObj = payload.get("currentTrips");
+        if (!(tripsObj instanceof java.util.List<?> trips) || trips.isEmpty()) {
+            return;
+        }
+        for (Object t : trips) {
+            if (!(t instanceof java.util.Map)) {
+                continue;
+            }
+            java.util.Map<String, Object> trip = (java.util.Map<String, Object>) t;
+            if (trip.get("remainingPlannedStops") != null) {
+                continue;
+            }
+            Object vid = trip.get("vehicleId");
+            if (vid == null) {
+                continue;
+            }
+            Long vehicleId = Long.valueOf(String.valueOf(vid));
+            java.util.List<cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO> items =
+                    dispatchPlanItemMapper.selectList(
+                            new cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX<
+                                    cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO>()
+                                    .eq(cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getVehicleId, vehicleId)
+                                    .isNotNull(cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getPlanId)
+                                    .orderByAsc(cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO::getVisitSequence));
+            java.util.List<String> stops = new java.util.ArrayList<>();
+            for (cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO it : items) {
+                if (String.valueOf(it.getStationId()) != null && !stops.contains(String.valueOf(it.getStationId()))) {
+                    stops.add(String.valueOf(it.getStationId()));
+                } else if (it.getStationName() != null && !stops.contains(it.getStationName())) {
+                    stops.add(it.getStationName());
+                }
+            }
+            if (!stops.isEmpty()) {
+                trip.put("remainingPlannedStops", stops);
+            }
+        }
     }
 }
 

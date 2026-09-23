@@ -13,11 +13,17 @@ DEFAULT_BOARD_SECONDS = 30
 DEFAULT_ALIGHT_SECONDS = 20
 DEFAULT_PICKUP_SECONDS = 60
 DEFAULT_DELIVERY_SECONDS = 60
-DEFAULT_PASS_SECONDS = 0
+# 项目基本：公交线路上的每个站点都要停靠拉客。
+# PASS = 计划停靠（停站、开门、可上下客），不是「过站不停」。
+# 必须 > 0，否则等价于掠站而过，违反产品底线。
+DEFAULT_PASS_SECONDS = 30
 
 
 def service_duration(action: StopAction) -> int:
-    """根据 stop action 返回服务时间（秒）。"""
+    """根据 stop action 返回服务时间（秒）。
+
+    PASS 为骨架站计划停靠拉客时间（每站必停），不得为 0。
+    """
     if action == StopAction.BOARD:
         return DEFAULT_BOARD_SECONDS
     if action == StopAction.ALIGHT:

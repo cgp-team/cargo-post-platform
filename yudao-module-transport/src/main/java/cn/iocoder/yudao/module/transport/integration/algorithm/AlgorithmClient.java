@@ -116,24 +116,34 @@ public class AlgorithmClient {
     /** 动态插单调度：POST /api/v1/dispatch/allocate（DISPATCH_CORE_V047）。 */
     @SuppressWarnings("unchecked")
     public java.util.Map<String, Object> allocate(java.util.Map<String, Object> payload) {
+        if (System.currentTimeMillis() < routeUnavailableUntil.get()) {
+            // 与 route 共用冷却：算法服务不可用时避免动态插单把线程池拖死
+            throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+        }
         for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
+            if (attempt > 0) {
+                // 指数退避：第 n 次重试等 backoff * 2^(n-1)，上限 8s
+                long backoff = properties.getRetryBackoff().toMillis() * (1L << Math.min(attempt - 1, 3));
+                sleep(Math.min(backoff, 8_000L));
+            }
             try {
                 var response = restTemplate.postForEntity("/api/v1/dispatch/allocate", payload, java.util.Map.class);
+                routeUnavailableUntil.set(0);
                 return response.getBody();
             } catch (org.springframework.web.client.HttpServerErrorException ex) {
                 int status = ex.getStatusCode().value();
                 if (status == 502 || status == 503 || status == 504) {
                     log.warn("[allocate][第 {} 次可重试 status={}]", attempt + 1, status);
-                } else {
-                    log.warn("[allocate][失败 status={} body={}]", status, ex.getResponseBodyAsString());
-                    throw ex;
+                    continue;
                 }
+                log.warn("[allocate][失败 status={} body={}]", status, ex.getResponseBodyAsString());
+                throw ex;
             } catch (Exception ex) {
                 log.warn("[allocate][网络错误 第 {} 次: {}]", attempt + 1, ex.getMessage());
             }
-            sleep(properties.getRetryBackoff().toMillis());
         }
-        throw new ServiceException(500, "算法动态调度服务暂不可用");
+        routeUnavailableUntil.set(System.currentTimeMillis() + ROUTE_COOLDOWN_MS);
+        throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
     }
 
     public AlgorithmDistanceRespDTO distance(AlgorithmDistanceReqDTO request) {

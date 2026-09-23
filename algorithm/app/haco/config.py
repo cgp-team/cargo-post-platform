@@ -43,6 +43,9 @@ class HacoConfig:
     haco_time_limit: float = 4.0
     overall_time_limit: float = 5.0
 
+    # 确定性评估次数预算（None=只看时间）。CI/批量回归设有限值可消除抖动。
+    max_evaluations: int | None = None
+
     # deterministic greedy seed 的独立时间预算（秒）。
     # greedy seed 不应独占整个 HACO search budget：
     # 超时返回部分 seed（complete=False），由快速 repair 补齐后再进入主搜索。
@@ -116,6 +119,7 @@ class HacoConfig:
             ls_max_moves=_get(config, "ls_max_moves", cls.ls_max_moves),
             haco_time_limit=_get(config, "haco_time_limit", cls.haco_time_limit),
             overall_time_limit=_get(config, "overall_time_limit", cls.overall_time_limit),
+            max_evaluations=_get(config, "max_evaluations", cls.max_evaluations),
             greedy_seed_time_limit=_get(config, "greedy_seed_time_limit", cls.greedy_seed_time_limit),
             tau_min=_get(config, "tau_min", cls.tau_min),
             tau_max=_get(config, "tau_max", cls.tau_max),
