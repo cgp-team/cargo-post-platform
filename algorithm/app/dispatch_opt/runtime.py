@@ -47,6 +47,7 @@ class DispatchTripPayload(BaseModel):
     vehicleAccess: bool = True
     userAccess: bool = True
     driverShiftOk: bool = True
+    remainingPlannedStops: tuple[str, ...] = ()
 
 
 class DispatchOrderPayload(BaseModel):
@@ -66,6 +67,8 @@ class DispatchOrderPayload(BaseModel):
     weightKg: float | None = Field(default=None, ge=0)
     volumeM3: float | None = Field(default=None, ge=0)
     serviceDurationS: float = 300.0
+    # None=按 trip 剩余调度站点自动判定顺路；True/False=显式覆盖
+    onPlannedRoute: bool | None = None
 
 
 class DispatchAllocatePayload(BaseModel):
@@ -116,6 +119,7 @@ def _to_trip_view(payload: DispatchTripPayload, coords: dict[str, Point]) -> Tri
         vehicle_access=payload.vehicleAccess,
         user_access=payload.userAccess,
         driver_shift_ok=payload.driverShiftOk,
+        remaining_planned_stops=tuple(payload.remainingPlannedStops),
     )
 
 
@@ -140,6 +144,7 @@ def build_dispatch_request(payload: DispatchAllocatePayload) -> DispatchRequest:
             weight_kg=order.weightKg,
             volume_m3=order.volumeM3,
             service_duration_s=order.serviceDurationS,
+            on_planned_route=order.onPlannedRoute,
         ),
         current_trips=[_to_trip_view(t, coords) for t in payload.currentTrips],
         future_trips=[_to_trip_view(t, coords) for t in payload.futureTrips],

@@ -47,4 +47,24 @@ public interface ShiftExecutionMapper extends BaseMapperX<ShiftExecutionDO> {
                 .inIfPresent(ShiftExecutionDO::getVehicleId, vehicleIds)
                 .orderByDesc(ShiftExecutionDO::getId));
     }
+
+    /**
+     * 已装件数原子 +1：防并发装车丢更新。
+     */
+    default int incrementLoadedCount(Long id) {
+        return update(new ShiftExecutionDO(),
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ShiftExecutionDO>()
+                        .eq(ShiftExecutionDO::getId, id)
+                        .setSql("loaded_count = IFNULL(loaded_count, 0) + 1"));
+    }
+
+    /**
+     * 已装件数原子 -1（地板 0）：防并发妥投/核销丢更新。
+     */
+    default int decrementLoadedCount(Long id) {
+        return update(new ShiftExecutionDO(),
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ShiftExecutionDO>()
+                        .eq(ShiftExecutionDO::getId, id)
+                        .setSql("loaded_count = GREATEST(IFNULL(loaded_count, 0) - 1, 0)"));
+    }
 }

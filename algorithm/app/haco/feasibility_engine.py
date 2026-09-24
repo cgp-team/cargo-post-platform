@@ -54,6 +54,9 @@ class FeasibilityContext:
     max_detour_km: float | None = None
     trip_detour_remaining_m: float | None = None
     expected_task_ids: set[str] | None = None
+    # 重量/体积硬约束（未配置时 None = 不检查，兼容旧 itemCount 口径）
+    cargo_weight_capacity_kg: float | None = None
+    cargo_volume_capacity_m3: float | None = None
 
     def merged_into(self, engine: "FeasibilityEngine") -> "FeasibilityContext":
         return FeasibilityContext(
@@ -73,6 +76,16 @@ class FeasibilityContext:
                 else engine._trip_detour_remaining_m
             ),
             expected_task_ids=self.expected_task_ids,
+            cargo_weight_capacity_kg=(
+                self.cargo_weight_capacity_kg
+                if self.cargo_weight_capacity_kg is not None
+                else engine._cargo_weight_capacity_kg
+            ),
+            cargo_volume_capacity_m3=(
+                self.cargo_volume_capacity_m3
+                if self.cargo_volume_capacity_m3 is not None
+                else engine._cargo_volume_capacity_m3
+            ),
         )
 
 
@@ -92,6 +105,11 @@ class FeasibilityEngine:
         max_duration: float | None = None,
         max_detour_km: float | None = None,
         trip_detour_remaining_m: float | None = None,
+        cargo_weight_capacity_kg: float | None = None,
+        cargo_volume_capacity_m3: float | None = None,
+        # 按车覆盖的重量/体积运力（key=vehicle_index）；未配置车辆不检查
+        cargo_weight_capacities: dict[int, float] | None = None,
+        cargo_volume_capacities: dict[int, float] | None = None,
         context: "FeasibilityContext | None" = None,
     ):
         self._station_map = station_map
@@ -99,6 +117,10 @@ class FeasibilityEngine:
         self._max_duration = max_duration
         self._max_detour_km = max_detour_km
         self._trip_detour_remaining_m = trip_detour_remaining_m
+        self._cargo_weight_capacity_kg = cargo_weight_capacity_kg
+        self._cargo_volume_capacity_m3 = cargo_volume_capacity_m3
+        self._cargo_weight_capacities = cargo_weight_capacities or {}
+        self._cargo_volume_capacities = cargo_volume_capacities or {}
         self._context = context
 
     def check(
@@ -114,6 +136,8 @@ class FeasibilityEngine:
         max_duration: float | None = None,
         max_detour_km: float | None = None,
         trip_detour_remaining_m: float | None = None,
+        cargo_weight_capacity_kg: float | None = None,
+        cargo_volume_capacity_m3: float | None = None,
         context: "FeasibilityContext | None" = None,
     ) -> FeasibilityResult:
 
@@ -131,6 +155,10 @@ class FeasibilityEngine:
                 max_detour_km = merged.max_detour_km
             if trip_detour_remaining_m is None:
                 trip_detour_remaining_m = merged.trip_detour_remaining_m
+            if cargo_weight_capacity_kg is None:
+                cargo_weight_capacity_kg = merged.cargo_weight_capacity_kg
+            if cargo_volume_capacity_m3 is None:
+                cargo_volume_capacity_m3 = merged.cargo_volume_capacity_m3
         if station_map is None:
             station_map = self._station_map
         if matrix is None:
@@ -141,6 +169,15 @@ class FeasibilityEngine:
             max_detour_km = self._max_detour_km
         if trip_detour_remaining_m is None:
             trip_detour_remaining_m = self._trip_detour_remaining_m
+        if cargo_weight_capacity_kg is None:
+            cargo_weight_capacity_kg = self._cargo_weight_capacity_kg
+        if cargo_volume_capacity_m3 is None:
+            cargo_volume_capacity_m3 = self._cargo_volume_capacity_m3
+        # 按车覆盖优先于全局默认（同 cargo_capacity 的 per-vehicle 口径）
+        if cargo_weight_capacity_kg is None and self._cargo_weight_capacities:
+            cargo_weight_capacity_kg = self._cargo_weight_capacities.get(route.vehicle_index)
+        if cargo_volume_capacity_m3 is None and self._cargo_volume_capacities:
+            cargo_volume_capacity_m3 = self._cargo_volume_capacities.get(route.vehicle_index)
 
         checks = (
             self._check_terminal_return(route),
@@ -156,6 +193,8 @@ class FeasibilityEngine:
                 tasks_by_id,
                 cargo_capacity,
                 initial_cargo_load,
+                cargo_weight_capacity_kg=cargo_weight_capacity_kg,
+                cargo_volume_capacity_m3=cargo_volume_capacity_m3,
             ),
         )
 
@@ -383,6 +422,8 @@ class FeasibilityEngine:
         tasks_by_id: dict[str, TaskBlock],
         capacity: int,
         initial_load: int,
+        cargo_weight_capacity_kg: float | None = None,
+        cargo_volume_capacity_m3: float | None = None,
     ) -> FeasibilityResult:
         """货物容量检查，口径与 baseline OR-Tools / validators 一致：
 
@@ -392,11 +433,15 @@ class FeasibilityEngine:
         - CargoOut（出程派送累计）：所有 DELIVER（含 SHIPMENT 送达与 PRELOADED）累计 ≤ capacity。
         - CargoIn（返程揽收累计）：所有 PICKUP（含 SHIPMENT 揽收）累计 ≤ capacity。
         - PRELOADED 派送总量 ≤ initial_cargo_load，否则 PRELOAD_INSUFFICIENT。
+        - 重量/体积（可选）：车辆配置了 cargoWeight/VolumeCapacity 时，
+          车内净重/净体积按 PICKUP+ / DELIVER- 累计，超限即不可行。
         """
         cargo_load = initial_load
         cargo_out = 0
         cargo_in = 0
         preloaded_delivered = 0
+        weight_load = 0.0
+        volume_load = 0.0
 
         for event in route.events:
 
@@ -404,16 +449,22 @@ class FeasibilityEngine:
                 continue
 
             task = tasks_by_id[event.task_id]
+            task_weight = float(task.weight_kg or 0.0)
+            task_volume = float(task.volume_m3 or 0.0)
 
             if task.task_type == TaskType.SHIPMENT:
 
                 if event.event_type == EventType.PICKUP:
                     cargo_load += task.size
                     cargo_in += task.size
+                    weight_load += task_weight
+                    volume_load += task_volume
 
                 elif event.event_type == EventType.DELIVER:
                     cargo_load -= task.size
                     cargo_out += task.size
+                    weight_load -= task_weight
+                    volume_load -= task_volume
 
             elif task.task_type == TaskType.DELIVERY:
 
@@ -430,6 +481,8 @@ class FeasibilityEngine:
 
                 if event.event_type == EventType.PICKUP:
                     cargo_in += task.size
+                    weight_load += task_weight
+                    volume_load += task_volume
 
             if cargo_load < 0:
                 return FeasibilityResult(
@@ -441,6 +494,24 @@ class FeasibilityEngine:
                 return FeasibilityResult(
                     False,
                     "CARGO_CAPACITY_EXCEEDED",
+                )
+
+            if (
+                cargo_weight_capacity_kg is not None
+                and weight_load > cargo_weight_capacity_kg + 1e-6
+            ):
+                return FeasibilityResult(
+                    False,
+                    "CARGO_WEIGHT_CAPACITY_EXCEEDED",
+                )
+
+            if (
+                cargo_volume_capacity_m3 is not None
+                and volume_load > cargo_volume_capacity_m3 + 1e-6
+            ):
+                return FeasibilityResult(
+                    False,
+                    "CARGO_VOLUME_CAPACITY_EXCEEDED",
                 )
 
         if cargo_out > capacity:

@@ -17,7 +17,7 @@ from .models import (
     TripCandidate,
     TripExecutionState,
 )
-from .trip_lock import LockDecision, TripLockPolicy
+from .trip_lock import LockDecision, TripLockPolicy, is_on_planned_route
 
 
 @dataclass
@@ -32,6 +32,7 @@ class TripContext:
     trip_detour_remaining_m: float = 5000.0
     passenger_impact_budget_s: float = 300.0
     gap_index: int = 0
+    remaining_planned_stops: tuple[str, ...] = ()
     raw: Any = None
 
 
@@ -73,16 +74,31 @@ class TripCandidateSelector:
         is_high_value: bool = False,
         cost_for_current: dict[int, Any] | None = None,
         efficiency_for_current: dict[int, float | None] | None = None,
+        order_pickup: str | None = None,
+        order_delivery: str | None = None,
+        on_planned_route_for: dict[int, bool] | None = None,
     ) -> SelectionResult:
         candidates: list[TripCandidate] = []
         cost_for_current = cost_for_current or {}
         efficiency_for_current = efficiency_for_current or {}
+        on_planned_route_for = on_planned_route_for or {}
 
         # 1) current trip
         for ctx in current_trips:
+            if ctx.vehicle_id in on_planned_route_for:
+                on_route = on_planned_route_for[ctx.vehicle_id]
+            elif order_pickup and order_delivery:
+                on_route = is_on_planned_route(
+                    pickup=order_pickup,
+                    delivery=order_delivery,
+                    remaining_planned_stops=ctx.remaining_planned_stops,
+                )
+            else:
+                on_route = False
             lock: LockDecision = self.lock_policy.decide(
                 ctx.execution_state,
                 is_high_value=is_high_value,
+                on_planned_route=on_route,
                 cost=cost_for_current.get(ctx.vehicle_id),
                 efficiency=efficiency_for_current.get(ctx.vehicle_id),
             )

@@ -215,8 +215,16 @@ def test_deterministic_same_input_same_output() -> None:
         + [cargo_order(i, OrderType.DELIVERY, f"S{i % 9 + 1}") for i in range(1, 4)]
         + [cargo_order(i, OrderType.PICKUP, f"S{(i + 5) % 9 + 1}") for i in range(4, 7)]
     )
-    first = solve(make_request(orders, vehicle_count=3))
-    second = solve(make_request(orders, vehicle_count=3))
+    # 确定性预算：用 max_evaluations 迭代上限替代 wall-clock，消除机器负载抖动导致的假失败
+    def _req():
+        req = make_request(orders, vehicle_count=3)
+        req.algorithmConfig.max_evaluations = 400
+        req.algorithmConfig.haco_time_limit = 30.0
+        req.algorithmConfig.overall_time_limit = 30.0
+        return req
+
+    first = solve(_req())
+    second = solve(_req())
     assert first.status == second.status == "feasible"
     assert first.total_distance == second.total_distance
     assert [plan.model_dump() for plan in first.vehicle_plans] == [

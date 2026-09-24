@@ -859,12 +859,112 @@ def generate_insertion_candidates(
             heuristic_score=heuristic_score,
         ))
 
-    candidates.sort(key=lambda x: x.heuristic_score)
+    # 默认启发式排序；可选 ML Branch Ranker 重排（只重排不硬砍）
+    # 注意：predict 是 O(n)，大 candidate_size 也可进 ML；原先 <1000 限制会把 seed 排除在外
+    ml_mode = getattr(generate_insertion_candidates, "ml_mode", "off")  # off|auto|force
+    use_ml = ml_mode != "off"
+    selected = None
+
+    # ── 全局对齐：1-step blocked 前瞻（与训练标签同口径）────────
+    placed_ids: set[str] = set()
+    for _r in routes:
+        placed_ids |= set(getattr(_r, "placements", {}) or {})
+    n_unplaced = max(0, len(tasks_by_id) - len(placed_ids))
+    other_tasks = [t for tid, t in tasks_by_id.items() if tid not in placed_ids and tid != task.task_id]
+
+    def _blocked_of(cand) -> int:
+        # 仅在显式开启时做嵌套前瞻；默认关闭，避免递归 generate 污染解
+        if getattr(generate_insertion_candidates, "_in_lookahead", False):
+            return 0
+        if not getattr(generate_insertion_candidates, "lookahead_blocked", False):
+            return 0
+        if not other_tasks:
+            return 0
+        generate_insertion_candidates._in_lookahead = True
+        old_ml = getattr(generate_insertion_candidates, "ml_mode", "off")
+        generate_insertion_candidates.ml_mode = "off"
+        try:
+            trial = routes[cand.vehicle_index].copy()
+            trial.insert_task(task, cand.pickup_index, cand.delivery_index)
+            blocked = 0
+            for other in other_tasks[:2]:
+                try:
+                    cs = generate_insertion_candidates(
+                        other, [trial], tasks_by_id, feasibility_engine, station_map, matrix,
+                        passenger_capacities, cargo_capacities,
+                        initial_passenger_loads, initial_cargo_loads,
+                        candidate_size=4,
+                    )
+                    if not cs:
+                        blocked += 1
+                except Exception:
+                    blocked += 1
+            return blocked
+        except Exception:
+            return 9
+        finally:
+            generate_insertion_candidates._in_lookahead = False
+            generate_insertion_candidates.ml_mode = old_ml
+
+    # 只对廉价序 top 做前瞻，控成本；默认 lookahead_blocked=False
+    # 注意：排序分支必须与 use_ml 绑定——off 路径保持纯启发式，保证 A/B 基线干净
+    try:
+        from .insertion_features import product_label_key
+        cheap_sorted = sorted(candidates, key=lambda x: x.heuristic_score)
+        blocked_map = {}
+        if getattr(generate_insertion_candidates, "lookahead_blocked", False):
+            for cand in cheap_sorted[:12]:
+                blocked_map[id(cand)] = _blocked_of(cand)
+        for cand in candidates:
+            if id(cand) not in blocked_map:
+                blocked_map[id(cand)] = 0
+    except Exception:
+        blocked_map = {}
+    if use_ml:
+        try:
+            from .ml_ranker import get_ranker
+
+            rk = get_ranker()
+            if ml_mode == "force" and not rk.can_rank:
+                rk.enable_force_rank()
+            if rk.can_rank:
+                coord = {
+                    sid: (getattr(st, "latitude", 0.0), getattr(st, "longitude", 0.0))
+                    for sid, st in station_map.items()
+                }
+                dep_coord = coord.get(
+                    getattr(routes[0], "depot_station", ""),
+                    next(iter(coord.values()), (0.0, 0.0)),
+                ) if routes else next(iter(coord.values()), (0.0, 0.0))
+                n_gaps = 0.0
+                try:
+                    n_gaps = float(len(routes[0].get_gap_ranges()))
+                except Exception:
+                    pass
+                candidates = rk.rerank(
+                    candidates,
+                    task=task,
+                    route=routes[0] if routes else None,
+                    routes_by_vi={r.vehicle_index: r for r in routes},
+                    coord=coord,
+                    matrix=matrix,
+                    dep=dep_coord,
+                    n_unplaced=float(n_unplaced),
+                    n_gaps=n_gaps,
+                    blocked_map=blocked_map,
+                )
+            else:
+                candidates.sort(key=lambda x: x.heuristic_score)
+        except Exception:
+            candidates.sort(key=lambda x: x.heuristic_score)
+    else:
+        candidates.sort(key=lambda x: x.heuristic_score)
     selected = candidates[:max(1, candidate_size)]
     generate_insertion_candidates.last_stats = {
         "screened_count": screened_count,
         "feasible_count": feasible_count,
         "selected_count": len(selected),
+        "ml_mode": ml_mode,
     }
     return selected
 

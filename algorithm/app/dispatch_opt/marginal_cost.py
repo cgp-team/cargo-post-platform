@@ -63,13 +63,13 @@ class DefaultCostModel:
     单价常数集中在一处，禁止各模块私自加权。不是业务报价。
     """
     # 元当量 / km（燃油+磨损代理，可被真实 CostModel 替换）
-    yuan_per_km: float = 1.0
+    yuan_per_km: float = 2.8
     # 元当量 / 分钟（司机+车辆时间）
-    yuan_per_minute: float = 0.5
+    yuan_per_minute: float = 0.45
     # 乘客影响额外惩罚（元当量 / 分钟·人）
-    yuan_per_passenger_minute: float = 0.8
+    yuan_per_passenger_minute: float = 0.36
     # 每次交接固定操作成本
-    yuan_per_handover: float = 2.0
+    yuan_per_handover: float = 8.0
     # 等待时间折扣（低于在途时间）
     waiting_discount: float = 0.3
     # 风险系数

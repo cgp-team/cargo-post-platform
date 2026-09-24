@@ -409,11 +409,27 @@ class CachedRealRouteProvider:
         return self.route(waypoints[0], waypoints[-1], waypoints=waypoints[1:-1])
 
 
+# 进程级单例：GraphHopper 连接与 formal 路网缓存跨请求复用。
+# 原先每次 allocate/plan 都 new 一份 provider，缓存完全失效、GH 客户端反复建连。
+_DEFAULT_PROVIDER: RouteCostProvider | None = None
+
+
 def default_route_cost_provider(
     engine: MapRoutingEngine | None = None,
+    *,
+    refresh: bool = False,
 ) -> RouteCostProvider:
-    """生产默认：Cache(Local/GraphHopper/AMap) provider；拿不到 formal 时返回 UNKNOWN。"""
-    return CachedRealRouteProvider(MapEngineRouteCostProvider(engine or build_default_map_engine()))
+    """生产默认：Cache(Local/GraphHopper/AMap) provider；拿不到 formal 时返回 UNKNOWN。
+
+    进程内单例；`refresh=True` 强制重建（测试或切换 GRAPHHOPPER_URL 时用）。
+    """
+    global _DEFAULT_PROVIDER
+    if _DEFAULT_PROVIDER is not None and not refresh and engine is None:
+        return _DEFAULT_PROVIDER
+    provider = CachedRealRouteProvider(MapEngineRouteCostProvider(engine or build_default_map_engine()))
+    if engine is None:
+        _DEFAULT_PROVIDER = provider
+    return provider
 
 
 def build_default_map_engine() -> MapRoutingEngine:
@@ -436,14 +452,31 @@ def build_default_map_engine() -> MapRoutingEngine:
 def build_formal_distance_matrix(
     points: Sequence[Point],
     provider: RouteCostProvider | None = None,
+    *,
+    max_workers: int = 8,
 ) -> tuple[list[list[float]] | None, str]:
-    """站点两两 formal 距离矩阵（km）。全部 formal 才返回矩阵；否则 (None, reason)。"""
+    """站点两两 formal 距离矩阵（km）。全部 formal 才返回矩阵；否则 (None, reason)。
+
+    并行查路网：O(n²) 串行在 30~100 站时会拖垮 10s 契约预算。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     prov = provider or default_route_cost_provider()
     n = len(points)
     m = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            rc = prov.route(points[i], points[j])
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    if not pairs:
+        return m, "FORMAL_MATRIX"
+
+    def _pair(ij: tuple[int, int]) -> tuple[int, int, RouteCost]:
+        i, j = ij
+        return i, j, prov.route(points[i], points[j])
+
+    workers = max(1, min(max_workers, len(pairs)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="formal-matrix") as pool:
+        futures = [pool.submit(_pair, ij) for ij in pairs]
+        for fut in as_completed(futures):
+            i, j, rc = fut.result()
             if not rc.is_formal:
                 return None, f"NOT_FORMAL:{rc.reason_code}"
             km = rc.distance_m / 1000.0

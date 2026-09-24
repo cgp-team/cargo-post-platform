@@ -53,6 +53,8 @@ class DispatchOrder:
     weight_kg: float | None = None
     volume_m3: float | None = None
     service_duration_s: float = 300.0
+    # None=按 trip 剩余调度站点自动判定；True/False=调用方显式覆盖
+    on_planned_route: bool | None = None
 
 
 @dataclass
@@ -80,6 +82,8 @@ class TripView:
     vehicle_access: bool = True
     user_access: bool = True
     driver_shift_ok: bool = True
+    # 剩余调度路线站点（mandatory 未到站 + 已排服务点）；用于顺路插入判定
+    remaining_planned_stops: tuple[str, ...] = ()
     raw: object | None = None
 
 

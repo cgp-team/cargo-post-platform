@@ -43,6 +43,7 @@ class AllocationRequest:
     delivery_service_point: str | None = None
     original_pickup: str | None = None
     original_delivery: str | None = None
+    on_planned_route: bool | None = None
 
 
 @dataclass
@@ -202,6 +203,13 @@ def allocate_new_order(
             )
             for vehicle_id, breakdown in cost_for_current.items()
         },
+        order_pickup=req.pickup_service_point or req.pickup_station,
+        order_delivery=req.delivery_service_point or req.delivery_station,
+        on_planned_route_for=(
+            {t.vehicle_id: req.on_planned_route for t in current_trips}
+            if req.on_planned_route is not None
+            else None
+        ),
     )
     exp = (
         explain_choice(result.chosen, result.candidates)

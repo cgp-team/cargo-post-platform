@@ -89,6 +89,7 @@ class CargoHandoverTest {
     @Test
     void confirm_advances_leg1_completed_and_leg2_in_transit_atomically() {
         stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
+        when(handoverMapper.update(any(TransportHandoverDO.class), any())).thenReturn(1);
         when(legMapper.selectById(2L)).thenReturn(TransportLegDO.builder()
                 .id(2L).orderId(100L).planId(55L).legSequence(2).driverId(2L).vehicleId(22L)
                 .status(TransportLegStatusEnum.ASSIGNED.getStatus()).build());
@@ -98,9 +99,9 @@ class CargoHandoverTest {
 
         service.confirmHandover(9L, 2L, "photo.jpg");
 
-        verify(handoverMapper).updateById(argThat((TransportHandoverDO h) ->
+        verify(handoverMapper).update(argThat((TransportHandoverDO h) ->
                 TransportHandoverStatusEnum.COMPLETED.getStatus().equals(h.getStatus())
-                        && h.getHandoverCompletedAt() != null && h.getConfirmedBy() == 2L));
+                        && h.getHandoverCompletedAt() != null && h.getConfirmedBy() == 2L), any());
         verify(multiLegService).forceLegStatus(eq(1L), eq(TransportLegStatusEnum.COMPLETED), anyString());
         verify(multiLegService).forceLegStatus(eq(2L), eq(TransportLegStatusEnum.IN_TRANSIT), anyString());
         // 最后一段接货 → 订单进入运输中（不得直接置完成）
@@ -112,6 +113,7 @@ class CargoHandoverTest {
     void confirm_is_idempotent_when_already_completed() {
         stubHandover(TransportHandoverStatusEnum.COMPLETED.getStatus());
         service.confirmHandover(9L, 2L, null);
+        verify(handoverMapper, never()).update(any(TransportHandoverDO.class), any());
         verify(handoverMapper, never()).updateById(any(TransportHandoverDO.class));
         verifyNoInteractions(multiLegService);
     }

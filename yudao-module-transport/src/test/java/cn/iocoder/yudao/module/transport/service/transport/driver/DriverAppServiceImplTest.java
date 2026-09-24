@@ -464,10 +464,8 @@ class DriverAppServiceImplTest {
         reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         driverAppService.pickupConfirm(reqVO);
 
-        // 订单状态推进已发车 + 执行记录已装件数 +1
-        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
-        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+        // 订单状态推进已发车 + 执行记录已装件数 +1（SQL 原子自增）
+        verify(shiftExecutionMapper).incrementLoadedCount(50L);
     }
 
     @Test
@@ -490,9 +488,7 @@ class DriverAppServiceImplTest {
         driverAppService.pickupConfirm(reqVO);
 
         // 已发车订单装车后仍保持已发车（loaded 记录 +1），deliver 仍可 3→4
-        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
-        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+        verify(shiftExecutionMapper).incrementLoadedCount(50L);
     }
 
     @Test
@@ -516,9 +512,7 @@ class DriverAppServiceImplTest {
         reqVO.setDriverPhotoUrl("http://example.com/photo.jpg");
         driverAppService.pickupConfirm(reqVO);
 
-        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
-        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+        verify(shiftExecutionMapper).incrementLoadedCount(50L);
     }
 
     @Test
@@ -665,9 +659,7 @@ class DriverAppServiceImplTest {
         driverAppService.pickupVerify(reqVO);
 
         // 核销成功后已装件数 -1（与 deliver 回减口径一致）
-        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
-        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+        verify(shiftExecutionMapper).decrementLoadedCount(50L);
     }
 
     @Test
@@ -733,9 +725,7 @@ class DriverAppServiceImplTest {
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(transportOrderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.COMPLETED.getStatus(), orderCaptor.getValue().getStatus());
-        ArgumentCaptor<ShiftExecutionDO> loadedCaptor = ArgumentCaptor.forClass(ShiftExecutionDO.class);
-        verify(shiftExecutionMapper).updateById(loadedCaptor.capture());
-        assertEquals(1, loadedCaptor.getValue().getLoadedCount());
+        verify(shiftExecutionMapper).decrementLoadedCount(50L);
     }
 
     @Test

@@ -13,7 +13,10 @@ class HacoConfig:
     """HACO-CPS 运行参数。"""
     # ACO 核心参数
     ant_count: int = 24
-    max_iterations: int = 50
+    # 实测：ACO 加深（>8）收益为负，省下时间给 ALNS 精修（见 artifacts/ab_depth_sweep.py）
+    max_iterations: int = 8
+    # >0 时钉死 ALNS 迭代；0=按 max(30, min(200, max_iterations*3)) 自适应；<0 关闭
+    alns_iterations: int = 0
     alpha: float = 1.0           # task-to-task 信息素权重
     alpha_gap: float = 0.5       # task-to-gap 信息素权重
     beta: float = 3.0            # 启发式权重
@@ -42,6 +45,9 @@ class HacoConfig:
     # 时间预算（秒）
     haco_time_limit: float = 4.0
     overall_time_limit: float = 5.0
+
+    # 确定性评估次数预算（None=只看时间）。CI/批量回归设有限值可消除抖动。
+    max_evaluations: int | None = None
 
     # deterministic greedy seed 的独立时间预算（秒）。
     # greedy seed 不应独占整个 HACO search budget：
@@ -73,6 +79,10 @@ class HacoConfig:
     # 默认 2km；车辆闲置运力充足时可放宽到 3km（后端按车辆闲置运力传 max_detour_km 覆盖）。
     max_detour_km: float = 2.0
 
+    # ML Branch Ranker：off|auto|force（force=A/B 实验，只重排不硬砍）
+    # 默认 auto：insertion_ranker_osm_v2 top3≥0.80 已过 rank 门
+    use_branch_ranker: str = "auto"
+
     # 自适应参数
     alpha_min: float = 0.5
     alpha_max: float = 3.0
@@ -100,6 +110,7 @@ class HacoConfig:
         return cls(
             ant_count=_get(config, "ant_count", cls.ant_count),
             max_iterations=_get(config, "max_iterations", cls.max_iterations),
+            alns_iterations=_get(config, "alns_iterations", cls.alns_iterations),
             alpha=_get(config, "alpha", cls.alpha),
             beta=_get(config, "beta", cls.beta),
             rho=_get(config, "rho", cls.rho),
@@ -116,6 +127,7 @@ class HacoConfig:
             ls_max_moves=_get(config, "ls_max_moves", cls.ls_max_moves),
             haco_time_limit=_get(config, "haco_time_limit", cls.haco_time_limit),
             overall_time_limit=_get(config, "overall_time_limit", cls.overall_time_limit),
+            max_evaluations=_get(config, "max_evaluations", cls.max_evaluations),
             greedy_seed_time_limit=_get(config, "greedy_seed_time_limit", cls.greedy_seed_time_limit),
             tau_min=_get(config, "tau_min", cls.tau_min),
             tau_max=_get(config, "tau_max", cls.tau_max),
@@ -134,4 +146,5 @@ class HacoConfig:
             target_feasible_ratio=_get(config, "target_feasible_ratio", cls.target_feasible_ratio),
             restart_ratio=_get(config, "restart_ratio", cls.restart_ratio),
             max_detour_km=_get(config, "max_detour_km", cls.max_detour_km),
+            use_branch_ranker=_get(config, "use_branch_ranker", cls.use_branch_ranker),
         )

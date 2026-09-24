@@ -21,9 +21,28 @@ from .models import (
     TripCandidate,
     TripExecutionState,
 )
-from .gap_detour import calculate_gap_detour, can_detour_within_gap
+from .gap_detour import (
+    ChainedGapDetourResult,
+    ChainedGapSegment,
+    GapDetourResult,
+    ShortcutDecision,
+    calculate_chained_gap_detour,
+    calculate_gap_detour,
+    can_detour_within_gap,
+    prefer_shortcut_to_next_stop,
+)
 from .marginal_cost import CostModel, DefaultCostModel, MarginalCostEvaluator
-from .trip_lock import HighValueRealtimeInsertPolicy, TripLockPolicy
+from .prescreen import (
+    PrescreenDecision,
+    PrescreenOrderInput,
+    PrescreenResult,
+    estimate_incremental_cost,
+    prescreen_order,
+)
+from .order_lifecycle import OrderLifecycle, OrderState
+from .sla_commit import SlaDecision, SlaLevel, evaluate_sla
+from .transfer_graph import LineSpec, TransferGraph, TransferPath, suggest_multileg
+from .trip_lock import HighValueRealtimeInsertPolicy, TripLockPolicy, is_on_planned_route
 from .candidate_selector import RemainingDispatchAllocator, TripCandidateSelector
 from .handover import TransportChainEvaluator, can_handover
 from .segment_completion import TaskSegmentCompletionValidator
@@ -93,7 +112,28 @@ __all__ = [
     "TripCandidate",
     "TripExecutionState",
     "calculate_gap_detour",
+    "calculate_chained_gap_detour",
     "can_detour_within_gap",
+    "prefer_shortcut_to_next_stop",
+    "GapDetourResult",
+    "ShortcutDecision",
+    "ChainedGapSegment",
+    "ChainedGapDetourResult",
+    "is_on_planned_route",
+    "prescreen_order",
+    "PrescreenOrderInput",
+    "PrescreenResult",
+    "PrescreenDecision",
+    "estimate_incremental_cost",
+    "OrderLifecycle",
+    "OrderState",
+    "SlaDecision",
+    "SlaLevel",
+    "evaluate_sla",
+    "LineSpec",
+    "TransferGraph",
+    "TransferPath",
+    "suggest_multileg",
     "CostModel",
     "DefaultCostModel",
     "MarginalCostEvaluator",

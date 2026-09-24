@@ -68,7 +68,8 @@ class RouteGenome:
     核心原则：
     1. events 是唯一真实路线顺序。
     2. Passenger / Shipment 的 pickup 和 delivery 可以位于不同位置。
-    3. Skeleton PASS 是固定骨架事件。
+    3. Skeleton PASS 是固定骨架事件：每站必停拉客（计划停靠，不是过站不停）。
+       公交线路上的每一个站点都必须按序停靠，禁止任何跳站/掠站。
     4. 不再把 Task -> Gap 作为真实路线表示。
     5. 普通任务插入必须走 Gap-aware 校验，禁止绕开 gap 穿透 skeleton。
     """
@@ -113,13 +114,15 @@ class RouteGenome:
         self.trip_detour_budget_m: float | None = None
 
     def copy(self) -> "RouteGenome":
-        """浅拷贝不可变事件 + 独立 placements/skeleton，禁止共享可变对象串改。"""
-        result = RouteGenome(
-            vehicle_index=self.vehicle_index,
-            vehicle_id=self.vehicle_id,
-            depot_station=self.depot_station,
-            skeleton=list(self.skeleton),
-        )
+        """浅拷贝不可变事件 + 独立 placements/skeleton。
+
+        跳过 __init__（避免按 skeleton 重建一遍 events 再覆盖）——ALNS 热路径。
+        """
+        result = object.__new__(RouteGenome)
+        result.vehicle_index = self.vehicle_index
+        result.vehicle_id = self.vehicle_id
+        result.depot_station = self.depot_station
+        result.skeleton = list(self.skeleton)
         # RouteEvent / TaskPlacement 均为 frozen，list/dict 浅拷贝即可隔离
         result.events = list(self.events)
         result.placements = dict(self.placements)
@@ -249,6 +252,50 @@ class RouteGenome:
         if gaps:
             return len(gaps) - 1
         return 0
+
+    def _pass_index(self, station_id: str) -> int | None:
+        for i, e in enumerate(self.events):
+            if e.event_type == EventType.PASS and e.station_id == station_id:
+                return i
+        return None
+
+    def _skeleton_service_window_ok(
+        self,
+        task: TaskBlock,
+        pickup_index: int,
+        delivery_index: int | None,
+    ) -> tuple[bool, str | None]:
+        """骨架站客运上/下客必须贴着该站停靠（每站必停拉客）。
+
+        - **乘客**：BOARD/ALIGHT 只能落在该站 PASS 的紧邻窗口（±1 格），
+          禁止过站后再上客、过站绕回后再下客；
+        - **货运**：允许 Gap 间隙绕行 / 返程派送（服务点可以是村部等非骨架点，
+          也可以在回程再次服务骨架站），仅受 Gap 约束。
+        """
+        if not self.skeleton or task.task_type != TaskType.PASSENGER:
+            return True, None
+        skel = set(self.skeleton)
+
+        pu = task.pickup_station
+        if pu in skel:
+            pi = self._pass_index(pu)
+            if pi is not None and abs(pickup_index - pi) > 1:
+                return False, f"PICKUP_NOT_AT_PASS:{pu}"
+
+        if delivery_index is not None:
+            de = task.delivery_station
+            if de in skel:
+                di = self._pass_index(de)
+                if di is not None:
+                    if delivery_index >= len(self.events):
+                        # 约定：len(events) = “尽可能晚”（RETURN 前）。
+                        # 仅当下站是最后一个骨架站时，这才等价于贴站下客。
+                        last_skel = self.skeleton[-1] if self.skeleton else None
+                        if de != last_skel:
+                            return False, f"DELIVERY_NOT_AT_PASS:{de}"
+                    elif abs(delivery_index - di) > 1:
+                        return False, f"DELIVERY_NOT_AT_PASS:{de}"
+        return True, None
 
     def can_insert_into_gap(
         self,
@@ -477,6 +524,12 @@ class RouteGenome:
         gap_ok, gap_reason = self.can_insert_into_gap(pickup_index, delivery_index)
         if not gap_ok:
             raise ValueError(f"Gap violation: {gap_reason}")
+
+        win_ok, win_reason = self._skeleton_service_window_ok(
+            task, pickup_index, delivery_index
+        )
+        if not win_ok:
+            raise ValueError(f"Skeleton service window: {win_reason}")
 
         pickup_event = _pickup_event(task)
 

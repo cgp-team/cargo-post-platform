@@ -146,11 +146,20 @@ class TestPassengerCapacity:
         assert result.feasible is True
 
     def test_exceeds_capacity(self):
+        from app.haco.route_genome import EventType
+
         g = RouteGenome(0, 1, "D", skeleton=["S1", "S2"])
-        # Insert 3 passengers, capacity=2
+        # Insert 3 passengers, capacity=2；下标必须落在骨架 PASS ±1 窗口
+
+        def _pass_idx(sid: str) -> int:
+            for i, e in enumerate(g.events):
+                if e.station_id == sid and e.event_type == EventType.PASS:
+                    return i
+            return 1
+
         for i in range(3):
             p = _passenger(f"P{i}", "S1", "S2")
-            g.insert_task(p, 1 + i, 4 + i)
+            g.insert_task(p, _pass_idx("S1"), _pass_idx("S2") + 1)
         tasks = _tasks_by_id(*[_passenger(f"P{i}", "S1", "S2") for i in range(3)])
         engine = FeasibilityEngine()
         result = engine.check(g, tasks, passenger_capacity=2, cargo_capacity=10)

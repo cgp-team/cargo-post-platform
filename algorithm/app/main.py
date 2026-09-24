@@ -188,7 +188,10 @@ def validate_request(request: PlanRequest) -> JSONResponse | None:
     # 规模上限：orders 与 shipments 均计入订单数（每个 shipment 展开为 PICKUP+DELIVERY 两节点）
     total_orders = len(request.orders) + len(request.shipments)
     if len(request.stations) > MAX_STATIONS or total_orders > MAX_ORDERS or len(request.vehicles) > MAX_VEHICLES:
-        return error_response(413, "OVER_LIMIT", "超出规模上限（30 站点 / 25 订单 / 3 车）", request.requestId)
+        return error_response(
+            413, "OVER_LIMIT",
+            f"超出规模上限（{MAX_STATIONS} 站点 / {MAX_ORDERS} 订单 / {MAX_VEHICLES} 车）",
+            request.requestId)
     if not request.vehicles:
         return error_response(400, "INVALID_INPUT", "至少需要一台可用车辆", request.requestId)
 

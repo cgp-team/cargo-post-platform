@@ -124,6 +124,14 @@ def solve(
 
     station_map = {s.stationId: s for s in request.stations}
     station_map[request.depot.stationId] = request.depot
+    for v in request.vehicles:
+        for sid in (v.skeleton or []):
+            if sid not in station_map:
+                return SolveOutcome(
+                    status="infeasible",
+                    reason_code="SKELETON_STATION_MISSING",
+                    warnings=[f"SKELETON_STATION_NOT_IN_REQUEST:{sid}"],
+                )
 
     tasks = _encode_tasks(request)
     if not tasks:
@@ -164,6 +172,9 @@ def solve(
     )
 
     # 时间窗约束渗透进每一次内部 check（含服务时间）
+    # ML Branch Ranker 开关（off|auto|force）
+    generate_insertion_candidates.ml_mode = getattr(config, "use_branch_ranker", "off") or "off"
+
     engine = FeasibilityEngine(
         station_map=station_map,
         matrix=matrix,
@@ -422,8 +433,10 @@ def solve(
 
     # ── 收尾：ALNS + 再局部搜索 ─────────────────────────────
     alns_ms = 0.0
-    if not deadline.expired():
-        alns_iterations = max(30, min(200, config.max_iterations * 3))
+    # alns_iterations: 0=默认自适应；>0 钉死；<0 关闭（纯 ACO 深度对照）
+    _alns_cfg = int(getattr(config, "alns_iterations", 0) or 0)
+    if not deadline.expired() and _alns_cfg >= 0:
+        alns_iterations = _alns_cfg if _alns_cfg > 0 else max(30, min(200, config.max_iterations * 3))
         _t0 = time.perf_counter()
         refined = alns_search(
             best_routes, tasks_by_id, engine, station_map, matrix,
@@ -723,7 +736,7 @@ def _cheapest_insertion(
         if deadline is not None and deadline.expired():
             return _partial()  # 超时：返回已放置的部分（非完整解）
 
-        best = None  # (score, task, route_idx, pickup, delivery)
+        best = None  # (rank, task, route_idx, pickup, delivery)
         for task in remaining:
             if deadline is not None and deadline.expired():
                 return _partial()
@@ -743,12 +756,22 @@ def _cheapest_insertion(
             )
             cand_count += len(candidates)
             feas_count += min(len(candidates), 64)  # 近似：pool 上限 64 次全量检查
-            if candidates:
-                cand = candidates[0]
-                score = cand.heuristic_score
-                if best is None or score < best[0]:
+            if not candidates:
+                continue
+            # 最难任务优先（候选越少越先放）→ 产品优先级，避免先放简单任务把难任务堵死
+            hardness = len(candidates)
+            for cand in candidates:
+                # 与训练标签一致：pax → detour桶 → dist → dur（粗 detour 防厘米噪声）
+                score = (
+                    round(float(cand.passenger_impact), 3),
+                    round(float(cand.cargo_detour), 1),
+                    round(float(cand.delta_distance), 2),
+                    round(float(cand.delta_duration), 2),
+                )
+                rank = (hardness, score)
+                if best is None or rank < best[0]:
                     best = (
-                        score, task, cand.vehicle_index,
+                        rank, task, cand.vehicle_index,
                         cand.pickup_index, cand.delivery_index,
                     )
         if best is None:
@@ -1046,11 +1069,22 @@ def _precheck(request: PlanRequest) -> SolveOutcome | None:
         v.passengerCapacity - v.initialPassengerLoad
         for v in request.vehicles
     )
-    total_ccap = sum(
-        v.cargoCapacity - v.initialCargoLoad for v in request.vehicles
-    )
-    if passengers > total_pcap or deliveries > total_ccap or pickups > total_ccap:
+    if passengers > total_pcap:
         return SolveOutcome(status="infeasible", reason_code="OVER_CAPACITY")
+
+    total_ccap = sum(v.cargoCapacity for v in request.vehicles)
+    # 总需求硬上界（明显装不下直接拒）：配送需求 / 揽收需求 任一超总货仓
+    if deliveries > total_ccap or pickups > total_ccap:
+        return SolveOutcome(status="infeasible", reason_code="OVER_CAPACITY")
+
+    # 峰值载重预检（出程派送 → 返程揽收 timeline）：揽派复用时不按总和误判
+    peak = _estimate_peak_cargo_load(request)
+    if peak > total_ccap:
+        return SolveOutcome(
+            status="infeasible",
+            reason_code="OVER_CAPACITY",
+            warnings=[f"PEAK_CARGO_LOAD={peak}>{total_ccap}"],
+        )
 
     total_preloaded_delivery = sum(
         o.itemCount for o in request.orders
@@ -1071,6 +1105,42 @@ def _precheck(request: PlanRequest) -> SolveOutcome | None:
             status="infeasible", reason_code="TIME_WINDOW_EXCEEDED"
         )
     return None
+
+
+
+def _estimate_peak_cargo_load(request: PlanRequest) -> int:
+    """峰值载重：出程派送在前、返程揽收在后（净载荷复用货仓）。"""
+    peaks: list[int] = []
+    for v in request.vehicles:
+        stations = list(v.skeleton or [])
+        load = v.initialCargoLoad
+        peak = load
+        evs: list[tuple[int, int]] = []
+
+        def _sidx(sid: str | None) -> int:
+            if not sid:
+                return 10 ** 6
+            try:
+                return stations.index(sid)
+            except ValueError:
+                return 10 ** 5
+
+        for o in request.orders:
+            if o.orderType == OrderType.DELIVERY:
+                if o.cargoSource == CargoSource.PRELOADED:
+                    evs.append((0, +o.itemCount))  # 预装起点占用
+                evs.append((_sidx(o.stationId), -o.itemCount))
+            elif o.orderType == OrderType.PICKUP:
+                evs.append((_sidx(o.stationId) + 10_000, +o.itemCount))
+        for s in request.shipments:
+            evs.append((_sidx(s.pickupStationId) * 2, +s.quantity))
+            evs.append((_sidx(s.deliveryStationId) * 2 + 1, -s.quantity))
+        evs.sort(key=lambda x: x[0])
+        for _, delta in evs:
+            load += delta
+            peak = max(peak, load)
+        peaks.append(peak)
+    return max(peaks) if peaks else 0
 
 
 # ─── RouteGenome → VehiclePlan ───────────────────────────────

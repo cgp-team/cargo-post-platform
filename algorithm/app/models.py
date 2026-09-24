@@ -40,6 +40,7 @@ class StopAction(str, Enum):
     ALIGHT = "ALIGHT"
     DELIVER = "DELIVER"
     PICKUP = "PICKUP"
+    # 计划停靠拉客（骨架站每站必停），不是「路过不停」
     PASS = "PASS"
     RETURN = "RETURN"
 
@@ -109,7 +110,8 @@ class AlgorithmConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     ant_count: int = 24
-    max_iterations: int = 40
+    # ACO 深度：实测 2–8 即可，更深目标变差；收尾精修交给 ALNS
+    max_iterations: int = 8
     alpha: float = 1.0
     beta: float = 3.0
     rho: float = 0.1
