@@ -9,11 +9,18 @@ COPY requirements.txt .
 # pip 源做成构建参数：国内 self-hosted runner（deploy-dev）走默认清华镜像；
 # GitHub 托管 runner（ci container-validation）在海外，经 compose args / 环境变量切官方 PyPI，避免跨海拉镜像超时
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 主源失败则回退官方 PyPI（self-hosted 拉镜像源偶发超时）
 RUN pip install --no-cache-dir --timeout 120 --retries 5 \
     -i "${PIP_INDEX_URL}" \
+    --requirement requirements.txt \
+    || pip install --no-cache-dir --timeout 120 --retries 5 \
+    --index-url https://pypi.org/simple \
     --requirement requirements.txt
 
 COPY app ./app
+
+# 构建期导入自检：启动失败提前暴露，避免 deploy 阶段 60s 健康检查才报红
+RUN python -c "import app.main; import app.haco.ml_ranker; import app.haco.insertion_features; print('algorithm import ok')"
 
 EXPOSE 8000
 

@@ -391,9 +391,13 @@ jobs:
       # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）。
       # 失败自动诊断：trap ERR 打印 docker/compose/端口/目录诊断，不裸 exit 1。
       - name: Build & deploy algorithm
+        id: deploy_algorithm
         if: steps.changes.outputs.algorithm == 'true'
         run: |
           set -Eeuo pipefail
+          mkdir -p deploy-logs
+          # 全量 stdout/stderr 落盘，便于 upload-artifact（self-hosted 日志经常 BlobNotFound）
+          exec > >(tee -a deploy-logs/algorithm-deploy.log) 2>&1
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
           # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
           COMPOSE=(docker compose --progress=plain --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
@@ -501,6 +505,15 @@ jobs:
           HEALTH=$(curl -fsS --max-time 5 "http://127.0.0.1:${ALGO_PORT}/health" 2>/dev/null || echo "unreachable")
           echo "algorithm health: ${HEALTH}"
           echo "algorithm 部署完成"
+
+      - name: Upload algorithm deploy diagnostics
+        if: always() && steps.changes.outputs.algorithm == 'true' && steps.deploy_algorithm.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: algorithm-deploy-diagnostics
+          path: deploy-logs/
+          if-no-files-found: ignore
+          retention-days: 14
 
       # 后端 Redis 自愈：历史版本 jar 内 application-dev.yaml 曾默认指向上游公共演示 Redis，
       # 该类共享实例写命令被拒时（读命令正常，健康检查/监控看不出来），
