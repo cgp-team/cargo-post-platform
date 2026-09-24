@@ -1,0 +1,30 @@
+{
+  "features": [
+    "delta_distance",
+    "delta_duration",
+    "passenger_impact",
+    "cargo_detour",
+    "heuristic_score",
+    "is_passenger",
+    "is_shipment",
+    "is_delivery",
+    "is_pickup",
+    "task_size",
+    "task_weight",
+    "task_volume",
+    "economic_value",
+    "pickup_rel",
+    "delivery_rel",
+    "span_stops",
+    "n_events",
+    "n_placed",
+    "detour_budget_ratio",
+    "pax_onboard",
+    "road_km_pu_de",
+    "straight_km_pu_de",
+    "road_straight_ratio",
+    "span_km",
+    "n_unplaced",
+    "n_gaps"
+  ]
+}

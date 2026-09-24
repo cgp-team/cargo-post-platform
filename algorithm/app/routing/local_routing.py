@@ -107,6 +107,13 @@ class LocalRoutingEngine:
         self.speed_m_s = speed_m_s
         self.vehicle_profile = vehicle_profile
         self.version = version
+        self._adj_cache: dict | None = None
+
+    def _adj(self) -> dict:
+        # 邻接表只建一次（2M+ 节点时每次重建是数量级瓶颈）
+        if self._adj_cache is None:
+            self._adj_cache = self.graph.adjacency(self.vehicle_profile)
+        return self._adj_cache
 
     @property
     def available(self) -> bool:
@@ -182,24 +189,35 @@ class LocalRoutingEngine:
         nb, _ = self.graph.nearest_node(b)
         if na is None or nb is None:
             return None
-        adj = self.graph.adjacency(self.vehicle_profile)
+        adj = self._adj()
         dist: dict[str, float] = {na: 0.0}
         prev: dict[str, tuple[str, RoadEdge]] = {}
         pq: list[tuple[float, str]] = [(0.0, na)]
         seen: set[str] = set()
+        # A* 启发式 + 扩展上限：真实道路优先，巨图上避免全图展开
+        def _h(nid: str) -> float:
+            la, lo = self.graph.nodes.get(nid, (0.0, 0.0))
+            return haversine_m((la, lo), b)
+        expanded = 0
+        max_expand = 80000
         while pq:
             d, u = heapq.heappop(pq)
             if u in seen:
                 continue
             seen.add(u)
+            expanded += 1
             if u == nb:
                 break
+            if expanded > max_expand:
+                break
+            # d 是 f=g+h；扩展时必须用 dist[u] 作为真实 g
+            g_u = dist.get(u, 0.0)
             for e in adj.get(u, []):
-                nd = d + e.road_m
+                nd = g_u + e.road_m
                 if nd < dist.get(e.v, float("inf")):
                     dist[e.v] = nd
                     prev[e.v] = (u, e)
-                    heapq.heappush(pq, (nd, e.v))
+                    heapq.heappush(pq, (nd + _h(e.v), e.v))
         if nb not in dist and na != nb:
             return None
         edges_rev: list[RoadEdge] = []

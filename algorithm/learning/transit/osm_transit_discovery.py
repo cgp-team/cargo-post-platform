@@ -191,8 +191,9 @@ def _parse_way(data, strings):
 
 
 def _parse_relation(data, strings):
+    """OSM PBF Relation：members 是 repeated Member 子消息（非 packed）。"""
     rid, keys, vals = 0, [], []
-    mem_ids, mem_types, mem_roles = [], [], []
+    roles_sid, mem_deltas, mem_types = [], [], []
     for fn, w, i in _iter_fields(data):
         if fn == 1 and w == 0:
             rid, _ = _read_varint(data, i)
@@ -204,22 +205,22 @@ def _parse_relation(data, strings):
             vals = _packed_varints(raw)
         elif fn == 8 and w == 2:
             raw, _ = _bytes_field(data, i, w)
-            mem_ids = _packed_svarints(raw)
+            roles_sid = _packed_svarints(raw)
         elif fn == 9 and w == 2:
             raw, _ = _bytes_field(data, i, w)
-            # packed varint types
-            mem_types = _packed_varints(raw)
+            mem_deltas = _packed_svarints(raw)
         elif fn == 10 and w == 2:
             raw, _ = _bytes_field(data, i, w)
-            roles = _packed_varints(raw)
-            mem_roles = [strings[r] if r < len(strings) else "" for r in roles]
+            mem_types = _packed_varints(raw)
     tags = _parse_tags(keys, vals, strings)
-    mids = []
-    mid = 0
-    for d in mem_ids:
-        mid += d
-        mids.append(mid)
-    return rid, mids, mem_types, mem_roles, tags
+    mem_roles = [strings[s] if 0 <= s < len(strings) else "" for s in roles_sid]
+    mem_ids = []
+    prev = 0
+    for d in mem_deltas:
+        prev += d
+        mem_ids.append(prev)
+    n = min(len(mem_ids), len(mem_types), len(mem_roles) if mem_roles else len(mem_ids))
+    return rid, mem_ids[:n], mem_types[:n], (mem_roles[:n] if mem_roles else [""] * n), tags
 
 
 @dataclass

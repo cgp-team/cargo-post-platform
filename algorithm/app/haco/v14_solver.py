@@ -172,6 +172,9 @@ def solve(
     )
 
     # 时间窗约束渗透进每一次内部 check（含服务时间）
+    # ML Branch Ranker 开关（off|auto|force）
+    generate_insertion_candidates.ml_mode = getattr(config, "use_branch_ranker", "off") or "off"
+
     engine = FeasibilityEngine(
         station_map=station_map,
         matrix=matrix,
@@ -430,8 +433,10 @@ def solve(
 
     # ── 收尾：ALNS + 再局部搜索 ─────────────────────────────
     alns_ms = 0.0
-    if not deadline.expired():
-        alns_iterations = max(30, min(200, config.max_iterations * 3))
+    # alns_iterations: 0=默认自适应；>0 钉死；<0 关闭（纯 ACO 深度对照）
+    _alns_cfg = int(getattr(config, "alns_iterations", 0) or 0)
+    if not deadline.expired() and _alns_cfg >= 0:
+        alns_iterations = _alns_cfg if _alns_cfg > 0 else max(30, min(200, config.max_iterations * 3))
         _t0 = time.perf_counter()
         refined = alns_search(
             best_routes, tasks_by_id, engine, station_map, matrix,
@@ -731,7 +736,7 @@ def _cheapest_insertion(
         if deadline is not None and deadline.expired():
             return _partial()  # 超时：返回已放置的部分（非完整解）
 
-        best = None  # (score, task, route_idx, pickup, delivery)
+        best = None  # (rank, task, route_idx, pickup, delivery)
         for task in remaining:
             if deadline is not None and deadline.expired():
                 return _partial()
@@ -751,12 +756,22 @@ def _cheapest_insertion(
             )
             cand_count += len(candidates)
             feas_count += min(len(candidates), 64)  # 近似：pool 上限 64 次全量检查
-            if candidates:
-                cand = candidates[0]
-                score = cand.heuristic_score
-                if best is None or score < best[0]:
+            if not candidates:
+                continue
+            # 最难任务优先（候选越少越先放）→ 产品优先级，避免先放简单任务把难任务堵死
+            hardness = len(candidates)
+            for cand in candidates:
+                # 与训练标签一致：pax → detour桶 → dist → dur（粗 detour 防厘米噪声）
+                score = (
+                    round(float(cand.passenger_impact), 3),
+                    round(float(cand.cargo_detour), 1),
+                    round(float(cand.delta_distance), 2),
+                    round(float(cand.delta_duration), 2),
+                )
+                rank = (hardness, score)
+                if best is None or rank < best[0]:
                     best = (
-                        score, task, cand.vehicle_index,
+                        rank, task, cand.vehicle_index,
                         cand.pickup_index, cand.delivery_index,
                     )
         if best is None:

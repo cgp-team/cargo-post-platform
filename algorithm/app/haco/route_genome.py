@@ -114,13 +114,15 @@ class RouteGenome:
         self.trip_detour_budget_m: float | None = None
 
     def copy(self) -> "RouteGenome":
-        """浅拷贝不可变事件 + 独立 placements/skeleton，禁止共享可变对象串改。"""
-        result = RouteGenome(
-            vehicle_index=self.vehicle_index,
-            vehicle_id=self.vehicle_id,
-            depot_station=self.depot_station,
-            skeleton=list(self.skeleton),
-        )
+        """浅拷贝不可变事件 + 独立 placements/skeleton。
+
+        跳过 __init__（避免按 skeleton 重建一遍 events 再覆盖）——ALNS 热路径。
+        """
+        result = object.__new__(RouteGenome)
+        result.vehicle_index = self.vehicle_index
+        result.vehicle_id = self.vehicle_id
+        result.depot_station = self.depot_station
+        result.skeleton = list(self.skeleton)
         # RouteEvent / TaskPlacement 均为 frozen，list/dict 浅拷贝即可隔离
         result.events = list(self.events)
         result.placements = dict(self.placements)
