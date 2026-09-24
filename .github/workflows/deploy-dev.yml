@@ -391,10 +391,20 @@ jobs:
       # ALGORITHM_BASE_URL 占位符链路，两处均已指向 18081）。
       # 失败自动诊断：trap ERR 打印 docker/compose/端口/目录诊断，不裸 exit 1。
       - name: Build & deploy algorithm
+        id: deploy_algorithm
         if: steps.changes.outputs.algorithm == 'true'
         run: |
           set -Eeuo pipefail
+          # 注意：禁止 exec/tee 重定向，否则 self-hosted 实时 job 日志会被吞掉
+          echo "===== algorithm deploy start $(date -Is) ====="
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
+          echo "ENV_FILE=${ENV_FILE}"
+          echo "pwd=$(pwd)"
+          ls -la algorithm/ | head -20
+          echo "----- docker version -----"
+          docker version 2>&1 | head -20
+          echo "----- compose version -----"
+          docker compose version 2>&1
           # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
           COMPOSE=(docker compose --progress=plain --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
           COMPOSE_NO_PROGRESS=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
@@ -445,8 +455,10 @@ jobs:
           echo "===== 构建 algorithm 镜像（最多 3 次重试） ====="
           BUILD_RC=0
           for attempt in 1 2 3; do
-            echo "--- 构建尝试 ${attempt}/3 ---"
+            echo "--- 构建尝试 ${attempt}/3 $(date -Is) ---"
+            echo "--- compose build algorithm 开始（--progress=plain） ---"
             "${COMPOSE[@]}" build algorithm && BUILD_RC=$? || BUILD_RC=$?
+            echo "--- compose build algorithm 结束 rc=${BUILD_RC} ---"
             if [ "$BUILD_RC" -eq 0 ]; then
               echo "构建成功（第 ${attempt} 次尝试）"
               break
