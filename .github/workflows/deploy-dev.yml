@@ -452,6 +452,37 @@ jobs:
           docker images cargo-post/algorithm 2>&1 || true
           "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true
 
+          echo "===== 拉取 base 镜像 python:3.11-slim（多源兜底） ====="
+          BASE_OK=0
+          for src in \
+            python:3.11-slim \
+            docker.m.daocloud.io/library/python:3.11-slim \
+            docker.1ms.run/library/python:3.11-slim \
+            hub.rat.dev/library/python:3.11-slim
+          do
+            echo "--- docker pull ${src} ---"
+            if docker pull "${src}"; then
+              # 保证 Dockerfile 的 FROM python:3.11-slim 能命中本地
+              if [ "${src}" != "python:3.11-slim" ]; then
+                docker tag "${src}" python:3.11-slim
+              fi
+              BASE_OK=1
+              echo "base 镜像就绪 via ${src}"
+              break
+            fi
+            echo "pull 失败: ${src}"
+          done
+          if [ "${BASE_OK}" -ne 1 ]; then
+            if docker image inspect cargo-post/algorithm:1.0.0 >/dev/null 2>&1; then
+              echo "WARN: 所有源拉取 python:3.11-slim 失败，复用本机 cargo-post/algorithm:1.0.0 作为 build base"
+              docker tag cargo-post/algorithm:1.0.0 python:3.11-slim
+              BASE_OK=1
+            else
+              echo "ERROR: 无法获得 python:3.11-slim，且本机无 algorithm 镜像可复用"
+              exit 1
+            fi
+          fi
+
           echo "===== 构建 algorithm 镜像（最多 3 次重试） ====="
           BUILD_RC=0
           for attempt in 1 2 3; do
