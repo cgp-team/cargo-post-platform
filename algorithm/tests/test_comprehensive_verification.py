@@ -412,7 +412,7 @@ def test_6_10_initial_passenger_load_infeasible():
 
 
 def test_6_11_initial_cargo_load_feasible():
-    """cargoCapacity=10，initialCargoLoad=8，再派送 2 件 → 可行。"""
+    """cargoCapacity=10，initialCargoLoad=8，派送 2 件（预装出库）→ 可行。"""
     orders = [
         PlanOrder(orderId="D1", orderType=OrderType.DELIVERY,
                   stationId="S1", itemCount=2),
@@ -426,10 +426,29 @@ def test_6_11_initial_cargo_load_feasible():
     assert outcome.status == "feasible"
 
 
-def test_6_11_initial_cargo_load_infeasible():
-    """cargoCapacity=10，initialCargoLoad=8，再派送 3 件 → 无解。"""
+def test_6_11_preloaded_delivery_within_load_feasible():
+    """PRELOADED 派送 3 件、初始 8/容量 10 → 可行（出库降载，不占峰值）。"""
     orders = [
         PlanOrder(orderId="D1", orderType=OrderType.DELIVERY,
+                  stationId="S1", itemCount=3),
+    ]
+    vehicles = [
+        Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=10,
+                initialCargoLoad=8),
+    ]
+    req = _base_request(orders=orders, vehicles=vehicles)
+    outcome = solve(req)
+    assert outcome.status == "feasible"
+
+
+def test_6_11_initial_cargo_load_infeasible():
+    """cargoCapacity=10，initialCargoLoad=8，再**揽收** 3 件 → 峰值 8+3>10 无解。
+
+    对称于 6.10（初始乘客 + 新乘客）。PRELOADED **派送** 不增加峰值，
+    故派送 3 件应可行——见 test_6_11_initial_cargo_load_feasible / step2 两向复用。
+    """
+    orders = [
+        PlanOrder(orderId="K1", orderType=OrderType.PICKUP,
                   stationId="S1", itemCount=3),
     ]
     vehicles = [
