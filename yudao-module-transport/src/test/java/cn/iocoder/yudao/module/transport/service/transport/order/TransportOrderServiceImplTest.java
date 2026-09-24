@@ -223,6 +223,8 @@ class TransportOrderServiceImplTest {
         when(cargoOrderMapper.selectOne(any(SFunction.class), any()))
                 .thenReturn(CargoOrderDO.builder().id(9L).orderId(1L).auditStatus(0)
                         .reviewStatus(ReviewStatusEnum.PASSED.getStatus()).build());
+        // CAS 落库：Mockito 默认 update 返回 0 会误判并发失败
+        when(cargoOrderMapper.update(any(CargoOrderDO.class), any())).thenReturn(1);
 
         OrderAuditReqVO reqVO = new OrderAuditReqVO();
         reqVO.setOrderId(1L);
