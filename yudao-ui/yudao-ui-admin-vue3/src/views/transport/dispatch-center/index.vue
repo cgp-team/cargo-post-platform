@@ -108,6 +108,8 @@ import * as DispatchApi from '@/api/transport/dispatch'
 import * as TopologyApi from '@/api/transport/topology'
 import * as MonitoringApi from '@/api/transport/monitoring'
 import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
+// 订单状态文案统一走共享常量（原先本页自备的 ORDER_STATUS 缺 6 待审核/7 待客户操作，显示"—"）
+import { ORDER_STATUS_LABELS } from '../constants'
 
 defineOptions({ name: 'TransportDispatchCenter' })
 
@@ -125,11 +127,7 @@ const LEG_COLORS = [
   '#D4801A', '#C2185B', '#4A7C1F', '#5A6ACF', '#8D6E63', '#00838F'
 ]
 
-const ORDER_STATUS: Record<number, string> = {
-  0: '已创建', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消',
-  8: '待入池', 9: '部分完成', 10: '运输中', 11: '换乘中', 12: '派送中', 13: '异常'
-}
-const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS[s] || '—')
+const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS_LABELS[s] || '—')
 
 const loadPool = async () => {
   const res = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 100 })

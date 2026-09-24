@@ -239,6 +239,15 @@
 <script setup lang="ts">
 import * as OrderApi from '@/api/transport/order'
 import * as StationApi from '@/api/transport/station'
+import {
+  orderTypeLabel,
+  orderTypeTag,
+  orderStatusLabel,
+  orderStatusTag,
+  serviceModeLabel,
+  serviceModeTag,
+  reviewStatusLabel
+} from '../constants'
 import OrderForm from './OrderForm.vue'
 
 defineOptions({ name: 'TransportOrder' })
@@ -257,38 +266,6 @@ type OrderQueryParams = {
 const queryParams = reactive<OrderQueryParams>({ pageNo: 1, pageSize: 10, orderNo: '', orderType: undefined })
 const formRef = ref()
 
-const orderTypeLabel = (type: number) => ({ 1: '客运', 2: '货运', 3: '邮快件' }[type] || '未知')
-const typeTagMap: Record<number, 'success' | 'warning' | 'info'> = { 1: 'success', 2: 'warning', 3: 'info' }
-const orderTypeTag = (type: number): 'success' | 'warning' | 'info' => typeTagMap[type] || 'info'
-
-// 订单生命周期（OrderLifecycle）：0 已创建 6 待审核 7 待客户操作 8 待入池 1 已入池 2 已分配 3 已发车 4 已完成 5 已取消
-type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
-const orderStatusLabelMap: Record<number, string> = {
-  0: '已创建', 6: '待审核', 7: '待客户操作', 8: '待入池', 1: '已入池', 2: '已分配', 3: '已发车', 4: '已完成', 5: '已取消'
-}
-const orderStatusLabel = (status?: number) =>
-  status === undefined || status === null ? '-' : orderStatusLabelMap[status] || `状态${status}`
-const orderStatusTagMap: Record<number, TagType> = {
-  0: 'info', 6: 'warning', 7: 'warning', 8: 'warning', 1: 'warning', 2: 'primary', 3: 'success', 4: 'success', 5: 'danger'
-}
-const orderStatusTag = (status?: number): TagType =>
-  status === undefined || status === null ? 'info' : orderStatusTagMap[status] || 'info'
-
-// 寄货服务方式（ServiceModeEnum）：客户在哪寄、车去哪接
-const serviceModeLabelMap: Record<string, string> = {
-  DOOR_PICKUP: '上门交接',
-  NEAREST_STATION: '最近站点交接',
-  SAFE_ROADSIDE: '安全点交接',
-  CUSTOMER_TO_STATION: '客户送站',
-  STATION_TO_STATION: '站到站'
-}
-const serviceModeLabel = (code?: string) => (code ? serviceModeLabelMap[code] || code : '-')
-const serviceModeTag = (code?: string): TagType =>
-  code === 'DOOR_PICKUP' ? 'success' : code ? 'warning' : 'info'
-
-// 承运审核结果：0 待审核 1 通过 2 需客户操作 3 需人工审核 4 不承运
-const reviewStatusLabel = (status?: number) =>
-  ({ 0: '待审核', 1: '已通过', 2: '需客户操作', 3: '需人工审核', 4: '不承运' }[status ?? -1] || '-')
 
 /** 站点名兜底（后端已返回 pickupStationName 时不再依赖） */
 const stations = ref<StationApi.StationVO[]>([])
@@ -328,6 +305,15 @@ const submitAudit = async (pass: boolean) => {
   if (!pass && !auditForm.value.rejectReason) {
     message.warning('拒绝时请填写原因')
     return
+  }
+  // 二次确认：拒绝承运会直接把订单置为已取消（用户端立即可见），且没有撤销入口
+  if (!pass) {
+    const no = auditRow.value.orderNo || auditRow.value.id
+    try {
+      await message.confirm(`确认拒绝订单「${no}」？拒绝后订单将取消，不可恢复。`)
+    } catch (e) {
+      return
+    }
   }
   auditLoading.value = true
   try {

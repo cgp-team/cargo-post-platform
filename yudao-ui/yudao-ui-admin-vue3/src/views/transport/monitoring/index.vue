@@ -96,6 +96,7 @@
 
 <script setup lang="ts">
 import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
+import { vehicleStatusLabel, vehicleStatusTag, shiftStatusLabel, shiftStatusTag } from '../constants'
 import {
   getMonitoringMapData,
   getMonitoringVehicles,
@@ -130,12 +131,7 @@ const statusCount = computed(() => ({
   disabled: vehicles.value.filter((v) => v.status === 2).length
 }))
 
-const vehicleStatusLabel = (status: number) => ({ 0: '空闲', 1: '在途', 2: '停用' }[status] || '未知')
-const vehicleStatusTag = (status: number): 'success' | 'info' | 'danger' =>
-  ({ 1: 'success', 2: 'danger' } as Record<number, 'success' | 'info' | 'danger'>)[status] || 'info'
-const shiftStatusLabel = (status: number) => ({ 0: '未发车', 1: '在途', 2: '已完成' }[status] || '未知')
-const shiftStatusTag = (status: number): 'success' | 'info' | 'primary' =>
-  ({ 1: 'success', 0: 'primary' } as Record<number, 'success' | 'info' | 'primary'>)[status] || 'info'
+// 车辆/班次状态标签映射已收敛到 ../constants.ts（与订单/调度共用同一套口径管理）
 const formatTime = (time?: string) => (time ? time.slice(0, 5) : '--:--')
 
 /** 初始化地图与图层，并启动轮询 */

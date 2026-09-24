@@ -54,8 +54,25 @@ const formData = ref<VehicleApi.VehicleVO>({
   status: 0,
 })
 
+// 民用车牌：省份简称 + 发牌机关字母 + 5 位序号；新能源为 6 位序号
+const PLATE_PATTERN =
+  /^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-Z][A-HJ-NP-Z0-9]{5,6}$/
 const formRules = reactive({
-  plateNo: [{ required: true, message: '车牌号不能为空', trigger: 'blur' }],
+  plateNo: [
+    { required: true, message: '车牌号不能为空', trigger: 'blur' },
+    { pattern: PLATE_PATTERN, message: '请输入正确的车牌号（如 渝A12345 / 渝AD12345）', trigger: 'blur' }
+  ],
+  // 载货重量用 el-input + .number，空值/非数字要拦住，否则后端收到 null 会按 0 处理
+  cargoCapacityKg: [
+    { type: 'number', min: 0, message: '载货重量需为不小于 0 的数字', trigger: 'blur' }
+  ],
+  cargoCapacity: [
+    { required: true, message: '货仓件数不能为空', trigger: 'blur' },
+    { type: 'number', min: 1, message: '货仓件数至少为 1', trigger: 'blur' }
+  ],
+  passengerCapacity: [
+    { type: 'number', min: 0, message: '载客人数需为不小于 0 的数字', trigger: 'blur' }
+  ],
 })
 
 const resetForm = () => {
