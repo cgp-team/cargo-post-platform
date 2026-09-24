@@ -81,6 +81,12 @@
             <artifactId>yudao-spring-boot-starter-biz-ip</artifactId>
         </dependency>
 
+        <!-- RateLimiter / 防盗刷（短信接口限流） -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-protection</artifactId>
+        </dependency>
+
     </dependencies>
 
 </project>
