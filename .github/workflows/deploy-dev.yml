@@ -400,11 +400,15 @@ jobs:
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
           echo "ENV_FILE=${ENV_FILE}"
           echo "pwd=$(pwd)"
-          ls -la algorithm/ | head -20
-          echo "----- docker version -----"
-          docker version 2>&1 | head -20
+          # SIGPIPE：head/grep 截断管道 + pipefail 会以 141 打断脚本（docker version|head 就踩过）
+          set +o pipefail
+          ls -la algorithm/ | head -30 || true
+          echo "----- docker version (server) -----"
+          docker version --format 'server={{.Server.Version}} arch={{.Server.Os}}/{{.Server.Arch}}' 2>&1 || true
+          docker version 2>&1 | sed -n '1,30p' || true
           echo "----- compose version -----"
-          docker compose version 2>&1
+          docker compose version 2>&1 || true
+          set -o pipefail
           # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
           COMPOSE=(docker compose --progress=plain --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
           COMPOSE_NO_PROGRESS=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
@@ -432,14 +436,14 @@ jobs:
           uname -a || true
           df -h | head -10 || true
           free -h || true
-          docker version 2>&1 | head -20 || true
+          docker version 2>&1 | sed -n "1,30p" || true
           docker compose version || true
           docker buildx version 2>&1 || true
 
           echo "===== [前置诊断] 目录与文件 ====="
           test -f algorithm/Dockerfile && echo "algorithm/Dockerfile 存在" || { echo "ERROR: algorithm/Dockerfile 缺失"; exit 1; }
           test -f algorithm/requirements.txt && echo "algorithm/requirements.txt 存在" || { echo "ERROR: algorithm/requirements.txt 缺失"; exit 1; }
-          ls -la algorithm/ | head -20
+          ls -la algorithm/ | head -30 || true
 
           echo "===== [前置诊断] 端口 18081 ====="
           ss -lntp 2>/dev/null | grep ':18081' || echo "18081 未被监听"
