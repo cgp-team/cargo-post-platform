@@ -703,33 +703,48 @@ jobs:
             exit 1
           fi
 
-          # 2) 权限与容量预检：这两个是历史上最容易导致本步骤静默失败的原因，
-          #    提前显式判定，失败原因一眼可见（而非只有一个 exit 1）
-          echo "--- sudo 免密检查 ---"
-          if ! sudo -n true 2>/dev/null; then
-            echo "ERROR: 当前 CI 用户无免密 sudo 权限，无法写入 ${DEST}" >&2
-            echo "       请在服务器 /etc/sudoers.d/ 中为 CI 用户配置免密 sudo（见 docs/deployment.md）" >&2
+          # 2) 权限判定：优先"目录已归属部署用户"（无需 sudo，推荐且更安全）；
+          #    其次才是免密 sudo。两者的任一都可用；都没有时给出可直接执行的修复命令。
+          #    历史背景：本步骤此前因 CI 用户无免密 sudo 而失败，且旧脚本无任何诊断输出。
+          SUDO=""
+          if [ -d "${DEST}" ] && [ -w "${DEST}" ]; then
+            echo "权限：${DEST} 对当前用户可写，全程不使用 sudo"
+          elif sudo -n true 2>/dev/null; then
+            SUDO="sudo"
+            echo "权限：${DEST} 不可直接写，改用已配置的免密 sudo"
+          else
+            echo "ERROR: 既不能直接写 ${DEST}，当前用户也没有免密 sudo 权限。" >&2
+            echo "       请在服务器二选一（推荐 A，顺带可去掉对 sudo 的依赖）：" >&2
+            echo "       A) sudo mkdir -p ${DEST} && sudo chown -R \$(id -un):\$(id -gn) ${DEST}" >&2
+            echo "       B) echo \"\$(id -un) ALL=(root) NOPASSWD: /bin/mkdir, /bin/rm, /bin/cp, /usr/bin/rsync\" | sudo tee /etc/sudoers.d/cargo-post-web" >&2
+            echo "       （详见 docs/deployment.md「Web 静态目录权限」小节）" >&2
             exit 1
           fi
+          # 统一出口：SUDO 为空则直接执行，否则经 sudo
+          _run() { if [ -n "${SUDO}" ]; then sudo "$@"; else "$@"; fi; }
+
           echo "--- 磁盘空间（/opt）---"
           df -h /opt | tail -2
           echo "--- 目标目录状态 ---"
           ls -ld "${DEST}" "${DEST}.bak" 2>&1 || echo "（目标目录或旧备份不存在，属正常情况）"
 
           # 3) 目录不存在则创建：首次部署、或服务器侧目录被清理时不再直接失败
-          sudo mkdir -p "${DEST}"
+          _run mkdir -p "${DEST}"
 
           # 4) 备份：作为回滚点而非发布前提，失败只告警不阻断
           #    （旧逻辑用 && 串联，备份一失败整步就红，但真正要发布的产物其实没问题）
-          sudo rm -rf "${DEST}.bak" || echo "::warning::旧备份清理失败，继续发布"
-          sudo cp -a "${DEST}" "${DEST}.bak" || echo "::warning::备份失败，本次发布无回滚点"
+          _run rm -rf "${DEST}.bak" || echo "::warning::旧备份清理失败，继续发布"
+          _run cp -a "${DEST}" "${DEST}.bak" || echo "::warning::备份失败，本次发布无回滚点"
           echo "DEP-01：已生成发布前备份 ${DEST}.bak"
 
           # 5) 发布（--delete 保证与构建产物完全一致）
-          rsync -a --delete "${SRC}" "${DEST}/"
+          _run rsync -a --delete "${SRC}" "${DEST}/"
           echo "前端发布完成：${DEST} 现有 $(ls -A "${DEST}" | wc -l) 个条目"
 
       - name: Health check
+        # 无论前面步骤（如前端发布）是否失败都要执行：这是后端是否健康的唯一判据，
+        # 且失败时承担"回滚上一版 jar"的职责——不能因为前端权限问题连带跳过。
+        if: always()
         run: |
           set -euo pipefail
           for i in $(seq 1 40); do
@@ -789,6 +804,15 @@ jobs:
         if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
         run: |
           set -euo pipefail
+          # watchdog 是可选增强（写 /etc/systemd/system 与 systemctl 都需要免密 sudo）。
+          # 未配置时只告警跳过，不阻断后端/前端发布——避免可选组件让整条流水线变红。
+          if ! sudo -n true 2>/dev/null; then
+            echo "::warning::当前用户无免密 sudo，跳过 watchdog timer 同步（不影响后端/前端部署）。"
+            echo "          如需启用，在服务器执行："
+            echo "          echo \"\$(id -un) ALL=(root) NOPASSWD: /bin/cp, /bin/mkdir, /usr/bin/systemctl\" | sudo tee /etc/sudoers.d/cargo-post-watchdog"
+            echo "          sudo chmod 440 /etc/sudoers.d/cargo-post-watchdog && sudo visudo -c"
+            exit 0
+          fi
           sudo cp -a "${GITHUB_WORKSPACE}/deploy/cargo-post-watchdog.timer" /etc/systemd/system/cargo-post-watchdog.timer
           sudo mkdir -p /opt/cargo-post-platform/scripts
           sudo cp -a "${GITHUB_WORKSPACE}/scripts/monitor_watchdog.py" /opt/cargo-post-platform/scripts/monitor_watchdog.py
