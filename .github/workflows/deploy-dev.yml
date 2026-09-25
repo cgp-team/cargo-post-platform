@@ -417,9 +417,9 @@ jobs:
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
           echo "ENV_FILE=${ENV_FILE}"
           echo "pwd=$(pwd)"
-          ls -la algorithm/ | head -20
+          ls -la algorithm/ | sed -n '1,20p'
           echo "----- docker version -----"
-          docker version 2>&1 | head -20
+          docker version 2>&1 | sed -n '1,20p'
           echo "----- compose version -----"
           docker compose version 2>&1
           # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
@@ -429,34 +429,34 @@ jobs:
           trap 'echo; echo "===== [失败诊断] Build & deploy algorithm 出错 =====";
             echo "--- exit code ---"; echo "退出码: $?";
             echo "--- uname ---"; uname -a 2>&1 || true;
-            echo "--- 磁盘 df -h ---"; df -h 2>&1 | head -15 || true;
+            echo "--- 磁盘 df -h ---"; df -h 2>&1 | sed -n '1,15p' || true;
             echo "--- 内存 free -h ---"; free -h 2>&1 || true;
-            echo "--- docker version ---"; docker version 2>&1 | head -25 || true;
+            echo "--- docker version ---"; docker version 2>&1 | sed -n '1,25p' || true;
             echo "--- docker compose version ---"; docker compose version 2>&1 || true;
             echo "--- docker buildx version ---"; docker buildx version 2>&1 || true;
             echo "--- docker info (builder) ---"; docker info 2>&1 | grep -A5 -i builder || true;
             echo "--- 端口 18081 监听(ss) ---"; ss -lntp 2>/dev/null | grep ":18081" || echo "(ss 未发现 18081 监听)";
             echo "--- 端口 18081 容器(docker ps) ---"; docker ps --format "{{.ID}} {{.Names}} {{.Ports}}" 2>/dev/null | grep "18081" || echo "(无容器占用 18081)";
-            echo "--- algorithm 目录/Dockerfile ---"; ls -la algorithm/ 2>&1 | head -20 || true; test -f algorithm/Dockerfile && echo "Dockerfile 存在" || echo "Dockerfile 缺失";
-            echo "--- compose config ---"; "${COMPOSE_NO_PROGRESS[@]}" config 2>&1 | head -60 || true;
+            echo "--- algorithm 目录/Dockerfile ---"; ls -la algorithm/ 2>&1 | sed -n '1,20p' || true; test -f algorithm/Dockerfile && echo "Dockerfile 存在" || echo "Dockerfile 缺失";
+            echo "--- compose config ---"; "${COMPOSE_NO_PROGRESS[@]}" config 2>&1 | sed -n '1,60p' || true;
             echo "--- 现有 cargo-post/algorithm 镜像 ---"; docker images cargo-post/algorithm 2>&1 || true;
             echo "--- 现有 algorithm 容器 ---"; "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true;
-            echo "--- docker ps -a (最近) ---"; docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" 2>&1 | head -10 || true;
+            echo "--- docker ps -a (最近) ---"; docker ps -a --format "{{.ID}} {{.Names}} {{.Status}}" 2>&1 | sed -n '1,10p' || true;
             echo "--- algorithm 容器日志 ---"; "${COMPOSE_NO_PROGRESS[@]}" logs --tail=50 algorithm 2>&1 || true;
             echo "===== 诊断结束 =====";' ERR
 
           echo "===== [前置诊断] 环境 ====="
           uname -a || true
-          df -h | head -10 || true
+          df -h | sed -n '1,10p' || true
           free -h || true
-          docker version 2>&1 | head -20 || true
+          docker version 2>&1 | sed -n '1,20p' || true
           docker compose version || true
           docker buildx version 2>&1 || true
 
           echo "===== [前置诊断] 目录与文件 ====="
           test -f algorithm/Dockerfile && echo "algorithm/Dockerfile 存在" || { echo "ERROR: algorithm/Dockerfile 缺失"; exit 1; }
           test -f algorithm/requirements.txt && echo "algorithm/requirements.txt 存在" || { echo "ERROR: algorithm/requirements.txt 缺失"; exit 1; }
-          ls -la algorithm/ | head -20
+          ls -la algorithm/ | sed -n '1,20p'
 
           echo "===== [前置诊断] 端口 18081 ====="
           ss -lntp 2>/dev/null | grep ':18081' || echo "18081 未被监听"
@@ -548,7 +548,7 @@ jobs:
           if [ "$READY" -ne 1 ]; then
             echo "ERROR: algorithm 服务 60 秒内未就绪"
             echo "--- docker ps ---"
-            docker ps -a --format "{{.ID}} {{.Names}} {{.Status}} {{.Ports}}" 2>&1 | head -10 || true
+            docker ps -a --format "{{.ID}} {{.Names}} {{.Status}} {{.Ports}}" 2>&1 | sed -n '1,10p' || true
             echo "--- algorithm 容器状态 ---"
             "${COMPOSE_NO_PROGRESS[@]}" ps algorithm 2>&1 || true
             echo "--- algorithm 容器日志 ---"
@@ -668,7 +668,7 @@ jobs:
           if [ ! -f "${MINI_CONFIG}" ]; then
             echo "skip: ${MINI_CONFIG} 不存在（小程序在独立仓库 cargo-post-miniprogram；服务器有检出时可用 MINIPROGRAM_CONFIG 指定路径恢复校验）"; exit 0
           fi
-          MINI_KEY_IN_MINI="$(grep -hoE "AMAP_MINI_KEY *= *'[^']+'" "${MINI_CONFIG}" 2>/dev/null | head -1 || true)"
+          MINI_KEY_IN_MINI="$(grep -hoE "AMAP_MINI_KEY *= *'[^']+'" "${MINI_CONFIG}" 2>/dev/null | sed -n '1,1p' || true)"
           if [ -n "${MINI_KEY_IN_MINI}" ] && grep -qF "${MINI_KEY_IN_MINI}" "${APP_ENV}" 2>/dev/null; then
             echo "FAIL: 检测到小程序 key 被写进后端 env（${APP_ENV}）——两把 key 必须严格隔离" >&2
             exit 1
