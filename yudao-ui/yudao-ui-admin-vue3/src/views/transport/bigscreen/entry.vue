@@ -1,6 +1,6 @@
 <template>
   <!-- 占位：菜单路由挂在 Layout 下，挂载时立即跳转到全屏大屏路由 -->
-  <div />
+  <div></div>
 </template>
 
 <script lang="ts" setup>
