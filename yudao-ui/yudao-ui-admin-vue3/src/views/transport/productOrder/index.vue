@@ -34,7 +34,7 @@
         <el-table-column label="承运车辆/司机" align="center" min-width="150">
           <template #default="scope">
             <div>{{ scope.row.vehiclePlate || '-' }}</div>
-            <div class="text-gray-400 text-xs">{{ scope.row.driverName || '未派司机' }}{{ scope.row.driverMobile ? ' · ' + scope.row.driverMobile : '' }}</div>
+            <div class="text-gray-500 text-xs">{{ scope.row.driverName || '未派司机' }}{{ scope.row.driverMobile ? ' · ' + scope.row.driverMobile : '' }}</div>
           </template>
         </el-table-column>
         <el-table-column label="交付站点" align="center" min-width="130">
@@ -78,7 +78,11 @@
             >完成</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无商城订单" />
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>
@@ -88,6 +92,11 @@
 
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
+import {
+  PRODUCT_ORDER_STATUS_LABELS,
+  productOrderStatusLabel,
+  productOrderStatusTag
+} from '../constants'
 import ProductOrderDetail from './ProductOrderDetail.vue'
 import ProductOrderShipForm from './ProductOrderShipForm.vue'
 
@@ -99,20 +108,13 @@ const total = ref(0)
 const list = ref([])
 const detailRef = ref()
 
-const statusList = [
-  { value: 0, label: '待发货' },
-  { value: 1, label: '已发货' },
-  { value: 2, label: '已完成' },
-  { value: 3, label: '已取消' }
-]
-const statusMap = {
-  0: { text: '待发货', tag: 'info' },
-  1: { text: '已发货', tag: 'warning' },
-  2: { text: '已完成', tag: 'success' },
-  3: { text: '已取消', tag: 'danger' }
-}
-const statusTag = (s: number) => (statusMap as any)[s]?.tag || 'info'
-const statusText = (s: number) => (statusMap as any)[s]?.text || '未知'
+// WEB-09: 状态映射统一消费 constants.ts（PRODUCT_ORDER_STATUS_LABELS 与后端 ProductOrderStatusEnum 对齐）
+const statusList = Object.entries(PRODUCT_ORDER_STATUS_LABELS).map(([value, label]) => ({
+  value: Number(value),
+  label
+}))
+const statusTag = (s: number) => productOrderStatusTag(s)
+const statusText = (s: number) => productOrderStatusLabel(s)
 
 type QueryParams = { pageNo: number; pageSize: number; orderNo?: string; status?: number }
 const queryParams = reactive<QueryParams>({ pageNo: 1, pageSize: 10, orderNo: '', status: undefined })

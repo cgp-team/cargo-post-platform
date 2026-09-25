@@ -112,6 +112,14 @@ public class MultiLegServiceImpl implements MultiLegService {
 
 
 
+    /** BE-31：自代理——1/2 参重载经代理调 4 参 REQUIRES_NEW 方法，消除 this 直调绕过事务代理的隐患 */
+
+    @Resource
+
+    @org.springframework.context.annotation.Lazy
+
+    private MultiLegServiceImpl self;
+
     @Resource private TransportLegMapper legMapper;
 
     @Resource private TransportOrderMapper orderMapper;
@@ -161,7 +169,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     public List<TransportLegDO> planLegs(Long orderId) {
 
-        return planLegs(orderId, null, null, null);
+        // BE-31：经代理调用，保证 4 参重载上的 REQUIRES_NEW 生效（this 直调会绕过事务代理；self 未注入的测试场景退化直调）
+
+        return (self != null ? self : this).planLegs(orderId, null, null, null);
 
     }
 
@@ -171,7 +181,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     public List<TransportLegDO> planLegs(Long orderId, Long planId) {
 
-        return planLegs(orderId, planId, null, null);
+        // BE-31：同上，经代理调用
+
+        return (self != null ? self : this).planLegs(orderId, planId, null, null);
 
     }
 
@@ -278,11 +290,11 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         relayFarLegsToNearbyVehicles(legs);
 
-        // 真实道路：逐段取高德路网（距离/时长/polyline），失败保持 ESTIMATED（不伪装真实道路，需求 §73/§141）
+        // BE-14：真实道路补全（逐段调高德/算法，最坏 3 段 × 约 9s）移出 REQUIRES_NEW 事务，
+        // 改为事务提交后执行——单次派单不再长时间同时占用 2 条连接；
+        // 事务内 estimated 时间按规划估算时长推进（路网时长补全成功后仅更新距离/时长/polyline）。
 
-        enrichWithRoadRoute(legs);
-
-        // 预计时间基于最终时长（可能是路网时长）顺序推进
+        // 预计时间基于规划估算时长顺序推进
 
         LocalDateTime cursor = LocalDateTime.now().plusMinutes(MultiLegPlanner.PREPARE_MINUTES);
 
@@ -312,10 +324,15 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         + result.transferCount() + ",\"mode\":\"" + result.mode() + "\"}");
 
-          userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_CREATED,
-                  "运输方案已生成", "您的订单已规划" + result.legCount() + "段运输" +
-                  (result.transferCount() > 0 ? "（含" + result.transferCount() + "次中转）" : "（直达）") +
-                  "，" + result.reason());
+        // BE-13：用户通知（循环写库）同样移出事务，提交后投递
+        cn.iocoder.yudao.module.transport.util.TransactionAfterCommit.run(() ->
+                userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_CREATED,
+                        "运输方案已生成", "您的订单已规划" + result.legCount() + "段运输" +
+                        (result.transferCount() > 0 ? "（含" + result.transferCount() + "次中转）" : "（直达）") +
+                        "，" + result.reason()));
+
+        // BE-14：提交后补全真实道路并回写段记录
+        enrichLegsAfterCommit(legs);
 
 
         return legs;
@@ -417,6 +434,18 @@ public class MultiLegServiceImpl implements MultiLegService {
     }
 
 
+
+    /** BE-14：事务提交后补全真实道路（无事务上下文时立即执行）并回写成功获取路网的段记录 */
+    private void enrichLegsAfterCommit(List<TransportLegDO> legs) {
+        cn.iocoder.yudao.module.transport.util.TransactionAfterCommit.run(() -> {
+            enrichWithRoadRoute(legs);
+            for (TransportLegDO leg : legs) {
+                if (leg.getId() != null && !"ESTIMATED".equals(leg.getNavigationSource())) {
+                    legMapper.updateById(leg);
+                }
+            }
+        });
+    }
 
     /**
 
@@ -661,7 +690,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public void advanceLegStatus(Long legId, TransportLegStatusEnum targetStatus) {
 
@@ -693,7 +722,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public void forceLegStatus(Long legId, TransportLegStatusEnum targetStatus, String reason) {
 
@@ -702,6 +731,18 @@ public class MultiLegServiceImpl implements MultiLegService {
         if (Objects.equals(leg.getStatus(), targetStatus.getStatus())) {
 
             return;
+
+        }
+
+        // BE-22：与 advanceLegStatus 同一状态机守卫，交接流程不得强制跳级（如 PLANNED 直接 COMPLETED）
+
+        TransportLegStatusEnum current = TransportLegStatusEnum.of(leg.getStatus());
+
+        if (!TransportLegStatusEnum.canTransit(current, targetStatus)) {
+
+            throw exception(LEG_TRANSITION_ILLEGAL,
+
+                    (current == null ? "未知" : current.getName()) + " → " + targetStatus.getName());
 
         }
 
@@ -723,7 +764,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public TransportLegDO replanLeg(Long legId, String reason) {
 

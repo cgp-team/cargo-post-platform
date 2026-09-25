@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS `transport_product` (
   `badge` varchar(64) NOT NULL DEFAULT '' COMMENT '角标文案',
   `description` varchar(2000) NOT NULL DEFAULT '' COMMENT '商品描述',
   `stock` int NOT NULL DEFAULT 0 COMMENT '库存',
-  `status` tinyint NOT NULL DEFAULT 0 COMMENT '状态(0上架 1下架)',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态(0下架 1上架，WEB-08 与公告统一)',
   `sort` int NOT NULL DEFAULT 0 COMMENT '排序值(越小越靠前)',
   `tenant_id` bigint NOT NULL DEFAULT 0 COMMENT '租户编号',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',

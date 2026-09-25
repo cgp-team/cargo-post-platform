@@ -89,6 +89,9 @@ class CargoHandoverTest {
     @Test
     void confirm_advances_leg1_completed_and_leg2_in_transit_atomically() {
         stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
+        // BE-21：状态机守卫需要读取当前订单状态（交接确认前订单处于换乘中）
+        when(orderMapper.selectById(100L)).thenReturn(TransportOrderDO.builder()
+                .id(100L).status(TransportOrderStatusEnum.TRANSFERRING.getStatus()).build());
         when(handoverMapper.update(any(TransportHandoverDO.class), any())).thenReturn(1);
         when(legMapper.selectById(2L)).thenReturn(TransportLegDO.builder()
                 .id(2L).orderId(100L).planId(55L).legSequence(2).driverId(2L).vehicleId(22L)
@@ -121,6 +124,9 @@ class CargoHandoverTest {
     @Test
     void dispute_marks_exception_and_warns() {
         stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
+        // BE-21：状态机守卫需要读取当前订单状态（任何非终态均可转异常）
+        when(orderMapper.selectById(100L)).thenReturn(TransportOrderDO.builder()
+                .id(100L).status(TransportOrderStatusEnum.TRANSFERRING.getStatus()).build());
         service.disputeHandover(9L, "件数不符");
         verify(handoverMapper).updateById(argThat((TransportHandoverDO h) ->
                 TransportHandoverStatusEnum.EXCEPTION.getStatus().equals(h.getStatus())));

@@ -217,6 +217,19 @@ const remainingRouter: AppRouteRecordRaw[] = [
     }
   },
   {
+    // SEP-03：智慧大屏全屏路由（无 Layout / 无菜单 / 无标签页）
+    // 权限在页面数据接口上（transport:dashboard:query），路由本身仅需登录态
+    path: '/transport/bigscreen',
+    component: () => import('@/views/transport/bigscreen/index.vue'),
+    name: 'TransportBigScreen',
+    meta: {
+      hidden: true,
+      noTagsView: true,
+      title: '智慧大屏',
+      canTo: true
+    }
+  },
+  {
     path: '/:pathMatch(.*)*',
     component: () => import('@/views/Error/404.vue'),
     name: '',

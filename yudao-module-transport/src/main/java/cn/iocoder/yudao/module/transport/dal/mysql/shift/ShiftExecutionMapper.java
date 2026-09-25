@@ -59,6 +59,19 @@ public interface ShiftExecutionMapper extends BaseMapperX<ShiftExecutionDO> {
     }
 
     /**
+     * 容量受限的原子装车 +1（BE-06）：把容量条件下推到同一条 UPDATE，
+     * 消除"读-比-自增"TOCTOU——并发下 loaded_count 不会超过 capacity。
+     * 返回 0 表示已满（容量条件未命中），调用方应抛 DRIVER_CARGO_FULL。
+     */
+    default int incrementLoadedCountWithinCapacity(Long id, int capacity) {
+        return update(new ShiftExecutionDO(),
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ShiftExecutionDO>()
+                        .eq(ShiftExecutionDO::getId, id)
+                        .apply("IFNULL(loaded_count, 0) < {0}", capacity)
+                        .setSql("loaded_count = IFNULL(loaded_count, 0) + 1"));
+    }
+
+    /**
      * 已装件数原子 -1（地板 0）：防并发妥投/核销丢更新。
      */
     default int decrementLoadedCount(Long id) {

@@ -249,6 +249,8 @@ public class AppDriverController {
     @Parameter(name = "id", description = "通知编号", required = true)
     public CommonResult<Boolean> messageRead(@RequestParam("id") Long id,
                                              @RequestParam("driverId") Long driverId) {
+        // 归属校验（BE-09）：与 messages 接口同一判据，防止用 A 的 token 把 B 的消息标记已读
+        driverAppService.requireCurrentDriver(driverId);
         userNotificationService.markAsRead(id, NotificationRecipientTypeEnum.DRIVER, driverId);
         return success(true);
     }

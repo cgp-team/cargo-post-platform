@@ -27,7 +27,13 @@
             <el-button link type="danger" v-hasPermi="['transport:shift:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无班次，点击下方按钮排第一个班次">
+            <el-button type="primary" @click="openForm('create')">新增班次</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>
@@ -61,7 +67,7 @@ const getList = async () => {
     total.value = res.total
   } finally { loading.value = false }
 }
-const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
+const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, shiftCode: '' }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
   try { await message.confirm('确认删除该班次？'); await ShiftApi.deleteShift(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }

@@ -658,7 +658,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     // ==================== 司机端写操作闭环 ====================
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void depart(AppDriverDepartReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         ShiftDO shift = validateShiftExists(reqVO.getShiftId());
@@ -703,7 +703,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void arrive(AppDriverArriveReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         ShiftDO shift = validateShiftExists(reqVO.getShiftId());
@@ -861,7 +861,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pickupConfirm(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
@@ -891,11 +891,8 @@ public class DriverAppServiceImpl implements DriverAppService {
             throw exception(DRIVER_SHIFT_EXECUTION_NOT_EXISTS);
         }
         VehicleDO vehicle = vehicleMapper.selectById(execution.getVehicleId());
+        // BE-06：容量校验不再"读-比-自增"（TOCTOU），改为下方同一条 UPDATE 内原子判定
         int capacity = vehicle != null && vehicle.getCargoCapacity() != null ? vehicle.getCargoCapacity() : -1;
-        int loaded = execution.getLoadedCount() != null ? execution.getLoadedCount() : 0;
-        if (capacity >= 0 && loaded >= capacity) {
-            throw exception(DRIVER_CARGO_FULL);
-        }
         // CAS 推进订单状态：可确认装车状态内更新（已发车订单装车后保持 3，幂等），防非法状态装车
         TransportOrderDO updateObj = new TransportOrderDO();
         updateObj.setStatus(TransportOrderStatusEnum.DEPARTED.getStatus());
@@ -905,14 +902,20 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
-        // 已装件数 +1（SQL 原子自增，防连点丢更新）
+        // 已装件数 +1（BE-06：容量条件下推到同一条 UPDATE 原子判定，并发不超载；SQL 原子自增，防连点丢更新）
         if (execution != null && execution.getId() != null) {
-            shiftExecutionMapper.incrementLoadedCount(execution.getId());
+            if (capacity >= 0) {
+                if (shiftExecutionMapper.incrementLoadedCountWithinCapacity(execution.getId(), capacity) == 0) {
+                    throw exception(DRIVER_CARGO_FULL);
+                }
+            } else {
+                shiftExecutionMapper.incrementLoadedCount(execution.getId());
+            }
         }
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void deliver(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
@@ -950,7 +953,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     // ==================== 商城订单（同理寄货）：司机端装车 → 妥投 ====================
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void productLoad(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         Long vehicleId = resolveVehicleId(driver.getId());
@@ -958,7 +961,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void productDeliver(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         Long vehicleId = resolveVehicleId(driver.getId());
@@ -966,7 +969,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pickupVerify(AppDriverOrderActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportOrderDO order = validateOrderExists(reqVO.getOrderId());
@@ -1053,7 +1056,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void reportLocation(AppDriverLocationReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         Long vehicleId = resolveVehicleId(driver.getId());
@@ -1240,7 +1243,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void handoverConfirm(AppDriverHandoverConfirmReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         // 归属校验在 service 内完成：接收/交出司机可确认；接收司机未分配时可认领
@@ -1294,7 +1297,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void legAction(String action, AppDriverLegActionReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         TransportLegDO leg = multiLegService.getLeg(reqVO.getLegId());
@@ -1409,6 +1412,19 @@ public class DriverAppServiceImpl implements DriverAppService {
     }
 
     private void updateOrderStatus(Long orderId, TransportOrderStatusEnum target) {
+        // BE-21：状态机守卫——不允许任意跳转（如 EXCEPTION → DELIVERING）。
+        // 幂等：目标与当前一致时跳过（避免重复事件重复推进报错）；订单不存在时保持原行为（update 0 行）。
+        TransportOrderDO current = transportOrderMapper.selectById(orderId);
+        if (current == null) {
+            return;
+        }
+        if (Objects.equals(current.getStatus(), target.getStatus())) {
+            return;
+        }
+        if (!TransportOrderStatusEnum.canTransit(current.getStatus(), target.getStatus())) {
+            throw exception(ORDER_STATUS_TRANSITION_ILLEGAL,
+                    TransportOrderStatusEnum.nameOf(current.getStatus()), target.getName());
+        }
         TransportOrderDO update = new TransportOrderDO();
         update.setStatus(target.getStatus());
         transportOrderMapper.update(update, new LambdaQueryWrapperX<TransportOrderDO>()

@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="公告标题" prop="title">
         <el-input v-model="formData.title" placeholder="请输入公告标题" />

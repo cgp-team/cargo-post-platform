@@ -1,5 +1,5 @@
 <template>
-  <ContentWrap title="运营概览">
+  <ContentWrap title="运营概览" v-loading="loading">
     <!-- 资源统计卡片 -->
     <el-row :gutter="16">
       <el-col :md="6" :sm="12" :xs="24">
@@ -9,7 +9,7 @@
               <div class="text-gray-500 text-sm">车辆总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.vehicleCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:van" :size="40" color="#2E7D32" />
+            <Icon icon="ep:van" :size="40" color="var(--status-success)" />
           </div>
         </el-card>
       </el-col>
@@ -20,7 +20,7 @@
               <div class="text-gray-500 text-sm">司机总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.driverCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:user" :size="40" color="#4CAF50" />
+            <Icon icon="ep:user" :size="40" color="var(--screen-success)" />
           </div>
         </el-card>
       </el-col>
@@ -31,7 +31,7 @@
               <div class="text-gray-500 text-sm">站点总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.stationCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:location" :size="40" color="#D9A441" />
+            <Icon icon="ep:location" :size="40" color="var(--brand-gold)" />
           </div>
         </el-card>
       </el-col>
@@ -42,7 +42,7 @@
               <div class="text-gray-500 text-sm">线路总数</div>
               <div class="text-3xl font-bold mt-2">{{ stats.routeCount ?? '-' }}</div>
             </div>
-            <Icon icon="ep:guide" :size="40" color="#C75B2A" />
+            <Icon icon="ep:guide" :size="40" color="var(--brand-clay)" />
           </div>
         </el-card>
       </el-col>
@@ -54,21 +54,21 @@
         <el-card shadow="hover" class="stat-card">
           <div class="text-gray-500 text-sm">今日订单</div>
           <div class="text-3xl font-bold mt-2">{{ summary.orderToday ?? '-' }}</div>
-          <div class="text-xs text-gray-400 mt-2">累计 {{ summary.orderTotal ?? 0 }} 单</div>
+          <div class="text-xs text-gray-500 mt-2">累计 {{ summary.orderTotal ?? 0 }} 单</div>
         </el-card>
       </el-col>
       <el-col :md="6" :sm="12" :xs="24">
         <el-card shadow="hover" class="stat-card">
           <div class="text-gray-500 text-sm">今日营收(元)</div>
           <div class="text-3xl font-bold mt-2">{{ fmtAmount(summary.orderAmountToday) }}</div>
-          <div class="text-xs text-gray-400 mt-2">累计 {{ fmtAmount(summary.orderAmountTotal) }} 元</div>
+          <div class="text-xs text-gray-500 mt-2">累计 {{ fmtAmount(summary.orderAmountTotal) }} 元</div>
         </el-card>
       </el-col>
       <el-col :md="6" :sm="12" :xs="24">
         <el-card shadow="hover" class="stat-card">
           <div class="text-gray-500 text-sm">在途车辆</div>
           <div class="text-3xl font-bold mt-2 text-green-500">{{ summary.vehicleInTransit ?? 0 }}</div>
-          <div class="text-xs text-gray-400 mt-2">
+          <div class="text-xs text-gray-500 mt-2">
             空闲 {{ summary.vehicleIdle ?? 0 }} · 停用 {{ summary.vehicleDisabled ?? 0 }}
           </div>
         </el-card>
@@ -77,7 +77,7 @@
         <el-card shadow="hover" class="stat-card">
           <div class="text-gray-500 text-sm">执行中班次</div>
           <div class="text-3xl font-bold mt-2 text-blue-500">{{ summary.shiftInTransit ?? 0 }}</div>
-          <div class="text-xs text-gray-400 mt-2">
+          <div class="text-xs text-gray-500 mt-2">
             未发 {{ summary.shiftPending ?? 0 }} · 已完成 {{ summary.shiftCompleted ?? 0 }}
           </div>
         </el-card>
@@ -195,6 +195,7 @@
 </template>
 
 <script setup lang="ts">
+import { CARGO_CHART_COLORS } from '@/plugins/echarts'
 import type { EChartsOption } from 'echarts'
 import { getDashboardStatistics } from '@/api/transport'
 import {
@@ -206,9 +207,11 @@ import {
 import { getDispatchSettlement, type DispatchSettlementRespVO } from '@/api/transport/dispatch'
 import { formatDate } from '@/utils/formatTime'
 
+import { orderTypeLabel } from '../constants'
+
 defineOptions({ name: 'TransportDashboard' })
 
-const ORDER_TYPE_LABELS: Record<number, string> = { 1: '客运', 2: '货运', 3: '邮快件' }
+// WEB-09: 订单类型映射改用 constants.ts 单一来源
 
 const loading = ref(true)
 const stats = ref<Record<string, number>>({})
@@ -234,6 +237,7 @@ const loadSettlement = async () => {
     })
   } catch (e) {
     console.error('Failed to load settlement data', e)
+    useMessage().error('结算数据加载失败，请稍后重试')
     settlement.value = undefined
     settleFailed.value = true
   } finally {
@@ -261,7 +265,7 @@ const fmtAmount = (value?: number) => Number(value ?? 0).toFixed(2)
 
 /** 订单类型分布饼图 */
 const typeChartOptions = computed<EChartsOption>(() => ({
-  color: ['#2E7D32', '#D9A441', '#4CAF50', '#86BB88'],
+  color: CARGO_CHART_COLORS, // WEB-15: canvas 不继承 CSS 变量，改字面色板常量（原 var(--*) 实际全部失效）
   tooltip: { trigger: 'item', formatter: '{b}: {c} 单 ({d}%)' },
   legend: { bottom: 0 },
   series: [
@@ -271,7 +275,7 @@ const typeChartOptions = computed<EChartsOption>(() => ({
       center: ['50%', '45%'],
       label: { formatter: '{b}\n{c} 单' },
       data: (orderStats.value.typeDistribution ?? []).map((item) => ({
-        name: ORDER_TYPE_LABELS[item.type] || `类型${item.type}`,
+        name: orderTypeLabel(item.type) === '-' ? `类型${item.type}` : orderTypeLabel(item.type),
         value: item.count
       }))
     }
@@ -280,7 +284,7 @@ const typeChartOptions = computed<EChartsOption>(() => ({
 
 /** 车辆状态分布环图 */
 const vehicleChartOptions = computed<EChartsOption>(() => ({
-  color: ['#4CAF50', '#2E7D32', '#86BB88'],
+  color: CARGO_CHART_COLORS.slice(0, 3),
   tooltip: { trigger: 'item', formatter: '{b}: {c} 辆 ({d}%)' },
   legend: { bottom: 0 },
   series: [
@@ -300,7 +304,7 @@ const vehicleChartOptions = computed<EChartsOption>(() => ({
 
 /** 近7日订单量(柱)与营收(线)双轴趋势 */
 const trendChartOptions = computed<EChartsOption>(() => ({
-  color: ['#2E7D32', '#C75B2A'],
+  color: [CARGO_CHART_COLORS[0], CARGO_CHART_COLORS[2]],
   tooltip: { trigger: 'axis' },
   legend: { top: 0, data: ['订单量', '营收(元)'] },
   grid: { top: 40, left: 24, right: 24, bottom: 24, containLabel: true },
@@ -342,6 +346,7 @@ const loadAll = async () => {
     orderStats.value = orderStatisticsData ?? { typeDistribution: [], statusDistribution: [], dailyTrend: [] }
   } catch (e) {
     console.error('Failed to load dashboard data', e)
+    useMessage().error('总览数据加载失败，请刷新重试')
   } finally {
     loading.value = false
   }

@@ -19,10 +19,12 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -84,9 +86,10 @@ public class DashboardController {
     }
 
     @GetMapping("/order-statistics")
-    @Operation(summary = "获取订单统计（类型/状态分布、近7日趋势）")
+    @Operation(summary = "获取订单统计（类型/状态分布、趋势）")
     @PreAuthorize("@ss.hasPermission('transport:dashboard:query')")
-    public CommonResult<Map<String, Object>> orderStatistics() {
+    public CommonResult<Map<String, Object>> orderStatistics(
+            @RequestParam(value = "granularity", required = false, defaultValue = "day") String granularity) {
         Map<String, Object> result = new HashMap<>();
         result.put("typeDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
                 .select("order_type AS type", "COUNT(*) AS count")
@@ -94,7 +97,13 @@ public class DashboardController {
         result.put("statusDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
                 .select("status AS status", "COUNT(*) AS count")
                 .groupBy("status")));
-        result.put("dailyTrend", buildDailyTrend());
+        boolean hourly = "hour".equalsIgnoreCase(granularity);
+        List<Map<String, Object>> trend = hourly ? buildHourlyTrend() : buildDailyTrend();
+        result.put("dailyTrend", trend);
+        if (hourly) {
+            result.put("hourlyTrend", trend);
+        }
+        result.put("granularity", hourly ? "hour" : "day");
         return success(result);
     }
 
@@ -135,5 +144,32 @@ public class DashboardController {
             }
         }
         return new ArrayList<>(byDate.values());
+    }
+
+    /** 近 24 小时订单量与金额趋势（按自然小时聚合），无数据的小时补零 */
+    private List<Map<String, Object>> buildHourlyTrend() {
+        LocalDateTime start = LocalDate.now().minusDays(1).atStartOfDay(); // 含当前小时共 24 个自然小时
+        List<Map<String, Object>> rows = transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
+                .select("DATE_FORMAT(create_time, '%Y-%m-%d %H:00') AS date", "COUNT(*) AS count",
+                        "IFNULL(SUM(total_amount), 0) AS amount")
+                .ge("create_time", start)
+                .groupBy("DATE_FORMAT(create_time, '%Y-%m-%d %H:00')"));
+        Map<String, Map<String, Object>> byHour = new LinkedHashMap<>();
+        java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00");
+        for (int i = 0; i < 24; i++) {
+            String hour = start.plusHours(i).format(fmt);
+            Map<String, Object> zero = new HashMap<>();
+            zero.put("date", hour);
+            zero.put("count", 0L);
+            zero.put("amount", BigDecimal.ZERO);
+            byHour.put(hour, zero);
+        }
+        for (Map<String, Object> row : rows) {
+            Object date = row.get("date");
+            if (date != null && byHour.containsKey(date.toString())) {
+                byHour.put(date.toString(), row);
+            }
+        }
+        return new ArrayList<>(byHour.values());
     }
 }

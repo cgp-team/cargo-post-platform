@@ -39,8 +39,9 @@ public class AlgorithmClient {
     private final AlgorithmProperties properties;
 
     /**
-     * route（轻量单路线查询）失败冷却截止时间：算法服务不可用时避免在循环里串行重试（12 段 × 每次重试）
-     * 把接口拖到超时。冷却期内直接快速失败，调用方按"估算直线兜底"降级（需求 §141）。
+     * 算法服务不可用冷却截止时间：plan/distance/route/allocate 四类调用共用。
+     * 算法服务不可用时避免在循环里串行重试把线程池拖死；冷却期内直接快速失败，
+     * 调用方按各自降级策略兜底（需求 §141）。
      */
     private final java.util.concurrent.atomic.AtomicLong routeUnavailableUntil = new java.util.concurrent.atomic.AtomicLong(0);
     /** 冷却时长：30 秒（足够跨过前端 15s 轮询的一次刷新） */
@@ -58,6 +59,10 @@ public class AlgorithmClient {
      * @return feasible 或 infeasible 的规划结果；服务不可用、参数错误等抛出 {@link ServiceException}
      */
     public AlgorithmPlanRespDTO plan(AlgorithmPlanReqDTO request) {
+        if (System.currentTimeMillis() < routeUnavailableUntil.get()) {
+            // 冷却期：算法服务刚被判定不可用，快速失败不占请求线程
+            throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+        }
         for (int attempt = 0; attempt <= properties.getMaxRetries(); attempt++) {
             if (attempt > 0) {
                 sleep(properties.getRetryBackoff().toMillis());
@@ -65,6 +70,7 @@ public class AlgorithmClient {
             try {
                 ResponseEntity<AlgorithmPlanRespDTO> response =
                         restTemplate.postForEntity("/api/v1/plan", request, AlgorithmPlanRespDTO.class);
+                routeUnavailableUntil.set(0); // 成功：清除冷却
                 return response.getBody();
             } catch (HttpStatusCodeException ex) {
                 int status = ex.getStatusCode().value();
@@ -90,6 +96,7 @@ public class AlgorithmClient {
                 log.warn("[plan][requestId={} 第 {} 次请求网络错误：{}]", request.getRequestId(), attempt + 1, ex.getMessage());
             }
         }
+        routeUnavailableUntil.set(System.currentTimeMillis() + ROUTE_COOLDOWN_MS);
         throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
     }
 
@@ -147,6 +154,10 @@ public class AlgorithmClient {
     }
 
     public AlgorithmDistanceRespDTO distance(AlgorithmDistanceReqDTO request) {
+        if (System.currentTimeMillis() < routeUnavailableUntil.get()) {
+            // 冷却期：算法服务刚被判定不可用，快速失败不占请求线程
+            throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
+        }
         if (request.getRequestId() == null) {
             request.setRequestId("req-" + IdUtil.fastSimpleUUID());
         }
@@ -157,6 +168,7 @@ public class AlgorithmClient {
             try {
                 ResponseEntity<AlgorithmDistanceRespDTO> response =
                         restTemplate.postForEntity("/api/v1/distance", request, AlgorithmDistanceRespDTO.class);
+                routeUnavailableUntil.set(0); // 成功：清除冷却
                 return response.getBody();
             } catch (HttpStatusCodeException ex) {
                 int status = ex.getStatusCode().value();
@@ -175,6 +187,7 @@ public class AlgorithmClient {
                 log.warn("[distance][requestId={} 第 {} 次请求网络错误：{}]", request.getRequestId(), attempt + 1, ex.getMessage());
             }
         }
+        routeUnavailableUntil.set(System.currentTimeMillis() + ROUTE_COOLDOWN_MS);
         throw exception(ALGORITHM_SERVICE_UNAVAILABLE);
     }
 
@@ -223,9 +236,14 @@ public class AlgorithmClient {
     /**
      * 轮询规划结果：202 继续等待，200 返回，404 说明 requestId 不存在或已过幂等保留期。
      * 轮询期间的 502/503/504 与网络错误并入轮询次数上限，不单独重试。
+     * 双重上限：pollBudget 总预算（默认 15s）与 maxPollAttempts 次数，先到为准。
      */
     private AlgorithmPlanRespDTO pollResult(String requestId) {
+        long deadline = System.currentTimeMillis() + properties.getPollBudget().toMillis();
         for (int attempt = 0; attempt < properties.getMaxPollAttempts(); attempt++) {
+            if (System.currentTimeMillis() >= deadline) {
+                break;
+            }
             sleep(properties.getPollInterval().toMillis());
             try {
                 ResponseEntity<AlgorithmPlanRespDTO> response =

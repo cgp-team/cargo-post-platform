@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="商品名称" prop="name">
         <el-input v-model="formData.name" placeholder="请输入商品名称" maxlength="128" show-word-limit />
@@ -57,9 +57,10 @@
         <el-input-number v-model="formData.stock" :min="0" style="width:100%" />
       </el-form-item>
       <el-form-item label="状态" prop="status">
+        <!-- WEB-08: 上下架统一 1=上架（与公告一致） -->
         <el-radio-group v-model="formData.status">
-          <el-radio :value="0">上架</el-radio>
-          <el-radio :value="1">下架</el-radio>
+          <el-radio :value="1">上架</el-radio>
+          <el-radio :value="0">下架</el-radio>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="排序" prop="sort">
@@ -97,7 +98,7 @@ const formData = ref<any>({
   badge: '',
   description: '',
   stock: 0,
-  status: 0,
+  status: 1, // WEB-08: 默认上架（1=上架）
   sort: 0,
 })
 
@@ -116,7 +117,7 @@ const formRules = reactive({
 })
 
 const resetForm = () => {
-  formData.value = { name: '', fromVillage: '', price: 0, unit: '斤', image: '', imageUrl: '', badge: '', description: '', stock: 0, status: 0, sort: 0 }
+  formData.value = { name: '', fromVillage: '', price: 0, unit: '斤', image: '', imageUrl: '', badge: '', description: '', stock: 0, status: 1, sort: 0 } // WEB-08: 1=上架
   formRef.value?.resetFields()
 }
 

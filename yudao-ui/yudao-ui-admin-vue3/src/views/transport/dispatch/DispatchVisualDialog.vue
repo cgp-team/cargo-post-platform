@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model="visible" title="调度结果可视化" width="1180px">
+  <Dialog v-model="visible" title="调度结果可视化" width="1000px">
     <div v-loading="loading" class="viz">
       <!-- 方案切换 + 汇总 -->
       <div class="viz-head">
@@ -42,10 +42,10 @@
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#123f6e" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--brand-primary-dark)" />
               </marker>
             </defs>
-            <rect x="0" y="0" width="1000" height="620" fill="#f7f9fc" />
+            <rect x="0" y="0" width="1000" height="620" fill="var(--surface-field)" />
             <g v-for="line in svgLines" :key="line.key">
               <polyline
                 :points="line.points"
@@ -101,8 +101,12 @@
               v-for="r in visibleRoutes"
               :key="'lg-' + r.key"
               class="legend-vehicle legend-vehicle-clickable"
+              role="button"
+              tabindex="0"
               :class="{ picked: selectedVehicleKey === r.key }"
               @click="selectVehicleByKey(r.key)"
+              @keydown.enter.prevent="selectVehicleByKey(r.key)"
+              @keydown.space.prevent="selectVehicleByKey(r.key)"
             >
               <span class="legend-vehicle-color" :style="{ background: r.color }"></span>
               <span class="legend-vehicle-name">{{ r.title }}</span>
@@ -134,13 +138,13 @@
         <div class="viz-timeline">
           <!-- 两个视角，避免信息堆在一起：按车辆看"怎么走、在哪做什么"；按订单看"整条链路与换乘交接" -->
           <div class="panel-tabs">
-            <div class="panel-tab" :class="{ active: panelTab === 'all' }" @click="switchTab('all')">
+            <div class="panel-tab" role="button" tabindex="0" :class="{ active: panelTab === 'all' }" @click="switchTab('all')" @keydown.enter.prevent="switchTab('all')" @keydown.space.prevent="switchTab('all')">
               总体
             </div>
-            <div class="panel-tab" :class="{ active: panelTab === 'vehicle' }" @click="switchTab('vehicle')">
+            <div class="panel-tab" role="button" tabindex="0" :class="{ active: panelTab === 'vehicle' }" @click="switchTab('vehicle')" @keydown.enter.prevent="switchTab('vehicle')" @keydown.space.prevent="switchTab('vehicle')">
               按车辆（路线 + 操作）
             </div>
-            <div class="panel-tab" :class="{ active: panelTab === 'order' }" @click="switchTab('order')">
+            <div class="panel-tab" role="button" tabindex="0" :class="{ active: panelTab === 'order' }" @click="switchTab('order')" @keydown.enter.prevent="switchTab('order')" @keydown.space.prevent="switchTab('order')">
               按订单（含联运交接）
             </div>
           </div>
@@ -152,13 +156,17 @@
 
           <!-- 视角一/二：每台车一条线，按行驶顺序列出经停与本站操作 -->
           <template v-if="panelTab !== 'order'">
-            <div v-if="!visibleRoutes.length" class="text-gray-400 text-sm">暂无调度明细</div>
+            <div v-if="!visibleRoutes.length" class="text-gray-500 text-sm">暂无调度明细</div>
             <div
               v-for="route in visibleRoutes"
               :key="route.key"
               class="route-card"
               :class="{ selectable: panelTab === 'vehicle', dimmed: panelTab === 'vehicle' && selectedVehicleKey && selectedVehicleKey !== route.key, picked: selectedVehicleKey === route.key }"
+              role="button"
+              tabindex="0"
               @click="panelTab === 'vehicle' && selectVehicle(route.key)"
+              @keydown.enter.prevent="panelTab === 'vehicle' && selectVehicle(route.key)"
+              @keydown.space.prevent="panelTab === 'vehicle' && selectVehicle(route.key)"
             >
               <div class="route-title">
                 <span class="route-color" :style="{ background: route.color }"></span>
@@ -214,7 +222,7 @@
 
           <!-- 视角三：按订单看"订单一段接一段"的先后关系；同一台车串成一条行程链 -->
           <template v-else>
-            <div v-if="!linkOrders.length" class="text-gray-400 text-sm">
+            <div v-if="!linkOrders.length" class="text-gray-500 text-sm">
               本方案暂无订单运输链（或该订单还未生成运输段）
             </div>
 
@@ -383,18 +391,18 @@ const topologies = ref<TopologyApi.OrderTopologyVO[]>([])
  * 颜色数量 ≥ 常见车队规模，超出后循环（并在图例里标出）。
  */
 const ROUTE_COLORS = [
-  '#1F5E9E', // 深蓝（主色）
-  '#E6A23C', // 橙
-  '#2E9E6B', // 绿
-  '#D9534F', // 红
-  '#7B5BD6', // 紫
-  '#0FA3B1', // 青
-  '#D4801A', // 琥珀
-  '#C2185B', // 玫红
-  '#4A7C1F', // 橄榄绿
-  '#5A6ACF', // 靛蓝
-  '#8D6E63', // 棕
-  '#00838F'  // 深青
+  'var(--brand-primary)', // 深蓝（主色）
+  'var(--el-color-warning)', // 橙
+  'var(--palette-1)', // 绿
+  'var(--palette-2)', // 红
+  'var(--palette-3)', // 紫
+  'var(--palette-4)', // 青
+  'var(--palette-5)', // 琥珀
+  'var(--palette-6)', // 玫红
+  'var(--palette-7)', // 橄榄绿
+  'var(--palette-8)', // 靛蓝
+  'var(--palette-9)', // 棕
+  'var(--palette-10)'  // 深青
 ]
 
 /** HSL → #RRGGBB（补充色用） */
@@ -433,8 +441,11 @@ const vehicleName = (id?: number) =>
  */
 const roadmapSegments = ref<Map<string, { provider: string; points: { lng: number; lat: number }[] }>>(new Map())
 
-const actionLabel = (action?: number) =>
-  ({ 0: '场站发车', 1: '乘客上车', 2: '乘客下车', 3: '派送', 4: '揽收', 5: '返场', 6: '途经' }[action ?? -1] || '经停')
+// WEB-09: 经停动作映射统一消费 constants.ts（与后端 DispatchPlanItemDO.actionType 权威口径一致）
+import { stopActionLabel } from '../constants'
+import { gcj02ToBd09 } from '@/components/Map'
+
+const actionLabel = (action?: number) => stopActionLabel(action)
 const actionClass = (action?: number) =>
   action === 0
     ? 'act-depart'
@@ -589,7 +600,7 @@ const buildOrderLegRoutes = (order: OrderChain): RouteView[] => {
     list.push({
       key: `order-${order.orderId}-leg-${index}`,
       planId: plan?.id,
-      color: leg.color || '#909399',
+      color: leg.color || 'var(--el-text-color-secondary)',
       title: `${leg.plateNo || '车辆'} 第 ${index + 1} 段`,
       orderNos: [order.orderNo],
       orderCount: 1,
@@ -744,7 +755,7 @@ const linkOrders = computed<OrderChain[]>(() => {
         return {
           ...leg,
           handoverTarget,
-          color: plateColorMap.value.get(leg.plateNo || '') || '#909399',
+          color: plateColorMap.value.get(leg.plateNo || '') || 'var(--el-text-color-secondary)',
           // 缺真实道路轨迹的段：地图不画直线，列表里明确标注（不出现"斜穿城市的直线"）
           noRoad: !legHasRoad(leg)
         }
@@ -770,7 +781,7 @@ const linkOrders = computed<OrderChain[]>(() => {
 
 /** 组装"每车一条线路"：按 visitSequence 排序，累计分段里程 */
 
-/** 转接站信息：站点名称 → 转接目标描述（用于车辆视角地图标注 & route-card 显示） */
+/** 换乘站信息：站点名称 → 转接目标描述（用于车辆视角地图标注 & route-card 显示） */
 const handoverStationMap = computed(() => {
   const map = new Map<string, { toDriverName?: string; toPlateNo?: string; fromDriverName?: string; fromPlateNo?: string }>()
   topologies.value.forEach((t) => {
@@ -788,7 +799,7 @@ const handoverStationMap = computed(() => {
   return map
 })
 
-/** 判断站点是否为转接站，并返回转接描述文本 */
+/** 判断站点是否为换乘站，并返回转接描述文本 */
 const handoverInfoFor = (stationId?: number, stationNameStr?: string): string => {
   const name = stationNameStr || stationName(stationId)
   if (!name) return ''
@@ -905,7 +916,7 @@ const journeyChains = computed<JourneyChain[]>(() => {
       key: `journey-${plate}`,
       plateNo: plate,
       driverName: sorted.map((r) => r.leg.driverName).find(Boolean),
-      color: plateColorMap.value.get(plate) || '#909399',
+      color: plateColorMap.value.get(plate) || 'var(--el-text-color-secondary)',
       legCount: sorted.length,
       distanceText: distanceKm.toFixed(1),
       orders,
@@ -954,7 +965,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
       const estimated = road.length < 2
       if (!estimated) {
         realSegments++
-        // 本段起点与上一段终点不重合 → 这台车中间"回了场站/换了个取货点"，
+        // 本段起点与上一段终点不重合 → 这台车中间"回了站点/换了个取货点"，
         // 两段不是连续行驶，必须断开：否则地图上会出现"每个作业点都连回始发站"的折线。
         const last = current[current.length - 1]
         const contiguous = last != null
@@ -1014,7 +1025,7 @@ const buildLegRoutes = (orderIdFilter?: Set<number>): RouteView[] => {
     const driver = sorted.map((r) => r.leg).find((l) => l.driverName)?.driverName
     list.push({
       key: `leg-${plate}`,
-      color: plateColorMap.value.get(plate) || '#909399',
+      color: plateColorMap.value.get(plate) || 'var(--el-text-color-secondary)',
       title: `${plate}${driver ? ` · ${driver}` : ''}`,
       orderNos,
       orderCount: orderNos.length,
@@ -1076,7 +1087,7 @@ const buildRoutes = () => {
         // "按订单视角没有直线、按车辆视角有直线"的不一致。
         if (real && real.provider === 'AMAP' && real.points.length >= 2 && !isStraightFallback(real.points)) {
           realSegments++
-          // 该段起点与上一段终点不重合 → 不连续行驶（回场站/换取货点），断开而不是连一条直线
+          // 该段起点与上一段终点不重合 → 不连续行驶（回站点/换取货点），断开而不是连一条直线
           const tail = current[current.length - 1]
           const contiguous = tail != null
             && Math.abs(tail.lng - real.points[0].lng) <= 1e-6
@@ -1107,7 +1118,7 @@ const buildRoutes = () => {
       list.push({
         key: `${plan.id}-${vehicleId}`,
         planId: plan.id,
-        color: (plateNo ? plateColorMap.value.get(plateNo) : undefined) || '#909399',
+        color: (plateNo ? plateColorMap.value.get(plateNo) : undefined) || 'var(--el-text-color-secondary)',
         title: `方案 #${plan.id} · ${vehicleName(vehicleId)}`,
         orderNos,
         orderCount: orderNos.length,
@@ -1147,13 +1158,7 @@ const overlays = ref<any[]>([])
 /** 播放用的车头 marker：key = 线路 key */
 const moverMarkers = ref<Record<string, { marker: any; path: any[] }>>({})
 
-const X_PI = (Math.PI * 3000.0) / 180.0
-/** GCJ-02 → BD-09（百度地图底图为 BD-09，不转换会有数百米偏移） */
-const gcj02ToBd09 = (lng: number, lat: number) => {
-  const z = Math.sqrt(lng * lng + lat * lat) + 0.00002 * Math.sin(lat * X_PI)
-  const theta = Math.atan2(lat, lng) + 0.000003 * Math.cos(lng * X_PI)
-  return { lng: z * Math.cos(theta) + 0.0065, lat: z * Math.sin(theta) + 0.006 }
-}
+// WEB-12: gcj02ToBd09 统一引用 @/components/Map/utils（删除本地重复实现）
 
 const initMap = async () => {
   if (map) return
@@ -1259,7 +1264,7 @@ const drawMap = () => {
       const stop = located.stop
       const bd = gcj02ToBd09(located.lng, located.lat)
       const point = new BMapGL.Point(bd.lng, bd.lat)
-      const marker = new BMapGL.Circle(point, 8, { strokeColor: '#fff', strokeWeight: 2, fillColor: route.color, fillOpacity: 1 })
+      const marker = new BMapGL.Circle(point, 8, { strokeColor: 'var(--text-on-primary)', strokeWeight: 2, fillColor: route.color, fillOpacity: 1 })
       try {
         marker.addEventListener('click', () => selectVehicleByKey(route.key))
       } catch (e) { /* ignore */ }
@@ -1271,18 +1276,18 @@ const drawMap = () => {
         { position: point, offset: new BMapGL.Size(12, -24) }
       )
       label.setStyle({
-        color: '#123f6e',
+        color: 'var(--brand-primary-dark)',
         fontSize: '12px',
         fontWeight: 'bold',
-        border: '1px solid #c7d8ea',
+        border: '1px solid var(--surface-line-deep)',
         padding: '2px 6px',
-        background: '#fff',
+        background: 'var(--surface-card)',
         borderRadius: '4px'
       })
       map.addOverlay(label)
       overlays.value.push(label)
 
-      // 转接站标注：如果该站点是转接点，额外绘制醒目菱形标记
+      // 换乘站标注：如果该站点是转接点，额外绘制醒目菱形标记
       const stopName = stop.stationName || stationName(stop.stationId)
       const _handover = stopName ? handoverStationMap.value.get(stopName) : undefined
       if (_handover) {
@@ -1302,12 +1307,12 @@ const drawMap = () => {
           { position: point, offset: new BMapGL.Size(12, -44) }
         )
         hoLabel.setStyle({
-          color: '#e6a23c',
+          color: 'var(--el-color-warning)',
           fontSize: '12px',
           fontWeight: 'bold',
-          border: '1px solid #e6a23c',
+          border: '1px solid var(--el-color-warning)',
           padding: '2px 8px',
-          background: '#fff8e1',
+          background: 'var(--el-color-warning-light-9)',
           borderRadius: '4px'
         })
         map.addOverlay(hoLabel)
@@ -1342,10 +1347,10 @@ const drawMap = () => {
   }
 
 }
-/** 转接站菱形图标（橙色，带"转"字） */
+/** 换乘站菱形图标（橙色，带"转"字） */
 const handoverIconUrl = () => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-    <polygon points="16,2 30,16 16,30 2,16" fill="#e6a23c" stroke="#ffffff" stroke-width="2"/>
+    <polygon points="16,2 30,16 16,30 2,16" fill="var(--el-color-warning)" stroke="#ffffff" stroke-width="2"/>
     <text x="16" y="20" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="bold">转</text>
   </svg>`
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
@@ -1523,7 +1528,7 @@ const svgMovers = computed(() => {
     .map((p) => {
       const pos = proj.project(p.point!)
       const route = mapRoutes.value.find((r) => r.key === p.key)
-      return { key: p.key, x: pos.x, y: pos.y, color: route?.color || '#409eff' }
+      return { key: p.key, x: pos.x, y: pos.y, color: route?.color || 'var(--el-color-primary)' }
     })
 })
 
@@ -1681,7 +1686,7 @@ onBeforeUnmount(stopPlay)
 .viz-map-wrap {
   position: relative;
   flex: 1 1 58%;
-  min-width: 420px;
+  min-width: min(420px, 100vw - 48px); /* WEB-25: 小屏不横向溢出 */
   height: 520px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
@@ -1699,7 +1704,7 @@ onBeforeUnmount(stopPlay)
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: #f7f9fc;
+  background: var(--surface-field);
 }
 .viz-map-note {
   position: absolute;
@@ -1737,9 +1742,9 @@ onBeforeUnmount(stopPlay)
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: #123f6e;
+  color: var(--brand-primary-dark);
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #c7d8ea;
+  border: 1px solid var(--surface-line-deep);
   border-radius: 6px;
   padding: 3px 8px;
 }
@@ -1752,7 +1757,7 @@ onBeforeUnmount(stopPlay)
   max-height: 40%;
   overflow-y: auto;
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid #c7d8ea;
+  border: 1px solid var(--surface-line-deep);
   border-radius: 6px;
   padding: 6px 8px;
 }
@@ -1772,7 +1777,7 @@ onBeforeUnmount(stopPlay)
   flex-shrink: 0;
 }
 .legend-vehicle-name {
-  color: #123f6e;
+  color: var(--brand-primary-dark);
   font-weight: 600;
 }
 .legend-vehicle-meta {
@@ -1795,7 +1800,7 @@ onBeforeUnmount(stopPlay)
 .viz-legend .legend-line {
   width: 18px;
   height: 0;
-  border-top: 3px solid #1f5e9e;
+  border-top: 3px solid var(--brand-primary);
   display: inline-block;
 }
 .viz-legend .legend-note {
@@ -1803,7 +1808,7 @@ onBeforeUnmount(stopPlay)
   font-size: 11px;
 }
 .viz-legend .legend-arrow {
-  color: #1f5e9e;
+  color: var(--brand-primary);
   font-size: 13px;
 }
 .viz-legend .legend-dot {
@@ -1813,8 +1818,8 @@ onBeforeUnmount(stopPlay)
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  background: #1f5e9e;
-  color: #fff;
+  background: var(--brand-primary);
+  color: var(--text-on-primary);
   font-size: 10px;
 }
 .viz-playbar {
@@ -1860,9 +1865,9 @@ onBeforeUnmount(stopPlay)
   user-select: none;
 }
 .panel-tab.active {
-  background: #1f5e9e;
-  border-color: #1f5e9e;
-  color: #fff;
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: var(--text-on-primary);
 }
 .panel-tip {
   font-size: 12px;
@@ -1875,8 +1880,8 @@ onBeforeUnmount(stopPlay)
 }
 .route-card.picked,
 .order-card.picked {
-  border-color: #1f5e9e;
-  box-shadow: 0 0 0 1px #1f5e9e inset;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 1px var(--brand-primary) inset;
 }
 .route-card.dimmed,
 .order-card.dimmed {
@@ -1888,8 +1893,8 @@ onBeforeUnmount(stopPlay)
   margin-bottom: 4px;
 }
 .order-card {
-  border: 1px solid #c7d8ea;
-  background: #f5f9ff;
+  border: 1px solid var(--surface-line-deep);
+  background: var(--surface-field);
   border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 10px;
@@ -1903,7 +1908,7 @@ onBeforeUnmount(stopPlay)
 .order-no {
   font-size: 13px;
   font-weight: 600;
-  color: #123f6e;
+  color: var(--brand-primary-dark);
 }
 .order-meta {
   font-size: 12px;
@@ -1926,14 +1931,14 @@ onBeforeUnmount(stopPlay)
   white-space: nowrap;
 }
 .est-badge {
-  background: #fdf6ec;
-  color: #e6a23c;
-  border: 1px solid #faecd8;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+  border: 1px solid var(--el-color-warning-light-8);
 }
 .real-badge {
-  background: #ecf5ff;
-  color: #409eff;
-  border: 1px solid #d9ecff;
+  background: var(--el-color-info-light-9);
+  color: var(--el-color-primary);
+  border: 1px solid var(--el-color-info-light-8);
 }
 .order-est-hint {
   display: flex;
@@ -1941,11 +1946,11 @@ onBeforeUnmount(stopPlay)
   gap: 4px;
   margin-bottom: 6px;
   padding: 4px 8px;
-  background: #fdf6ec;
-  border: 1px solid #faecd8;
+  background: var(--el-color-warning-light-9);
+  border: 1px solid var(--el-color-warning-light-8);
   border-radius: 4px;
   font-size: 11px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
   line-height: 1.5;
   .el-icon {
     flex-shrink: 0;
@@ -1968,7 +1973,7 @@ onBeforeUnmount(stopPlay)
 .order-transfer {
   margin-left: 28px;
   font-size: 12px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
   line-height: 1.6;
 }
 /* 行程链：同一台车的订单按先后串起来 */
@@ -1978,12 +1983,12 @@ onBeforeUnmount(stopPlay)
 .journey-title {
   font-size: 12px;
   font-weight: 600;
-  color: #123f6e;
+  color: var(--brand-primary-dark);
   margin-bottom: 6px;
 }
 .journey-card {
-  border: 1px solid #c7d8ea;
-  background: #fff;
+  border: 1px solid var(--surface-line-deep);
+  background: var(--surface-card);
   border-radius: 8px;
   padding: 6px 10px 8px;
   margin-bottom: 8px;
@@ -1991,8 +1996,8 @@ onBeforeUnmount(stopPlay)
   user-select: none;
 }
 .journey-card.picked {
-  border-color: #1f5e9e;
-  box-shadow: 0 0 0 1px #1f5e9e inset;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 1px var(--brand-primary) inset;
 }
 .journey-card.dimmed {
   opacity: 0.5;
@@ -2005,7 +2010,7 @@ onBeforeUnmount(stopPlay)
 }
 .journey-vehicle {
   font-weight: 600;
-  color: #123f6e;
+  color: var(--brand-primary-dark);
 }
 .journey-driver {
   color: var(--el-text-color-regular);
@@ -2019,7 +2024,7 @@ onBeforeUnmount(stopPlay)
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #1f5e9e;
+  color: var(--brand-primary);
   padding: 2px 0 4px;
 }
 .journey-arrow {
@@ -2040,7 +2045,7 @@ onBeforeUnmount(stopPlay)
   flex-shrink: 0;
 }
 .journey-order-no {
-  color: #1f5e9e;
+  color: var(--brand-primary);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -2055,13 +2060,13 @@ onBeforeUnmount(stopPlay)
   flex-shrink: 0;
 }
 .journey-handover {
-  color: #e6a23c;
+  color: var(--el-color-warning);
   font-weight: 600;
   flex-shrink: 0;
 }
 .link-card {
-  border: 1px solid #c7d8ea;
-  background: #f5f9ff;
+  border: 1px solid var(--surface-line-deep);
+  background: var(--surface-field);
   border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 10px;
@@ -2069,7 +2074,7 @@ onBeforeUnmount(stopPlay)
 .link-title {
   font-size: 13px;
   font-weight: 600;
-  color: #123f6e;
+  color: var(--brand-primary-dark);
   margin-bottom: 6px;
 }
 .link-order {
@@ -2081,7 +2086,7 @@ onBeforeUnmount(stopPlay)
   gap: 8px;
   font-size: 12px;
   font-weight: 600;
-  color: #1f5e9e;
+  color: var(--brand-primary);
 }
 .link-order-meta {
   font-weight: 400;
@@ -2096,7 +2101,7 @@ onBeforeUnmount(stopPlay)
   color: var(--el-text-color-primary);
 }
 .link-seq {
-  color: #1f5e9e;
+  color: var(--brand-primary);
   text-align: right;
 }
 .link-leg em {
@@ -2104,7 +2109,7 @@ onBeforeUnmount(stopPlay)
   color: var(--el-text-color-secondary);
 }
 .link-transfer {
-  color: #e6a23c;
+  color: var(--el-color-warning);
   font-weight: 600;
 }
 .route-card {
@@ -2133,11 +2138,11 @@ onBeforeUnmount(stopPlay)
   color: var(--el-text-color-secondary);
 }
 .trace-real {
-  color: #1f5e9e;
+  color: var(--brand-primary);
   font-weight: 600;
 }
 .trace-est {
-  color: #e6a23c;
+  color: var(--el-color-warning);
   font-weight: 600;
 }
 .stop-row {
@@ -2208,11 +2213,11 @@ onBeforeUnmount(stopPlay)
   gap: 6px;
   font-size: 12px;
   padding: 4px 0 4px 26px;
-  color: #e6a23c;
-  background: #fff8e1;
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
   margin: 2px 0;
   border-radius: 4px;
-  border-left: 3px solid #e6a23c;
+  border-left: 3px solid var(--el-color-warning);
 }
 .stop-handover-icon {
   font-size: 14px;

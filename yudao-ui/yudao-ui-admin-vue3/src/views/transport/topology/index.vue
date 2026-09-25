@@ -20,7 +20,7 @@
       <el-alert v-if="data && data.planReason" :title="'方案说明：' + data.planReason" type="info" :closable="false" style="margin-top: 12px" />
     </ContentWrap>
 
-    <ContentWrap v-if="data && (data.candidates?.length ?? 0) > 0" title="候选方案对比（智能调度不是随机分配）">
+    <ContentWrap v-if="data && (data.candidates?.length ?? 0) > 0" title="候选方案对比（智能派单不是随机分配）">
       <el-table :data="data.candidates" stripe border>
         <el-table-column label="方案" align="center" width="140">
           <template #default="scope">
@@ -143,7 +143,12 @@ const load = async () => {
     message.warning('请输入订单编号')
     return
   }
-  data.value = await TopologyApi.getTopologyByOrder(orderId.value)
+  try {
+    data.value = await TopologyApi.getTopologyByOrder(orderId.value)
+  } catch (e) {
+    // WEB-26: 失败给可见提示
+    message.error('链路查询失败，请确认订单编号后重试')
+  }
 }
 
 onMounted(() => {
@@ -178,8 +183,8 @@ onMounted(() => {
   max-width: 260px;
   border-radius: 10px;
   padding: 10px 12px;
-  border: 2px solid #dcdfe6;
-  background: #fafafa;
+  border: 2px solid var(--el-border-color);
+  background: var(--surface-field);
 }
 
 .node .n-title {
@@ -194,30 +199,30 @@ onMounted(() => {
 
 .node .n-sub {
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   line-height: 1.5;
   word-break: break-all;
 }
 
 /* 白色 + 蓝色主题：正常流转全部用蓝色系，仅异常保留红色 */
-.node.origin { border-color: #123f6e; background: #f5f8fc; }
-.node.dest { border-color: #123f6e; background: #f5f8fc; }
-.node.done { border-color: #1f5e9e; background: #e6eff5; }
-.node.doing { border-color: #2e7bbf; background: #f0f6fc; }
-.node.todo { border-color: #c8d0da; background: #fafbfc; }
-.node.exception { border-color: #f56c6c; background: #fef0f0; }
-.node.hub { border-style: dashed; border-color: #1f5e9e; background: #f0f6fc; }
-.node.hub.done { border-style: solid; border-color: #1f5e9e; background: #e6eff5; }
+.node.origin { border-color: var(--brand-primary-dark); background: var(--surface-page); }
+.node.dest { border-color: var(--brand-primary-dark); background: var(--surface-page); }
+.node.done { border-color: var(--brand-primary); background: var(--brand-primary-light); }
+.node.doing { border-color: var(--brand-accent); background: var(--brand-primary-light); }
+.node.todo { border-color: var(--surface-line-deep); background: var(--surface-field); }
+.node.exception { border-color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
+.node.hub { border-style: dashed; border-color: var(--brand-primary); background: var(--brand-primary-light); }
+.node.hub.done { border-style: solid; border-color: var(--brand-primary); background: var(--brand-primary-light); }
 
 .arrow {
   display: flex;
   align-items: center;
-  color: #c8d0da;
+  color: var(--surface-line-deep);
   font-size: 14px;
 }
 
-.arrow.done { color: #1f5e9e; }
-.arrow.doing { color: #2e7bbf; }
-.arrow.exception { color: #f56c6c; }
-.arrow.hub { color: #123f6e; }
+.arrow.done { color: var(--brand-primary); }
+.arrow.doing { color: var(--brand-accent); }
+.arrow.exception { color: var(--el-color-danger); }
+.arrow.hub { color: var(--brand-primary-dark); }
 </style>

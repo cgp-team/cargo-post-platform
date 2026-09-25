@@ -13,6 +13,12 @@ services:
     ports:
       - "127.0.0.1:${DB_PORT:-3306}:3306" # 仅本机：后端跑在宿主机，无需对公网开放
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--performance-schema=OFF"]
+    # DEP-02：资源上限，防单容器暴涨拖垮整机（docker stats 可见）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -30,6 +36,11 @@ services:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379" # 仅本机：后端跑在宿主机，无需对公网开放
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
+    # DEP-02：资源上限
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     volumes:
       - redis-data:/data
     healthcheck:
@@ -66,6 +77,12 @@ services:
       dockerfile: Dockerfile
     image: cargo-post/algorithm:1.0.0
     restart: unless-stopped
+    # DEP-02：资源上限（算法 CPU 密集，给 2 核 2G）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
     environment:
       # 高德「距离测量」Web 服务 key：配置后切驾车路网距离（km），留空走欧氏直线（度）
       AMAP_KEY: ${AMAP_KEY:-}

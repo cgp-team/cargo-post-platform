@@ -1,0 +1,22 @@
+# DEP-05：watchdog 常驻化（复制到 /etc/systemd/system/ 后执行：
+#   systemctl daemon-reload && systemctl enable --now cargo-post-watchdog.timer）
+# 告警外发：在 /opt/cargo-post-platform/.env 或 systemd Environment= 配 WATCHDOG_WEBHOOK=<webhook url>
+
+[Unit]
+Description=cargo-post watchdog check
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/cargo-post-platform
+ExecStart=/usr/bin/python3 scripts/monitor_watchdog.py --interval 0
+EnvironmentFile=-/opt/cargo-post-platform/.env
+
+[Unit]
+Description=cargo-post watchdog 每分钟巡检
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

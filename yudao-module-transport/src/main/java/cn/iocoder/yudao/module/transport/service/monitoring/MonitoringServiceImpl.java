@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.service.monitoring;
 
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
+import lombok.extern.slf4j.Slf4j;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringMapDataRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringPlanRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
@@ -39,6 +40,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRout
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -61,6 +63,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @Validated
+@Slf4j
 public class MonitoringServiceImpl implements MonitoringService {
 
     /** 监控状态：空闲 */
@@ -144,6 +147,7 @@ public class MonitoringServiceImpl implements MonitoringService {
     }
 
     @Override
+    @Cacheable(cacheNames = "transport:monitoring:vehicles#12s", key = "'all'")
     public List<MonitoringVehicleRespVO> getRealtimeVehicles() {
         LocalTime now = LocalTime.now();
         // 基础数据
@@ -415,7 +419,8 @@ public class MonitoringServiceImpl implements MonitoringService {
         }
         vo.setStops(stops);
         vo.setPolyline(fullPolyline.stream().map(p -> new MonitoringPlanRespVO.Point(p[0], p[1])).toList());
-        vo.setRouteProvider("amap");
+        // BE-28：routeProvider 反映真实来源——有折线才是 amap，否则如实标注 none（之前恒为 "amap" 误导排查）
+        vo.setRouteProvider(fullPolyline.isEmpty() ? "none" : "amap");
         return vo;
     }
 
@@ -450,8 +455,10 @@ public class MonitoringServiceImpl implements MonitoringService {
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
             }
-        } catch (Exception ignored) {
-            // 算法不可用：返回 null，由调用方断开折线
+        } catch (Exception ex) {
+            // BE-28：降级必须留痕，"静默 ignored" 会让折线消失却查不到原因
+            log.warn("[fetchPlanPolyline] 算法 /route 失败降级 vehicleId={} {}→{}: {}",
+                    vehicleId, fromStationId, toStationId, ex.getMessage());
         }
         return null;
     }

@@ -69,11 +69,11 @@ const setMenuTheme = (color: string) => {
     // 左侧菜单选中背景颜色
     leftMenuBgActiveColor: isDarkColor
       ? 'var(--el-color-primary)'
-      : hexToRGB(unref(primaryColor) || '#409eff', 0.1),
+      : hexToRGB(unref(primaryColor) || '#1F5E9E', 0.1),
     // 左侧菜单收起选中背景颜色
     leftMenuCollapseBgActiveColor: isDarkColor
       ? 'var(--el-color-primary)'
-      : hexToRGB(unref(primaryColor) || '#409eff', 0.1),
+      : hexToRGB(unref(primaryColor) || '#1F5E9E', 0.1),
     // 左侧菜单字体颜色
     leftMenuTextColor: isDarkColor ? '#bfcbd9' : '#333',
     // 左侧菜单选中字体颜色
@@ -217,16 +217,7 @@ const clear = () => {
       <ElDivider>{{ t('setting.systemTheme') }}</ElDivider>
       <ColorRadioPicker
         v-model="systemTheme"
-        :schema="[
-          '#409eff',
-          '#009688',
-          '#536dfe',
-          '#ff5c93',
-          '#ee4f12',
-          '#0096c7',
-          '#9c27b0',
-          '#ff9800'
-        ]"
+        :schema="['#1F5E9E','#123F6E','#2E7BBF','#2E7D32','#C75B2A','#D9A441']"
         @change="setSystemTheme"
       />
 

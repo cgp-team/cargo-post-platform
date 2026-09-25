@@ -413,7 +413,9 @@ class DispatchServiceImplTest {
 
         // 技术异常转成可读业务错误（前端能看到根因）
         assertEquals(ALGORITHM_RESULT_INVALID.getCode(), ex.getCode());
-        assertTrue(ex.getMessage().contains("plan_reason"));
+        // BE-27：对外只返回稳定文案，根因（plan_reason）只进日志不再透传前端
+        assertTrue(ex.getMessage().contains("智能调度执行失败"));
+        assertFalse(ex.getMessage().contains("plan_reason"));
         // 订单状态更新序列：CAS 抢占(已分配) → 失败释放(已入池)，最后一次必须是回池
         ArgumentCaptor<TransportOrderDO> orderCaptor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper, atLeast(2)).update(orderCaptor.capture(), any());
@@ -448,7 +450,9 @@ class DispatchServiceImplTest {
 
         ServiceException ex = assertThrows(ServiceException.class,
                 () -> dispatchService.createSmartPlan(smartReqVO()));
-        assertTrue(ex.getMessage().contains("估算服务不可用"));
+        // BE-27：根因（估算服务不可用）只进日志，对外为稳定文案
+        assertTrue(ex.getMessage().contains("智能调度执行失败"));
+        assertFalse(ex.getMessage().contains("估算服务不可用"));
 
         // 清理顺序：本方案的运输段 → 经停明细 → 状态日志 → 方案本体
         verify(transportLegMapper).delete(any());

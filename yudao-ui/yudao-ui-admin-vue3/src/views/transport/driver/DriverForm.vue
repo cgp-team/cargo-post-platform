@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="司机姓名" prop="name">
         <el-input v-model="formData.name" placeholder="请输入司机姓名" />

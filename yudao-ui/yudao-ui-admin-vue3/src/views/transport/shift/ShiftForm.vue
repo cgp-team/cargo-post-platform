@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="120px" v-loading="formLoading">
       <el-form-item label="班次编码" prop="shiftCode">
         <el-input v-model="formData.shiftCode" placeholder="请输入班次编码" />

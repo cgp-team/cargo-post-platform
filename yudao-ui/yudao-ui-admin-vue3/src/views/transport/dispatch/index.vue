@@ -1,7 +1,8 @@
 <template>
   <ContentWrap title="调度工作台">
-    <!-- 订单池 -->
-    <ContentWrap title="订单池">
+    <!-- 订单池（WEB-24: 去掉内层卡片，改分节标题，避免卡片套卡片） -->
+    <section class="dispatch-section">
+      <h3 class="dispatch-section-title">订单池</h3>
       <el-form :inline="true" :model="poolQuery" @submit.prevent="getPoolList">
         <el-form-item label="订单状态">
           <el-select v-model="poolQuery.status" placeholder="请选择" clearable style="width:140px">
@@ -101,26 +102,27 @@
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="订单池暂无订单——审核通过的订单归集后会出现在这里" />
+        </template>
+        </el-table>
       <Pagination :total="poolTotal" v-model:page="poolQuery.pageNo" v-model:limit="poolQuery.pageSize" @pagination="getPoolList" />
-    </ContentWrap>
+    </section>
 
     <!-- 调度方案 -->
-    <ContentWrap title="调度方案" style="margin-top:16px">
+    <section class="dispatch-section" style="margin-top:16px">
+      <h3 class="dispatch-section-title">调度方案</h3>
       <el-form :inline="true" :model="planQuery" @submit.prevent="getPlanList">
         <el-form-item label="方案状态">
+          <!-- WEB-09: 选项从 constants.ts 生成，与标签显示同源 -->
           <el-select v-model="planQuery.status" placeholder="请选择" clearable style="width:140px">
-            <el-option label="待审核" :value="0" />
-            <el-option label="已下发" :value="1" />
-            <el-option label="执行中" :value="2" />
-            <el-option label="已完成" :value="3" />
-            <el-option label="已作废" :value="4" />
+            <el-option v-for="(label, value) in PLAN_STATUS_LABELS" :key="value" :label="label" :value="Number(value)" />
           </el-select>
         </el-form-item>
         <el-form-item label="派单方式">
           <el-select v-model="planQuery.mode" placeholder="请选择" clearable style="width:140px">
-            <el-option label="手工" :value="0" />
-            <el-option label="智能" :value="1" />
+            <el-option v-for="(label, value) in DISPATCH_MODE_LABELS" :key="value" :label="label" :value="Number(value)" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -166,19 +168,23 @@
             <el-button link type="primary" @click="openDetail(scope.row)">详情</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无派单方案，手工派单或智能派单后生成" />
+        </template>
+        </el-table>
       <Pagination :total="planTotal" v-model:page="planQuery.pageNo" v-model:limit="planQuery.pageSize" @pagination="getPlanList" />
-    </ContentWrap>
+    </section>
   </ContentWrap>
 
   <!-- 手工派单弹窗 -->
-  <Dialog title="手工派单" v-model="manualVisible" width="500px">
+  <Dialog title="手工派单" v-model="manualVisible" width="480px">
     <el-form ref="manualFormRef" :model="manualForm" :rules="manualRules" label-width="120px" v-loading="manualLoading">
       <el-form-item label="已选订单">
         <span>{{ manualSelected.length }} 条</span>
       </el-form-item>
-      <el-form-item label="场站" prop="depotStationId">
-        <el-select v-model="manualForm.depotStationId" placeholder="请选择场站" style="width:100%">
+      <el-form-item label="站点" prop="depotStationId">
+        <el-select v-model="manualForm.depotStationId" placeholder="请选择站点" style="width:100%">
           <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
         </el-select>
       </el-form-item>
@@ -194,20 +200,20 @@
     </template>
   </Dialog>
 
-  <!-- 智能调度弹窗：默认一键（后端自动选场站/车辆/参数），高级设置里才手动指定 -->
-  <Dialog title="智能调度" v-model="smartVisible" width="720px">
+  <!-- 智能派单弹窗：默认一键（后端自动选站点/车辆/参数），高级设置里才手动指定 -->
+  <Dialog title="智能派单" v-model="smartVisible" width="720px">
     <el-steps :active="smartStep" finish-status="success" align-center style="margin-bottom:16px">
-      <el-step title="智能调度" />
+      <el-step title="智能派单" />
       <el-step title="高级设置" />
     </el-steps>
 
     <!-- 第 1 步：约束校验 / 运力预警 -->
     <div v-show="smartStep === 0" v-loading="smartLoading">
-      <!-- 一键智能调度：不选场站、不选车辆、不填参数 -->
+      <!-- 一键智能派单：不选站点、不选车辆、不填参数 -->
       <el-descriptions :column="2" border size="small" style="margin-bottom:14px">
         <el-descriptions-item label="待调度订单">{{ poolCount }} 单</el-descriptions-item>
         <el-descriptions-item label="当前可用车辆">{{ vehicleList.length }} 台</el-descriptions-item>
-        <el-descriptions-item label="候选场站">自动（按订单分布推导）</el-descriptions-item>
+        <el-descriptions-item label="候选站点">自动（按订单分布推导）</el-descriptions-item>
         <el-descriptions-item label="算法">HACO-CPS v1.4.1</el-descriptions-item>
       </el-descriptions>
 
@@ -221,21 +227,21 @@
         :closable="false"
         show-icon
         style="margin-bottom:12px"
-        :title="`智能调度完成：方案 #${autoResult.id}`"
-        :description="`订单 ${autoResult.orderCount ?? '-'} 单 · 车辆 ${autoResult.vehicleCount ?? '-'} 台 · 场站 ${autoResult.depotStationName || '自动选择'} · 总里程 ${autoResult.totalDistance ?? '-'} km · 算法 ${autoResult.algorithmVersion || 'HACO-CPS v1.4.1'}`"
+        :title="`智能派单完成：方案 #${autoResult.id}`"
+        :description="`订单 ${autoResult.orderCount ?? '-'} 单 · 车辆 ${autoResult.vehicleCount ?? '-'} 台 · 站点 ${autoResult.depotStationName || '自动选择'} · 总里程 ${autoResult.totalDistance ?? '-'} km · 算法 ${autoResult.algorithmVersion || 'HACO-CPS v1.4.1'}`"
       />
 
       <el-button type="primary" size="large" :loading="smartLoading" @click="runAutoSmart">
-        <Icon icon="ep:magic-stick" /> {{ autoResult ? '重新智能调度' : '开始智能调度' }}
+        <Icon icon="ep:magic-stick" /> {{ autoResult ? '重新智能派单' : '开始智能派单' }}
       </el-button>
       <el-button v-if="autoResult?.id" @click="viewPlan(autoResult!.id!)">查看方案</el-button>
 
       <el-divider content-position="left">高级设置（可选）</el-divider>
       <el-collapse v-model="smartAdvanced">
-        <el-collapse-item name="advanced" title="手动指定场站 / 车辆 / 算法参数">
+        <el-collapse-item name="advanced" title="手动指定站点 / 车辆 / 算法参数">
       <el-form :model="smartForm" label-width="100px">
-        <el-form-item label="场站">
-          <el-select v-model="smartForm.depotStationId" placeholder="请选择场站" style="width:100%" @change="validateResult = undefined">
+        <el-form-item label="站点">
+          <el-select v-model="smartForm.depotStationId" placeholder="请选择站点" style="width:100%" @change="validateResult = undefined">
             <el-option v-for="s in stationList" :key="s.id!" :label="s.stationName" :value="s.id!" />
           </el-select>
         </el-form-item>
@@ -306,7 +312,11 @@
           <el-table-column label="车牌" prop="plateNo" align="center" />
           <el-table-column label="载客上限" prop="passengerCapacity" align="center" />
           <el-table-column label="载货上限" prop="cargoCapacity" align="center" />
-        </el-table>
+        
+          <template #empty>
+            <el-empty :image-size="60" description="暂无参与车辆" />
+          </template>
+          </el-table>
 
         <!-- 站点作业标记（上车绿点/下车红点/派送/揽收） -->
         <div v-if="validateResult.markers?.length" class="marker-list">
@@ -383,7 +393,7 @@
   </Dialog>
 
   <!-- 方案审核弹窗 -->
-  <Dialog title="方案审核" v-model="reviewVisible" width="500px">
+  <Dialog title="方案审核" v-model="reviewVisible" width="480px">
     <el-form ref="reviewFormRef" :model="reviewForm" :rules="reviewRules" label-width="120px" v-loading="reviewLoading">
       <el-form-item label="审核结论" prop="approve">
         <el-radio-group v-model="reviewForm.approve">
@@ -402,7 +412,7 @@
   </Dialog>
 
   <!-- 发车核验弹窗 -->
-  <Dialog title="发车核验" v-model="checkVisible" width="500px">
+  <Dialog title="发车核验" v-model="checkVisible" width="480px">
     <el-form ref="checkFormRef" :model="checkForm" :rules="checkRules" label-width="120px" v-loading="checkLoading">
       <el-form-item label="车辆" prop="vehicleId">
         <el-select v-model="checkForm.vehicleId" placeholder="请选择车辆" style="width:100%">
@@ -426,7 +436,7 @@
   </Dialog>
 
   <!-- 方案详情弹窗 -->
-  <Dialog :title="`方案详情(方案号:${detail?.id ?? '-'})`" v-model="detailVisible" width="900px">
+  <Dialog :title="`方案详情(方案号:${detail?.id ?? '-'})`" v-model="detailVisible" width="720px">
     <el-descriptions v-if="detail" :column="4" border size="small" style="margin-bottom:12px">
       <el-descriptions-item label="总里程">{{ totalDistanceText(detail.totalDistance) }} km</el-descriptions-item>
       <el-descriptions-item label="预计耗时">
@@ -456,7 +466,11 @@
         <template #default="scope">{{ scope.row.orderNo || scope.row.orderId || '-' }}</template>
       </el-table-column>
       <el-table-column label="预计到达时间" prop="estimatedArrivalTime" align="center" width="180" />
-    </el-table>
+    
+      <template #empty>
+        <el-empty :image-size="60" description="暂无方案明细" />
+      </template>
+      </el-table>
   </Dialog>
 
   <!-- 调度结果可视化：方案摘要 + 每车任务段时间线 + 地图路线 + ▶播放 -->
@@ -480,14 +494,16 @@ import {
   dispatchModeLabel,
   dispatchModeTag,
   stopActionLabel,
-  stopActionTag
+  stopActionTag,
+  PLAN_STATUS_LABELS,
+  DISPATCH_MODE_LABELS
 } from '../constants'
 
 defineOptions({ name: 'TransportDispatch' })
 
 const message = useMessage()
 
-// 调度结果可视化：一键智能调度后就地展开（任务段时间线 + 地图路线 + ▶播放）
+// 调度结果可视化：一键智能派单后就地展开（任务段时间线 + 地图路线 + ▶播放）
 const visualVisible = ref(false)
 const visualPlanIds = ref<number[]>([])
 const openVisual = (planIds: number[]) => {
@@ -691,7 +707,7 @@ const manualForm = ref<{ depotStationId?: number; vehicleId?: number }>({
   vehicleId: undefined,
 })
 const manualRules = reactive({
-  depotStationId: [{ required: true, message: '请选择场站', trigger: 'change' }],
+  depotStationId: [{ required: true, message: '请选择站点', trigger: 'change' }],
   vehicleId: [{ required: true, message: '请选择车辆', trigger: 'change' }],
 })
 const openManual = () => {
@@ -741,11 +757,11 @@ const smartForm = ref<{ depotStationId?: number; vehicleIds: number[] }>({
   vehicleIds: [],
 })
 const validateResult = ref<DispatchApi.DispatchValidateRespVO>()
-/** 一键智能调度：进度阶段 / 结果摘要（默认路径，管理员无需任何选择） */
+/** 一键智能派单：进度阶段 / 结果摘要（默认路径，管理员无需任何选择） */
 const smartAdvanced = ref<string[]>([])
 const autoRunning = ref(false)
 const autoProgress = ref(0)
-const autoStages = ['分析订单与约束', '检查车辆运力', '选择调度场站', '运行 HACO-CPS', '生成调度方案']
+const autoStages = ['分析订单与约束', '检查车辆运力', '选择调度站点', '运行 HACO-CPS', '生成调度方案']
 const autoResult = ref<DispatchApi.DispatchPlanRespVO>()
 /** 订单池中"待调度"（已入池 status=1）数量，供一键弹窗展示 */
 const poolCount = computed(() => poolList.value.filter((o) => o.status === 1).length || poolTotal.value)
@@ -815,7 +831,7 @@ const submitSmart = async () => {
 }
 
 /**
- * 一键智能调度：后端自动选场站 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
+ * 一键智能派单：后端自动选站点 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
  * 进度条按阶段展示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
  */
 /** 一键调度最多连出几套方案（订单池里可能有多个片区，跨片区订单分批出方案） */
@@ -844,7 +860,7 @@ const runAutoPlans = async (onStage?: (text: string) => void): Promise<number[]>
     }
   }
   if (!planIds.length) {
-    throw new Error('智能调度失败：订单池为空或算法无可行解')
+    throw new Error('智能派单失败：订单池为空或算法无可行解')
   }
   if (failed) {
     message.warning('部分片区订单本次未能生成方案，详情见列表与错误提示')
@@ -857,8 +873,8 @@ const runAutoSmart = async () => {
   // 中途没有撤销入口，误点会一次性改动大量订单归属。
   try {
     await ElMessageBox.confirm(
-      '确认执行一键智能调度？将按片区分批生成多套派车方案并占用车辆，耗时可能较长。',
-      '一键智能调度',
+      '确认执行一键智能派单？将按片区分批生成多套派车方案并占用车辆，耗时可能较长。',
+      '一键智能派单',
       { type: 'warning', confirmButtonText: '开始调度', cancelButtonText: '再想想' }
     )
   } catch (e) {
@@ -872,20 +888,20 @@ const runAutoSmart = async () => {
     if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1
   }, 900)
   try {
-    // 1) 约束校验（auto=true：后端自动推导场站与候选车辆）
+    // 1) 约束校验（auto=true：后端自动推导站点与候选车辆）
     const validated = await DispatchApi.validateDispatch({ auto: true })
     validateResult.value = validated
     if (validated.capacityCheck?.overCapacity) {
       autoProgress.value = 1
       message.warning('运力不足：算法会自动增加车辆或给出不可行原因，可继续提交')
     }
-    // 2) 智能调度（按片区分批，算法决定实际使用几辆车）
+    // 2) 智能派单（按片区分批，算法决定实际使用几辆车）
     const planIds = await runAutoPlans()
     // 3) 读取方案摘要（订单数/车辆数/里程/算法版本）
     const plan = await DispatchApi.getDispatchPlan(planIds[0])
     autoResult.value = plan
     autoProgress.value = autoStages.length
-    message.success(`智能调度完成，共 ${planIds.length} 套方案：${planIds.map((id) => '#' + id).join('、')}`)
+    message.success(`智能派单完成，共 ${planIds.length} 套方案：${planIds.map((id) => '#' + id).join('、')}`)
     getPlanList()
     // 4) 就地展开调度结果可视化（任务段时间线 + 地图路线 + 播放）
     smartVisible.value = false
@@ -1093,7 +1109,7 @@ onMounted(() => {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  color: #fff;
+  color: var(--text-on-primary);
   font-size: 11px;
   line-height: 18px;
   text-align: center;
@@ -1110,5 +1126,13 @@ onMounted(() => {
 .marker-name {
   font-size: 12px;
   color: var(--el-text-color-regular);
+}
+
+/* WEB-24: 分节标题（替代内层 ContentWrap 卡片标题） */
+.dispatch-section-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 </style>

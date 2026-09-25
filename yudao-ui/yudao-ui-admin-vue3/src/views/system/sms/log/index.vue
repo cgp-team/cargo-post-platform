@@ -139,6 +139,15 @@
           <div>{{ formatDate(scope.row.sendTime) }}</div>
         </template>
       </el-table-column>
+      <!-- SMS-02: 失败原因直接可见（原仅详情弹窗可见），失败红色醒目告警 -->
+      <el-table-column label="失败原因" align="center" min-width="160" show-overflow-tooltip>
+        <template #default="scope">
+          <span v-if="scope.row.sendStatus === 20" class="text-red-500">
+            {{ scope.row.apiSendCode ? `[${scope.row.apiSendCode}] ` : '' }}{{ scope.row.apiSendMsg || '发送失败' }}
+          </span>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="接收状态" align="center" width="180">
         <template #default="scope">
           <dict-tag :type="DICT_TYPE.SYSTEM_SMS_RECEIVE_STATUS" :value="scope.row.receiveStatus" />

@@ -43,7 +43,7 @@ public class DriverVehicleServiceImpl implements DriverVehicleService {
     private VehicleMapper vehicleMapper;
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void bind(DriverVehicleBindReqVO reqVO) {
         // 校验司机、车辆存在
         DriverDO driver = driverMapper.selectById(reqVO.getDriverId());
@@ -79,7 +79,7 @@ public class DriverVehicleServiceImpl implements DriverVehicleService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void unbind(Long id) {
         DriverVehicleDO exist = driverVehicleMapper.selectById(id);
         if (exist == null) {

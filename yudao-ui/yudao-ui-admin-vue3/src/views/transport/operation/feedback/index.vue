@@ -41,7 +41,11 @@
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无反馈记录" />
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>

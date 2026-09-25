@@ -44,7 +44,11 @@
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无绑定记录，可在司机/车辆页发起绑定" />
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
 

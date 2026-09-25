@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.framework.apilog.config;
 
 import cn.iocoder.yudao.framework.apilog.core.filter.ApiAccessLogFilter;
+import cn.iocoder.yudao.framework.web.core.filter.TraceIdFilter;
 import cn.iocoder.yudao.framework.apilog.core.interceptor.ApiAccessLogInterceptor;
 import cn.iocoder.yudao.framework.common.biz.infra.logger.ApiAccessLogCommonApi;
 import cn.iocoder.yudao.framework.common.enums.WebFilterOrderEnum;
@@ -28,6 +29,14 @@ public class YudaoApiLogAutoConfiguration implements WebMvcConfigurer {
                                                                          ApiAccessLogCommonApi apiAccessLogApi) {
         ApiAccessLogFilter filter = new ApiAccessLogFilter(webProperties, applicationName, apiAccessLogApi);
         return createFilterBean(filter, WebFilterOrderEnum.API_ACCESS_LOG_FILTER);
+    }
+
+    /**
+     * DEP-05：每个请求写 MDC traceId（日志模式 %X{traceId}），排在一切业务过滤器之前
+     */
+    @Bean
+    public FilterRegistrationBean<TraceIdFilter> traceIdFilter() {
+        return createFilterBean(new TraceIdFilter(), WebFilterOrderEnum.TRACE_FILTER);
     }
 
     private static <T extends Filter> FilterRegistrationBean<T> createFilterBean(T filter, Integer order) {

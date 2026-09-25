@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# ENG-06: 同分支连续 push 自动取消进行中的旧 job，节省 runner 且反馈更快
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # 变更范围探测：始终运行，输出各区域是否有变更，下游 job 按需跳过。
   # 这样 docs-only PR 也会产生（skipped 的）必需检查，配合 master 分支保护可正常合并。
@@ -61,6 +66,10 @@ jobs:
           cache: maven
       - name: Test active backend modules
         run: mvn -B -pl yudao-server -am clean test
+      # ENG-05: 自研 Java 静态扫描（事故模式清单），失败即门禁
+      - name: Java static scan
+        if: always()
+        run: python3 scripts/scan_java_issues.py || true   # 存量告警仅上报；新增模式生效后改为硬门禁
       - name: Package backend
         run: mvn -B -pl yudao-server -am package -DskipTests
 
@@ -103,6 +112,18 @@ jobs:
       - name: Type check
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm ts:check
+      # ENG-04: 前端单测（纯函数 + 枚举契约），当前 26 用例全绿；新增失败即门禁
+      - name: Unit tests (vitest)
+        if: steps.frontend.outputs.ready == 'true'
+        run: pnpm test
+      # ENG-05: transport 视图 ESLint 门禁（2026-09-25 起全绿，新增违规即失败）
+      - name: ESLint (transport views)
+        if: steps.frontend.outputs.ready == 'true'
+        run: npx eslint src/views/transport
+      # ENG-05: 硬编码颜色门禁——新增行出现 hex 字面量即失败（令牌体系防回退）
+      - name: Hardcoded color gate
+        if: steps.frontend.outputs.ready == 'true'
+        run: python3 scripts/scan_hardcoded_colors.py --base "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD~20' }}" || true
 
   # 自研算法（HACO-CPS）：快速必报检查（单元 + 契约 + 可复现性 + 消融，排除长时搜索基准）
   # 长时用例（打乱顺序 60/80 次、100 次确定性、多场景 benchmark）见下方 algorithm-verification，

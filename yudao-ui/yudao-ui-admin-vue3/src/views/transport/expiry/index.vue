@@ -23,7 +23,11 @@
               </span>
             </template>
           </el-table-column>
-        </el-table>
+        
+          <template #empty>
+            <el-empty :image-size="60" description="暂无驾照临期记录" />
+          </template>
+          </el-table>
       </el-tab-pane>
       <el-tab-pane label="车辆保险" name="vehicle">
         <el-table v-loading="vehicleLoading" :data="vehicleList" stripe border>
@@ -36,7 +40,11 @@
               </span>
             </template>
           </el-table-column>
-        </el-table>
+        
+          <template #empty>
+            <el-empty :image-size="60" description="暂无保险临期记录" />
+          </template>
+          </el-table>
       </el-tab-pane>
     </el-tabs>
   </ContentWrap>

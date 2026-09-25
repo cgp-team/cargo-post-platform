@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.annotation.security.PermitAll;
+import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,7 +40,7 @@ public class AppProductController {
     @GetMapping("/page")
     @Operation(summary = "获得上架商品分页")
     @PermitAll
-    public CommonResult<PageResult<AppProductRespVO>> page(PageParam pageParam) {
+    public CommonResult<PageResult<AppProductRespVO>> page(@Valid PageParam pageParam) {
         PageResult<ProductDO> pageResult = productService.getOnShelfPage(pageParam);
         return success(BeanUtils.toBean(pageResult, AppProductRespVO.class));
     }

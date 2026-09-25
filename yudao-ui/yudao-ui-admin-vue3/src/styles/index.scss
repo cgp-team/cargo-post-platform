@@ -1,4 +1,5 @@
 @use './var.css';
+@use './tokens.scss';
 @use './FormCreate/index.scss';
 @use './theme.scss';
 @use 'element-plus/theme-chalk/dark/css-vars.css';
@@ -36,8 +37,8 @@
   }
 }
 
-/* ========== 客货邮主题：站牌绿（与小程序"山乡巴士"设计语言呼应） ========== */
-/* 主题色 --el-color-primary 由运行时主题系统注入（appStore 默认 #2e7d32，内联样式优先于样式表），此处仅覆盖辅助色 */
+/* ========== 客货邮主题：山泉蓝（与小程序"山乡巴士"设计语言统一） ========== */
+/* 主题色 --el-color-primary 由运行时主题系统注入（appStore 默认 #1F5E9E，内联样式优先于样式表），此处仅覆盖辅助色 */
 :root {
   --el-color-success: #2e7d32;
   --el-color-warning: #d9a441;
@@ -53,13 +54,13 @@
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
 }
 
-/* 表格圆角 + 表头浅绿底 */
+/* 表格圆角 + 表头底色（WEB-04: 用 Element 令牌替代写死浅绿，深色模式下表头随主题翻转） */
 .el-table {
   border-radius: 8px;
 }
 .el-table th.el-table__cell {
-  background-color: #f4f8f4;
-  color: #2b2b28;
+  background-color: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
   font-weight: 600;
 }
 
@@ -72,4 +73,10 @@
 /* 主按钮圆角 */
 .el-button--primary {
   border-radius: 6px;
+}
+
+/* WEB-18: 键盘可达性——自定义可点控件（role="button"）的焦点可见性 */
+[role="button"]:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
 }

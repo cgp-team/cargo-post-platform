@@ -64,7 +64,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     @Resource private CargoPricingService cargoPricingService;
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long create(TransportOrderCreateReqVO reqVO) {
         TransportOrderDO order = TransportOrderConvert.INSTANCE.convert(reqVO);
         order.setOrderNo(generateOrderNo());
@@ -88,10 +88,13 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void update(TransportOrderUpdateReqVO reqVO) {
         validateExists(reqVO.getId());
         TransportOrderDO order = TransportOrderConvert.INSTANCE.convert(reqVO);
+        // 状态机守卫（BE-04）：更新接口不允许直写 status，订单状态只能由状态机/流程推进；
+        // MyBatis-Plus updateById 忽略 null 字段，置 null 即落库时不会覆盖
+        order.setStatus(null);
         orderMapper.updateById(order);
         // Update sub-orders：存在则按 id 更新（保留取件码/核销/审核等流程字段），不存在才插入
         Integer orderType = reqVO.getOrderType();
@@ -105,7 +108,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
         validateExists(id);
         deletePassengerOrder(id);
@@ -125,7 +128,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long createSendOrder(Long userId, AppSendOrderCreateReqVO reqVO) {
         if (userId == null) {
             throw exception(SEND_ORDER_USER_NOT_LOGIN);
@@ -328,7 +331,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void audit(OrderAuditReqVO reqVO) {
         TransportOrderDO order = validateExists(reqVO.getOrderId());
         // 仅货运（村民寄货散件）需要审核
@@ -422,7 +425,7 @@ public class TransportOrderServiceImpl implements TransportOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void confirmStationAction(Long userId, Long orderId) {
         if (userId == null) {
             throw exception(SEND_ORDER_USER_NOT_LOGIN);

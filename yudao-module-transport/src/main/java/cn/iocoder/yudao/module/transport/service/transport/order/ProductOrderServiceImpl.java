@@ -72,7 +72,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     @Resource private ShiftExecutionMapper shiftExecutionMapper;
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long createOrder(Long userId, AppProductOrderCreateReqVO reqVO) {
         if (userId == null) {
             throw exception(PRODUCT_ORDER_USER_NOT_LOGIN);
@@ -82,7 +82,8 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         if (product == null) {
             throw exception(PRODUCT_NOT_EXISTS);
         }
-        if (product.getStatus() != null && product.getStatus() != 0) {
+        // WEB-08: 上下架枚举统一 1=上架（与公告一致），非 1 视为下架
+        if (product.getStatus() != null && product.getStatus() != 1) {
             throw exception(PRODUCT_OFF_SHELF);
         }
         // 2. 扣库存（stock >= quantity 条件，返回 0 即库存不足）
@@ -127,7 +128,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void cancel(Long userId, Long id) {
         if (userId == null) {
             throw exception(PRODUCT_ORDER_USER_NOT_LOGIN);
@@ -139,15 +140,20 @@ public class ProductOrderServiceImpl implements ProductOrderService {
         if (!ProductOrderStatusEnum.PENDING_DELIVERY.getStatus().equals(order.getStatus())) {
             throw exception(PRODUCT_ORDER_STATUS_ILLEGAL);
         }
-        // 恢复库存
-        for (ProductOrderItemDO item : itemMapper.selectListByOrderId(id)) {
-            productMapper.restoreStock(item.getProductId(), item.getQuantity());
-        }
-        // 置取消
+        // CAS 置取消（BE-07）：仅待配送态可取消；affected==0 说明被并发请求抢先取消，直接返回，防止重复补库存
         ProductOrderDO update = new ProductOrderDO();
         update.setId(id);
         update.setStatus(ProductOrderStatusEnum.CANCELLED.getStatus());
-        orderMapper.updateById(update);
+        int affected = orderMapper.update(update, new LambdaQueryWrapperX<ProductOrderDO>()
+                .eq(ProductOrderDO::getId, id)
+                .eq(ProductOrderDO::getStatus, ProductOrderStatusEnum.PENDING_DELIVERY.getStatus()));
+        if (affected == 0) {
+            return;
+        }
+        // 恢复库存（仅在 CAS 成功后执行一次）
+        for (ProductOrderItemDO item : itemMapper.selectListByOrderId(id)) {
+            productMapper.restoreStock(item.getProductId(), item.getQuantity());
+        }
     }
 
     @Override
@@ -161,7 +167,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void ship(Long id, Long vehicleId, Long shiftId, Long deliverStationId) {
         ProductOrderDO order = validateExists(id);
         if (!ProductOrderStatusEnum.PENDING_DELIVERY.getStatus().equals(order.getStatus())) {
@@ -219,7 +225,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void driverLoad(Long driverId, Long vehicleId, Long orderId, String photoUrl) {
         ProductOrderDO order = validateDriverTask(driverId, vehicleId, orderId);
         ProductOrderDO update = new ProductOrderDO();
@@ -230,7 +236,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void driverDeliver(Long driverId, Long vehicleId, Long orderId, String photoUrl) {
         ProductOrderDO order = validateDriverTask(driverId, vehicleId, orderId);
         ProductOrderDO update = new ProductOrderDO();
@@ -289,7 +295,7 @@ public class ProductOrderServiceImpl implements ProductOrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void complete(Long id) {
         updateStatus(id, ProductOrderStatusEnum.DELIVERED.getStatus(), ProductOrderStatusEnum.COMPLETED.getStatus());
     }

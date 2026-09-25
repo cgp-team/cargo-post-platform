@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="站点编码" prop="stationCode">
         <el-input v-model="formData.stationCode" placeholder="请输入站点编码" />
@@ -52,9 +52,9 @@
           <el-checkbox v-model="formData.vehicleAccess">车辆可达（能进入装卸货）</el-checkbox>
         </div>
         <div style="width:100%">
-          <el-checkbox v-model="formData.dispatchEnabled">开放调度（可作场站/换乘站）</el-checkbox>
+          <el-checkbox v-model="formData.dispatchEnabled">开放调度（可作站点/换乘站）</el-checkbox>
         </div>
-        <div style="width:100%;color:#909399;font-size:12px;line-height:1.5">
+        <div style="width:100%;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5">
           新增站点默认「用户可达=是、车辆可达=否、开放调度=否」：站点创建后**立即**出现在地图与附近公交里，
           但不会自动加入线路、也不会自动获得车辆权限或调度资格，需要按需显式勾选。
         </div>
@@ -72,8 +72,9 @@
     </template>
   </Dialog>
 
-  <!-- 地图选点：点击地图即取该点经纬度（内部 BD-09 → GCJ-02 转换，保证与业务坐标一致） -->
-  <el-dialog v-model="mapPickerVisible" title="地图选点（点击地图选择站点位置）" width="720px" append-to-body>
+  <!-- 地图选点：点击地图即取该点经纬度（内部 BD-09 → GCJ-02 转换，保证与业务坐标一致）
+       WEB-07: 改回 Dialog 封装（append-to-body 保留，地图容器需要挂 body 避免层叠上下文裁剪） -->
+  <Dialog v-model="mapPickerVisible" title="地图选点（点击地图选择站点位置）" width="720px" append-to-body>
     <div class="picker-tip">
       当前坐标：<b>{{ pickerLongitude?.toFixed(6) || '—' }}, {{ pickerLatitude?.toFixed(6) || '—' }}</b>
       <span class="coord-tip">（GCJ-02；点击地图任意位置即可选点）</span>
@@ -83,12 +84,13 @@
       <el-button @click="mapPickerVisible = false">取 消</el-button>
       <el-button type="primary" @click="applyPickerToForm">使用该坐标</el-button>
     </template>
-  </el-dialog>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
 import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
+import { gcj02ToBd09, bd09ToGcj02 } from '@/components/Map'
 import { loadBaiduMapSdk } from '@/components/Map/src/utils'
 
 const message = useMessage()
@@ -100,21 +102,7 @@ const formRef = ref()
 const emit = defineEmits(['success'])
 
 // ==================== 地图选点（BD-09 ↔ GCJ-02） ====================
-const X_PI = (Math.PI * 3000.0) / 180.0
-/** GCJ-02 → BD-09（百度底图） */
-const gcj02ToBd09 = (lng: number, lat: number) => {
-  const z = Math.sqrt(lng * lng + lat * lat) + 0.00002 * Math.sin(lat * X_PI)
-  const theta = Math.atan2(lat, lng) + 0.000003 * Math.cos(lng * X_PI)
-  return { lng: z * Math.cos(theta) + 0.0065, lat: z * Math.sin(theta) + 0.006 }
-}
-/** BD-09 → GCJ-02（选点回填必须转回业务坐标系，否则站点会偏数百米） */
-const bd09ToGcj02 = (bdLng: number, bdLat: number) => {
-  const x = bdLng - 0.0065
-  const y = bdLat - 0.006
-  const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * X_PI)
-  const theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * X_PI)
-  return { lng: z * Math.cos(theta), lat: z * Math.sin(theta) }
-}
+// WEB-12: 坐标转换统一引用 @/components/Map/utils（删除本地重复实现）
 
 const mapPickerVisible = ref(false)
 const pickerRef = ref<HTMLDivElement>()

@@ -76,6 +76,8 @@ public class AppAuthController {
     @PostMapping("/sms-login")
     @Operation(summary = "使用手机 + 验证码登录")
     @PermitAll
+    // SMS-04 排障提示：入口限流（按 IP）被拒绝时，请求不会到达 Service——
+    // 不产生验证码、也不写 system_sms_log。排障时若日志表查不到记录，先查限流拒绝（Redis 计数）。
     @RateLimiter(time = 60, count = 5, keyResolver = ClientIpRateLimiterKeyResolver.class) // 防短信轰炸 / 账号爆破
     public CommonResult<AppAuthLoginRespVO> smsLogin(@RequestBody @Valid AppAuthSmsLoginReqVO reqVO) {
         return success(authService.smsLogin(reqVO));

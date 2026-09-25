@@ -352,6 +352,60 @@ public class GlobalExceptionHandler {
         }
     }
 
+
+    /** BE-19：敏感参数键（小写匹配，命中即掩码） */
+    private static final java.util.Set<String> SENSITIVE_PARAM_KEYS = java.util.Set.of(
+            "password", "oldpassword", "newpassword", "confirmpassword",
+            "mobile", "phone", "telephone", "idcard", "idnumber",
+            "address", "receiveraddress", "contactmobile", "receivermobile");
+
+    /** BE-19：脱敏后参数 JSON 的最大长度，超出截断 */
+    private static final int MAX_REQUEST_PARAM_LENGTH = 2000;
+
+    /**
+     * 异步日志落库前的脱敏与截断：query 递归掩码敏感键；body 若为 JSON 则解析后掩码，
+     * 解析失败按纯文本截断。掩码值固定为 "******"。
+     */
+    private String sanitizeRequestParams(Map<String, Object> requestParams) {
+        Object query = requestParams.get("query");
+        if (query instanceof Map) {
+            maskSensitiveKeys((Map<String, Object>) query);
+        }
+        Object body = requestParams.get("body");
+        if (body instanceof String bodyStr) {
+            try {
+                Map<String, Object> bodyMap = JsonUtils.parseObject(bodyStr, Map.class);
+                if (bodyMap != null) {
+                    maskSensitiveKeys(bodyMap);
+                    requestParams.put("body", JsonUtils.toJsonString(bodyMap));
+                } else {
+                    requestParams.put("body", truncate(bodyStr));
+                }
+            } catch (Exception ignoreParse) {
+                // 非 JSON 文本：按纯文本截断处理
+                requestParams.put("body", truncate(bodyStr));
+            }
+        }
+        return truncate(JsonUtils.toJsonString(requestParams));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void maskSensitiveKeys(Map<String, Object> params) {
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            Object value = entry.getValue();
+            if (SENSITIVE_PARAM_KEYS.contains(entry.getKey().toLowerCase())) {
+                entry.setValue("******");
+            } else if (value instanceof Map) {
+                maskSensitiveKeys((Map<String, Object>) value);
+            }
+        }
+    }
+
+    private static String truncate(String text) {
+        return text != null && text.length() > MAX_REQUEST_PARAM_LENGTH
+                ? text.substring(0, MAX_REQUEST_PARAM_LENGTH) + "...(truncated)" : text;
+    }
+
     private void buildExceptionLog(ApiErrorLogCreateReqDTO errorLog, HttpServletRequest request, Throwable e) {
         // 处理用户信息
         errorLog.setUserId(WebFrameworkUtils.getLoginUserId(request));
@@ -375,7 +429,8 @@ public class GlobalExceptionHandler {
         Map<String, Object> requestParams = MapUtil.<String, Object>builder()
                 .put("query", ServletUtils.getParamMap(request))
                 .put("body", ServletUtils.getBody(request)).build();
-        errorLog.setRequestParams(JsonUtils.toJsonString(requestParams));
+        // BE-19：请求体可能含明文密码/手机号/收件地址，落库前脱敏 + 截断
+        errorLog.setRequestParams(sanitizeRequestParams(requestParams));
         errorLog.setRequestMethod(request.getMethod());
         errorLog.setUserAgent(ServletUtils.getUserAgent(request));
         errorLog.setUserIp(ServletUtils.getClientIP(request));

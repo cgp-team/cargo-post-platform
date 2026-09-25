@@ -1,5 +1,5 @@
 <template>
-  <Dialog title="订单发货" v-model="dialogVisible" width="500px">
+  <Dialog title="订单发货" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" label-width="100px" v-loading="formLoading">
       <el-alert
         type="info"
@@ -40,7 +40,7 @@
           />
         </el-select>
         <div class="ship-tip">
-          快递/包裹的实际交付网点（如「四公里交通换乘枢纽站」集散中心、收件地址最近的村级站「重邮南门货运站」）；
+          快递/包裹的实际交付站点（如「四公里交通换乘枢纽站」集散中心、收件地址最近的村级站「重邮南门货运站」）；
           不选则默认在班次线路终点站交付。
         </div>
       </el-form-item>
@@ -51,16 +51,6 @@
     </template>
   </Dialog>
 </template>
-
-<style lang="scss" scoped>
-.ship-tip {
-  width: 100%;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.6;
-}
-</style>
 
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
@@ -123,3 +113,13 @@ const submitForm = async () => {
   }
 }
 </script>
+
+<style lang="scss" scoped>
+.ship-tip {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+</style>

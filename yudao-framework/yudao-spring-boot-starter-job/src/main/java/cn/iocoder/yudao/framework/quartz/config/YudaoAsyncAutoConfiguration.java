@@ -27,6 +27,9 @@ public class YudaoAsyncAutoConfiguration {
                 if (bean instanceof ThreadPoolTaskExecutor) {
                     ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) bean;
                     executor.setTaskDecorator(TtlRunnable::get);
+                    // BE-20：默认 AbortPolicy 在队列打满时直接抛异常且无日志缓冲；CallerRunsPolicy 让提交线程
+                    // 亲自执行，形成天然背压，避免高并发下任务被静默丢弃或线程池无限扩张
+                    executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
                     return executor;
                 }
                 // 处理 SimpleAsyncTaskExecutor

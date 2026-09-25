@@ -30,6 +30,9 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.NOTIFIC
 @Slf4j
 public class UserNotificationServiceImpl implements UserNotificationService {
 
+    /** BE-28：通知写入失败累计计数（监控用） */
+    private static final java.util.concurrent.atomic.AtomicLong SEND_FAIL_COUNT = new java.util.concurrent.atomic.AtomicLong();
+
     private static final Integer READ_STATUS_UNREAD = 0;
     private static final Integer READ_STATUS_READ = 1;
     /** 后台通知的默认接收方编号（后台按类型聚合展示，不区分具体管理员） */
@@ -85,7 +88,9 @@ public class UserNotificationServiceImpl implements UserNotificationService {
             notificationMapper.insert(notification);
             return notification.getId();
         } catch (Exception ex) {
-            log.warn("[user-notification] 接收方 {} 通知写入失败：{}", dto.getRecipientId(), ex.getMessage());
+            // BE-28：失败计数与留痕——通知丢失通常无感，靠计数可在监控里发现异常增长
+            log.warn("[user-notification] 接收方 {} 通知写入失败（累计第 {} 次）：{}",
+                    dto.getRecipientId(), SEND_FAIL_COUNT.incrementAndGet(), ex.getMessage());
             return null;
         }
     }

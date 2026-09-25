@@ -28,17 +28,17 @@ public interface ProductMapper extends BaseMapperX<ProductDO> {
         return selectOne(ProductDO::getName, name);
     }
 
-    /** 查询全部上架商品（按 sort 升序、id 倒序） */
+    /** 查询全部上架商品（按 sort 升序、id 倒序）。WEB-08: 上下架枚举统一 1=上架（与公告一致） */
     default List<ProductDO> selectOnShelfList() {
         return selectList(new LambdaQueryWrapperX<ProductDO>()
-                .eq(ProductDO::getStatus, 0)
+                .eq(ProductDO::getStatus, 1)
                 .orderByAsc(ProductDO::getSort).orderByDesc(ProductDO::getId));
     }
 
     /** 上架商品分页（条件与排序同 selectOnShelfList） */
     default PageResult<ProductDO> selectOnShelfPage(PageParam pageParam) {
         return selectPage(pageParam, new LambdaQueryWrapperX<ProductDO>()
-                .eq(ProductDO::getStatus, 0)
+                .eq(ProductDO::getStatus, 1)
                 .orderByAsc(ProductDO::getSort).orderByDesc(ProductDO::getId));
     }
 
