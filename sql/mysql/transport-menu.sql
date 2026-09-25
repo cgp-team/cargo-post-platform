@@ -149,6 +149,12 @@ INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon
 INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
 (6914, '到期预警', 'transport:driver:query', 2, 14, 6800, 'expiry', 'ep:alarm-clock', 'transport/expiry/index', 'TransportExpiry', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0');
 
+-- ---------- 智慧大屏入口（跳转到前端全屏路由 /transport/bigscreen）----------
+-- path 刻意用 bigscreen-entry 避免与前端静态全屏路由 /transport/bigscreen 冲突；
+-- keep_alive 必须 b'0'：entry.vue 在 setup 中执行 replace，被 keep-alive 缓存后将不再跳转。
+INSERT INTO system_menu (id, name, permission, type, sort, parent_id, path, icon, component, component_name, status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted) VALUES
+(6802, '智慧大屏', 'transport:dashboard:query', 2, 0, 6800, 'bigscreen-entry', 'ep:monitor', 'transport/bigscreen/entry', 'TransportBigScreenEntry', 0, b'1', b'0', b'1', '1', NOW(), '1', NOW(), b'0');
+
 -- 将菜单分配给超级管理员角色
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6800 AND 6899;
 INSERT IGNORE INTO system_role_menu (role_id, menu_id) SELECT 1, id FROM system_menu WHERE id BETWEEN 6900 AND 6919;

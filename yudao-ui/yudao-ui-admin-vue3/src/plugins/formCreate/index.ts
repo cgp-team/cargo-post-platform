@@ -124,7 +124,11 @@ const components = [
 ]
 
 // 参考 http://www.form-create.com/v3/element-ui/auto-import.html 文档
+let installed = false
 export const setupFormCreate = (app: App<Element>) => {
+  // 幂等：按需加载后可能被页面多次调用
+  if (installed) return
+  installed = true
   components.forEach((component) => {
     app.component(component.name!, component)
   })

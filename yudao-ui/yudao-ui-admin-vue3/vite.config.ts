@@ -95,9 +95,11 @@ export default ({command, mode}: ConfigEnv): UserConfig => {
                     },
                     codeSplitting: {
                         groups: [
-                            { name: 'echarts', test: /node_modules[\\/]echarts[\\/]/ }, // 将 echarts 单独打包，参考 https://gitee.com/yudaocode/yudao-ui-admin-vue3/issues/IAB1SX 讨论
-                            { name: 'form-create', test: /node_modules[\\/]@form-create[\\/]element-ui[\\/]/ }, // 参考 https://github.com/yudaocode/yudao-ui-admin-vue3/issues/148 讨论
-                            { name: 'form-designer', test: /node_modules[\\/]@form-create[\\/]designer[\\/]/ }
+                            { name: 'echarts', test: /node_modules[\\/]echarts[\\/]/ } // 将 echarts 单独打包，参考 https://gitee.com/yudaocode/yudao-ui-admin-vue3/issues/IAB1SX 讨论
+                            // form-create / form-designer 分组已移除：入口并不直接依赖它们，但分组会把
+                            // 入口所需的共享模块吸入分组 chunk，导致首屏 modulepreload 拉满 1.8MB
+                            // （form-create 720KB + form-designer 1.07MB）。现 form-create 仅
+                            // 「表单构建」页引用，走 rolldown 默认分包即可。
                         ]
                     }
                 },

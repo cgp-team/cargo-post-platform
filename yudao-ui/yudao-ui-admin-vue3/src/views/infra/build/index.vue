@@ -29,15 +29,20 @@
   </Dialog>
 </template>
 <script lang="ts" setup>
+import type { App } from 'vue'
 import { useFormCreateDesigner } from '@/components/FormCreate'
 import { useClipboard } from '@vueuse/core'
 import { isString } from '@/utils/is'
+import { setupFormCreate } from '@/plugins/formCreate'
 
 import hljs from 'highlight.js' // 导入代码高亮文件
 import 'highlight.js/styles/github.css' // 导入代码高亮样式
 import xml from 'highlight.js/lib/languages/java'
 import json from 'highlight.js/lib/languages/json'
 import formCreate from '@form-create/element-ui'
+
+// form-create/designer 已从入口移除，改为本页按需全局注册（须在首次渲染前执行）
+setupFormCreate(getCurrentInstance()!.appContext.app as App<Element>)
 
 defineOptions({ name: 'InfraBuild' })
 
