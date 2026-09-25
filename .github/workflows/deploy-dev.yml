@@ -211,13 +211,30 @@ jobs:
           # + 移除模拟运营表与菜单（V021）+ 会员中心菜单（V022）
           # 注意顺序：必须在 transport-schema 之后（新表、补列）
           for f in sql/incremental/V018__multi_leg_framework.sql sql/incremental/V019__station_access_and_plan_leg.sql \
-                   sql/incremental/V021__remove_simulation.sql sql/incremental/V022__member_menu.sql; do
+                   sql/incremental/V021__remove_simulation.sql sql/incremental/V022__member_menu.sql \
+                   sql/incremental/V024__key_indexes_and_unique_keys.sql sql/incremental/V025__leg_conflict_indexes.sql; do
             if [ -f "${f}" ]; then
               echo "Applying ${f}..."
               "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
               echo "${f} done."
             fi
           done
+
+          # V024/V025 为幂等索引脚本（内部用 information_schema 判断存在性），可安全重复执行。
+          #
+          # V026（商品上下架枚举翻转 1=上架）**刻意不在此自动执行**：它是非幂等的一次性数据迁移
+          # （`SET status = 1 - status`），重复执行会来回翻转。此处只做「是否已执行」的检测与告警，
+          # 锚点用列注释——V026 执行后会把注释改为「状态(0下架 1上架，...)」。
+          STATUS_COMMENT=$("${MYSQL_EXEC[@]}" -N -B -e \
+            "SELECT COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_product' AND COLUMN_NAME='status'" \
+            "${DB_NAME}" 2>/dev/null || echo "")
+          if [[ "${STATUS_COMMENT}" != *"1上架"* ]]; then
+            echo "::warning title=需要一次性 SQL 迁移::transport_product.status 仍是旧语义（当前注释：${STATUS_COMMENT}）。"
+            echo "WARNING: 请手工执行一次 sql/incremental/V026__product_status_flip.sql（不可重复执行），"
+            echo "         否则商品上下架状态会与后端新代码语义相反。"
+          else
+            echo "OK: transport_product.status 已是新语义（1=上架），V026 无需再执行。"
+          fi
 
           # 多段联运菜单（货物交接 / 用户通知）
           for f in transport-multi-leg-menu; do
@@ -400,15 +417,11 @@ jobs:
           ENV_FILE="${ENV_FILE:-/opt/cargo-post-platform/.env}"
           echo "ENV_FILE=${ENV_FILE}"
           echo "pwd=$(pwd)"
-          # SIGPIPE：head/grep 截断管道 + pipefail 会以 141 打断脚本（docker version|head 就踩过）
-          set +o pipefail
-          ls -la algorithm/ | head -30 || true
-          echo "----- docker version (server) -----"
-          docker version --format 'server={{.Server.Version}} arch={{.Server.Os}}/{{.Server.Arch}}' 2>&1 || true
-          docker version 2>&1 | sed -n '1,30p' || true
+          ls -la algorithm/ | head -20
+          echo "----- docker version -----"
+          docker version 2>&1 | head -20
           echo "----- compose version -----"
-          docker compose version 2>&1 || true
-          set -o pipefail
+          docker compose version 2>&1
           # --progress=plain 必须放在 build 子命令之前（Compose v2 全局参数）
           COMPOSE=(docker compose --progress=plain --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
           COMPOSE_NO_PROGRESS=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
@@ -436,14 +449,14 @@ jobs:
           uname -a || true
           df -h | head -10 || true
           free -h || true
-          docker version 2>&1 | sed -n "1,30p" || true
+          docker version 2>&1 | head -20 || true
           docker compose version || true
           docker buildx version 2>&1 || true
 
           echo "===== [前置诊断] 目录与文件 ====="
           test -f algorithm/Dockerfile && echo "algorithm/Dockerfile 存在" || { echo "ERROR: algorithm/Dockerfile 缺失"; exit 1; }
           test -f algorithm/requirements.txt && echo "algorithm/requirements.txt 存在" || { echo "ERROR: algorithm/requirements.txt 缺失"; exit 1; }
-          ls -la algorithm/ | head -30 || true
+          ls -la algorithm/ | head -20
 
           echo "===== [前置诊断] 端口 18081 ====="
           ss -lntp 2>/dev/null | grep ':18081' || echo "18081 未被监听"
@@ -679,10 +692,42 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         run: |
           set -euo pipefail
-          # DEP-01：发布前全量备份，健康检查失败自动回滚
-          sudo rm -rf /opt/cargo-post-web.bak
-          sudo cp -a /opt/cargo-post-web /opt/cargo-post-web.bak
-          rsync -a --delete "${GITHUB_WORKSPACE}/yudao-ui/yudao-ui-admin-vue3/dist-prod/" /opt/cargo-post-web/
+          SRC="${GITHUB_WORKSPACE}/yudao-ui/yudao-ui-admin-vue3/dist-prod/"
+          DEST=/opt/cargo-post-web
+
+          # 1) 源产物校验：输出目录名由 .env.prod 的 VITE_OUT_DIR 决定，缺失时明确报错
+          #    （避免只看到 rsync 的 "link_stat failed"，还得回溯是构建还是路径问题）
+          if [ ! -d "${SRC}" ] || [ -z "$(ls -A "${SRC}" 2>/dev/null)" ]; then
+            echo "ERROR: 前端构建产物缺失或为空：${SRC}" >&2
+            echo "       请检查 .env.prod 的 VITE_OUT_DIR 是否为 dist-prod，以及 Build frontend 步骤是否成功" >&2
+            exit 1
+          fi
+
+          # 2) 权限与容量预检：这两个是历史上最容易导致本步骤静默失败的原因，
+          #    提前显式判定，失败原因一眼可见（而非只有一个 exit 1）
+          echo "--- sudo 免密检查 ---"
+          if ! sudo -n true 2>/dev/null; then
+            echo "ERROR: 当前 CI 用户无免密 sudo 权限，无法写入 ${DEST}" >&2
+            echo "       请在服务器 /etc/sudoers.d/ 中为 CI 用户配置免密 sudo（见 docs/deployment.md）" >&2
+            exit 1
+          fi
+          echo "--- 磁盘空间（/opt）---"
+          df -h /opt | tail -2
+          echo "--- 目标目录状态 ---"
+          ls -ld "${DEST}" "${DEST}.bak" 2>&1 || echo "（目标目录或旧备份不存在，属正常情况）"
+
+          # 3) 目录不存在则创建：首次部署、或服务器侧目录被清理时不再直接失败
+          sudo mkdir -p "${DEST}"
+
+          # 4) 备份：作为回滚点而非发布前提，失败只告警不阻断
+          #    （旧逻辑用 && 串联，备份一失败整步就红，但真正要发布的产物其实没问题）
+          sudo rm -rf "${DEST}.bak" || echo "::warning::旧备份清理失败，继续发布"
+          sudo cp -a "${DEST}" "${DEST}.bak" || echo "::warning::备份失败，本次发布无回滚点"
+          echo "DEP-01：已生成发布前备份 ${DEST}.bak"
+
+          # 5) 发布（--delete 保证与构建产物完全一致）
+          rsync -a --delete "${SRC}" "${DEST}/"
+          echo "前端发布完成：${DEST} 现有 $(ls -A "${DEST}" | wc -l) 个条目"
 
       - name: Health check
         run: |
