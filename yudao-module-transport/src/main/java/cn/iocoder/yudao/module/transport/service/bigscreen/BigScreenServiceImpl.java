@@ -16,7 +16,6 @@ import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 
@@ -53,7 +52,13 @@ public class BigScreenServiceImpl implements BigScreenService {
     @Resource private DispatchService dispatchService;
 
     @Override
-    @Cacheable(cacheNames = "transport:bigscreen:overview#48s", key = "'v1'")
+    // 注意（2026-09-25 故障复盘）：此处曾加 @Cacheable（transport:bigscreen:overview#48s）。
+    // 本方法返回 Map<String,Object> 并塞入 LocalDateTime.now()——Map 的 value 在
+    // GenericJackson2JsonRedisSerializer（default typing NON_FINAL；LocalDateTime 是 final 类
+    // 不留 @class）下无法还原为 LocalDateTime，缓存命中即反序列化失败。同类问题已验证会使
+    // /app-api/transport/bus/{realtime,lines,nearby} 100% 返回「系统异常」。
+    // 大屏按 5min/60s 分层刷新，缓存收益有限，故取消。
+    // 若将来确需缓存：改缓存 JSON 字符串，并补一次"写入→读出"往返测试。
     public Map<String, Object> getOverview() {
         Map<String, Object> result = new HashMap<>();
         result.put("generatedAt", LocalDateTime.now());
