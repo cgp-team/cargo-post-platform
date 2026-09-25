@@ -1,5 +1,5 @@
 <template>
-  <Dialog title="商品订单详情" v-model="dialogVisible" width="640px">
+  <Dialog title="商品订单详情" v-model="dialogVisible" width="720px">
     <el-descriptions :column="2" border v-loading="loading">
       <el-descriptions-item label="订单号">{{ detail.orderNo }}</el-descriptions-item>
       <el-descriptions-item label="状态">
@@ -7,7 +7,7 @@
       </el-descriptions-item>
       <el-descriptions-item label="购买手机号">{{ detail.userMobile }}</el-descriptions-item>
       <el-descriptions-item label="下单时间">{{ detail.createTime }}</el-descriptions-item>
-      <el-descriptions-item label="订单金额"><span style="color:#e6a23c;font-weight:600">¥{{ detail.totalAmount }}</span></el-descriptions-item>
+      <el-descriptions-item label="订单金额"><span style="color:var(--el-color-warning);font-weight:600">¥{{ detail.totalAmount }}</span></el-descriptions-item>
       <el-descriptions-item label="订单备注">{{ detail.remark || '-' }}</el-descriptions-item>
       <el-descriptions-item label="收货人">{{ detail.receiverName }}</el-descriptions-item>
       <el-descriptions-item label="收货电话">{{ detail.receiverMobile }}</el-descriptions-item>

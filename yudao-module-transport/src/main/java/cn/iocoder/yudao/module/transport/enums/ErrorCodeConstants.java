@@ -42,6 +42,7 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_ORDER_NOT_COLLECTABLE = new ErrorCode(1_005_008_008, "部分订单当前状态不可归集（仅承运审核通过的待入池订单可入池）");
     ErrorCode DISPATCH_TASK_WINDOW_EMPTY = new ErrorCode(1_005_008_009, "任务窗口 {} 内没有可派订单（{} 单时间窗与本窗口无交集，请调整窗口或等下一班次）");
     ErrorCode DISPATCH_NO_BACKTRACKING = new ErrorCode(1_005_008_010, "车辆已驶过站点、不能掉头取货：{}；请留到下一班次或改派其他线路");
+    ErrorCode DISPATCH_VEHICLE_BUSY = new ErrorCode(1_005_008_011, "车辆已被在途方案占用（待审核/已下发/执行中），请更换车辆或稍后再派");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");
@@ -102,4 +103,6 @@ public interface ErrorCodeConstants {
     ErrorCode VEHICLE_TIME_CONFLICT = new ErrorCode(1_005_016_015, "车辆在该时段已有冲突任务：{}");
     ErrorCode DRIVER_TIME_CONFLICT = new ErrorCode(1_005_016_016, "司机在该时段已有冲突任务：{}");
     ErrorCode NO_AVAILABLE_RESOURCE = new ErrorCode(1_005_016_017, "当前无可调度车辆/司机（时段冲突或被占用）");
+    // 订单状态机（BE-21：不允许任意跳转，如 EXCEPTION → DELIVERING）
+    ErrorCode ORDER_STATUS_TRANSITION_ILLEGAL = new ErrorCode(1_005_016_018, "订单状态不允许该流转：{} → {}");
 }

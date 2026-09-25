@@ -34,7 +34,7 @@ public class ProductBaseVO {
     private String description;
     @Schema(description = "库存")
     private Integer stock;
-    @Schema(description = "状态(0上架 1下架)")
+    @Schema(description = "状态(0下架 1上架)")
     private Integer status;
     @Schema(description = "排序值(越小越靠前)")
     private Integer sort;

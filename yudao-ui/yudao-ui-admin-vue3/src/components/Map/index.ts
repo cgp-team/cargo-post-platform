@@ -1,4 +1,1 @@
-import MapDialog from './src/MapDialog.vue'
-export { loadBaiduMapSdk } from './src/utils'
-
-export { MapDialog }
+export { loadBaiduMapSdk, gcj02ToBd09, bd09ToGcj02 } from './src/utils'

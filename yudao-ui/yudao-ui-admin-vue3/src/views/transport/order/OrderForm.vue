@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="650px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="720px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="120px" v-loading="formLoading">
       <el-form-item label="订单类型" prop="orderType">
         <el-select v-model="formData.orderType" placeholder="请选择订单类型" style="width:100%" @change="onOrderTypeChange">

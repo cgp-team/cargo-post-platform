@@ -56,7 +56,7 @@ class VehicleConflictTest {
     @Test
     void overlapping_windows_conflict() {
         TransportLegDO existing = leg(1, 100, 7L, 8L, T10, T11, TransportLegStatusEnum.IN_TRANSIT.getStatus());
-        when(legMapper.selectList()).thenReturn(List.of(existing));
+        when(legMapper.selectList(any())).thenReturn(List.of(existing));
         when(orderMapper.selectBatchIds(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(100L).status(TransportOrderStatusEnum.ASSIGNED.getStatus()).build()));
 
@@ -69,7 +69,7 @@ class VehicleConflictTest {
     @Test
     void same_time_window_fails_assert() {
         TransportLegDO existing = leg(1, 100, 7L, 8L, T10, T11, TransportLegStatusEnum.IN_TRANSIT.getStatus());
-        when(legMapper.selectList()).thenReturn(List.of(existing));
+        when(legMapper.selectList(any())).thenReturn(List.of(existing));
         when(orderMapper.selectBatchIds(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(100L).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build()));
         assertThrows(ServiceException.class,
@@ -79,7 +79,7 @@ class VehicleConflictTest {
     @Test
     void disjoint_window_is_ok() {
         TransportLegDO existing = leg(1, 100, 7L, 8L, T10, T11, TransportLegStatusEnum.IN_TRANSIT.getStatus());
-        when(legMapper.selectList()).thenReturn(List.of(existing));
+        when(legMapper.selectList(any())).thenReturn(List.of(existing));
         when(orderMapper.selectBatchIds(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(100L).status(TransportOrderStatusEnum.ASSIGNED.getStatus()).build()));
         // 11:30 之后（含 15 分钟缓冲）不再冲突
@@ -90,7 +90,7 @@ class VehicleConflictTest {
     @Test
     void completed_leg_and_finished_order_do_not_occupy() {
         TransportLegDO completed = leg(1, 100, 7L, 8L, T10, T11, TransportLegStatusEnum.COMPLETED.getStatus());
-        when(legMapper.selectList()).thenReturn(List.of(completed));
+        when(legMapper.selectList(any())).thenReturn(List.of(completed));
         when(orderMapper.selectBatchIds(any())).thenReturn(List.of(
                 TransportOrderDO.builder().id(100L).status(TransportOrderStatusEnum.COMPLETED.getStatus()).build()));
         assertFalse(service.vehicleConflicts(7L, T10, T11, List.of(), null));

@@ -675,6 +675,9 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         run: |
           set -euo pipefail
+          # DEP-01：发布前全量备份，健康检查失败自动回滚
+          sudo rm -rf /opt/cargo-post-web.bak
+          sudo cp -a /opt/cargo-post-web /opt/cargo-post-web.bak
           rsync -a --delete "${GITHUB_WORKSPACE}/yudao-ui/yudao-ui-admin-vue3/dist-prod/" /opt/cargo-post-web/
 
       - name: Health check
@@ -690,6 +693,21 @@ jobs:
             if [[ $i -eq 40 ]]; then
               echo "Backend failed health check, recent status:" >&2
               systemctl status cargo-post -n 50 --no-pager >&2 || true
+              # DEP-01：自动回滚到上一版 jar 并重启；回滚成功与否都以非零退出终止发布
+              if [[ -f "${APP_DIR}/yudao-server.jar.bak" ]]; then
+                echo "Rolling back to previous jar..."
+                cp -a "${APP_DIR}/yudao-server.jar.bak" "${APP_DIR}/yudao-server.jar"
+                sudo /usr/bin/systemctl restart cargo-post
+                sleep 10
+                RB=$(curl -fsS --max-time 5 http://127.0.0.1:48080/actuator/health 2>/dev/null || echo '')
+                if echo "$RB" | grep -q '"status":"UP"'; then
+                  echo "Rollback succeeded, service restored to previous version." >&2
+                else
+                  echo "Rollback restart did not come UP either — manual intervention required!" >&2
+                fi
+              else
+                echo "No .bak jar available, cannot auto-rollback." >&2
+              fi
               exit 1
             fi
           done
@@ -702,6 +720,12 @@ jobs:
               echo "Frontend check failed: expected text not found" >&2
               head -50 "$TMP_HTML" >&2 || true
               rm -f "$TMP_HTML"
+              # DEP-01：自动回滚前端备份
+              if [[ -d /opt/cargo-post-web.bak ]]; then
+                echo "Rolling back frontend..."
+                sudo rsync -a --delete /opt/cargo-post-web.bak/ /opt/cargo-post-web/
+                echo "Frontend rollback done."
+              fi
               exit 1
             fi
           else
@@ -710,3 +734,15 @@ jobs:
             exit 1
           fi
           rm -f "$TMP_HTML"
+
+      # DEP-05：watchdog 常驻化（幂等：CI 每次部署同步 timer，服务器上无需人工）
+      - name: Ensure watchdog systemd timer
+        if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
+        run: |
+          set -euo pipefail
+          sudo cp -a "${GITHUB_WORKSPACE}/deploy/cargo-post-watchdog.timer" /etc/systemd/system/cargo-post-watchdog.timer
+          sudo mkdir -p /opt/cargo-post-platform/scripts
+          sudo cp -a "${GITHUB_WORKSPACE}/scripts/monitor_watchdog.py" /opt/cargo-post-platform/scripts/monitor_watchdog.py
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now cargo-post-watchdog.timer
+          systemctl is-active cargo-post-watchdog.timer

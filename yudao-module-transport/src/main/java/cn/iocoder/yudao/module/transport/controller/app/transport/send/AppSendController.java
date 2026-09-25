@@ -4,6 +4,10 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import cn.iocoder.yudao.framework.ratelimiter.core.annotation.RateLimiter;
+import cn.iocoder.yudao.framework.ratelimiter.core.keyresolver.impl.ClientIpRateLimiterKeyResolver;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.station.vo.StationSimpleRespVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendArrangementRespVO;
@@ -66,6 +70,7 @@ import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -112,6 +117,8 @@ public class AppSendController {
 
     @PostMapping("/create")
     @Operation(summary = "寄货创建货运订单")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "订单正在创建中，请勿重复提交")
     public CommonResult<AppSendOrderRespVO> create(@Valid @RequestBody AppSendOrderCreateReqVO reqVO) {
         Long orderId = transportOrderService.createSendOrder(getLoginUserId(), reqVO);
         return success(toRespVO(transportOrderService.get(orderId)));
@@ -126,7 +133,7 @@ public class AppSendController {
 
     @GetMapping("/page")
     @Operation(summary = "我的寄货记录分页")
-    public CommonResult<PageResult<AppSendOrderRespVO>> page(PageParam pageParam) {
+    public CommonResult<PageResult<AppSendOrderRespVO>> page(@Valid PageParam pageParam) {
         PageResult<TransportOrderDO> pageResult = transportOrderService.getMySendPage(getLoginUserId(), pageParam);
         List<TransportOrderDO> orders = pageResult.getList();
         List<AppSendOrderRespVO> list = orders.stream()
@@ -482,6 +489,8 @@ public class AppSendController {
     @PostMapping("/route-preview")
     @Operation(summary = "寄货页取货/送达站点路线预览（真实道路距离 + 预计时间，后端校验站点有效性）")
     @PermitAll
+    @RateLimiter(time = 60, count = 20, keyResolver = ClientIpRateLimiterKeyResolver.class,
+            message = "请求过于频繁，请稍后再试")
     public CommonResult<RoutePreviewRespVO> routePreview(@Valid @RequestBody AppSendRoutePreviewReqVO reqVO) {
         return success(sendRouteInfoService.routePreview(reqVO.getPickupStationId(), reqVO.getDeliveryStationId()));
     }
@@ -489,6 +498,8 @@ public class AppSendController {
     @PostMapping("/quote")
     @Operation(summary = "寄货试算：件单价×件数 + 里程费（寄货页填完取货/送达地址即显示金额）")
     @PermitAll
+    @RateLimiter(time = 60, count = 20, keyResolver = ClientIpRateLimiterKeyResolver.class,
+            message = "请求过于频繁，请稍后再试")
     public CommonResult<AppSendQuoteRespVO> quote(@Valid @RequestBody AppSendQuoteReqVO reqVO) {
         CargoPricingService.CargoQuote quote = cargoPricingService.quote(
                 reqVO.getPickupStationId(), reqVO.getDeliveryStationId(), reqVO.getItemCount());
@@ -506,6 +517,8 @@ public class AppSendController {
     @PostMapping("/reachability")
     @Operation(summary = "当前位置可达性评估（车辆能否直接到达 → 不可达时推荐最近可服务站点与步行时间）")
     @PermitAll
+    @RateLimiter(time = 60, count = 20, keyResolver = ClientIpRateLimiterKeyResolver.class,
+            message = "请求过于频繁，请稍后再试")
     public CommonResult<AppSendReachabilityRespVO> reachability(@Valid @RequestBody AppSendReachabilityReqVO reqVO) {
         return success(sendReachabilityService.evaluate(reqVO.getLatitude(), reqVO.getLongitude()));
     }

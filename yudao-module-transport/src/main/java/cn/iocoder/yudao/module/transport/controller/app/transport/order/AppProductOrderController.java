@@ -3,6 +3,8 @@ package cn.iocoder.yudao.module.transport.controller.app.transport.order;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.ProductOrderPageReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.order.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.ProductOrderDO;
@@ -18,6 +20,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 import static cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
@@ -32,6 +35,8 @@ public class AppProductOrderController {
 
     @PostMapping("/create")
     @Operation(summary = "创建商城订单")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "订单正在创建中，请勿重复提交")
     public CommonResult<AppProductOrderCreateRespVO> create(@Valid @RequestBody AppProductOrderCreateReqVO reqVO) {
         Long orderId = productOrderService.createOrder(getLoginUserId(), reqVO);
         AppProductOrderCreateRespVO respVO = new AppProductOrderCreateRespVO();

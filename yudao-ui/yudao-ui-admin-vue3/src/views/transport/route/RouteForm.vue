@@ -1,5 +1,5 @@
 <template>
-  <Dialog :title="dialogTitle" v-model="dialogVisible" width="550px">
+  <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="线路编码" prop="routeCode">
         <el-input v-model="formData.routeCode" placeholder="请输入线路编码" />
@@ -41,7 +41,7 @@
       </el-form-item>
       <el-form-item label="开放调度" prop="dispatchEnabled">
         <el-switch v-model="formData.dispatchEnabled" />
-        <span style="margin-left:8px;color:#909399;font-size:12px">停用/不开放调度的线路不会用于附近公交、地图与联运换乘</span>
+        <span style="margin-left:8px;color:var(--el-text-color-secondary);font-size:12px">停用/不开放调度的线路不会用于附近公交、地图与联运换乘</span>
       </el-form-item>
 
       <!-- 经停站序：农村/园区没有现成公交路网时，用「站点管理→地图选点」先建站，再在这里按顺序拼成自己的线路 -->
@@ -162,6 +162,12 @@ const saveStations = async () => {
     .map((s) => ({ stationId: s.stationId as number }))
   if (!stations.length) {
     message.warning('请至少添加一个经停站点')
+    return
+  }
+  // WEB-17: 保存站序会覆盖里程/时长，属风险操作，二次确认
+  try {
+    await message.confirm('保存站序将按站点自动重算并覆盖既有里程与计划时长，确认继续？')
+  } catch {
     return
   }
   stopsSaving.value = true

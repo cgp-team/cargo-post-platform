@@ -356,4 +356,23 @@ class TransportOrderServiceImplTest {
         assertFalse(orderService.canViewOrderDetail(order, 200L));
     }
 
+
+    @Test
+    void update_ignores_incoming_status_bypass_state_machine_guard() {
+        // BE-04：更新接口传入 status 也不允许改变库中订单状态（状态机守卫）
+        when(orderMapper.selectById(1L)).thenReturn(
+                TransportOrderDO.builder().id(1L).orderType(2).status(1).build());
+        cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.TransportOrderUpdateReqVO reqVO =
+                new cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.TransportOrderUpdateReqVO();
+        reqVO.setId(1L);
+        reqVO.setOrderType(2);
+        reqVO.setStatus(4); // 试图把状态改成已完成
+
+        orderService.update(reqVO);
+
+        ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
+        verify(orderMapper).updateById(captor.capture());
+        assertNull(captor.getValue().getStatus(), "update 传入的 status 必须被忽略（置 null 不落库）");
+    }
+
 }

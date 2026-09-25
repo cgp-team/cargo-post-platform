@@ -258,7 +258,7 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public int collectOrders(DispatchCollectReqVO reqVO) {
 
@@ -396,7 +396,7 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public Long createManualPlan(DispatchManualPlanReqVO reqVO) {
 
@@ -407,6 +407,11 @@ public class DispatchServiceImpl implements DispatchService {
         Map<Long, TransportOrderDO> orderMap = validatePooledOrders(reqVO.getOrderIds());
 
         VehicleDO vehicle = validateVehicleExists(reqVO.getVehicleId());
+
+        // 占用校验（BE-05）：与智能派单共用 busyVehicleIds 判据，防止同一台车被两套在途方案同时占用（车辆双派）
+        if (busyVehicleIds().contains(reqVO.getVehicleId())) {
+            throw exception(DISPATCH_VEHICLE_BUSY);
+        }
 
 
 
@@ -553,8 +558,8 @@ public class DispatchServiceImpl implements DispatchService {
             while (root.getCause() != null && root.getCause() != root) {
                 root = root.getCause();
             }
-            String detail = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
-            throw exception(ALGORITHM_RESULT_INVALID, "智能调度执行失败：" + detail);
+            // BE-27：对外只返回稳定文案，不透传根因消息（避免泄露表结构/约束名）；技术细节已由上方 log.error 带堆栈落日志
+            throw exception(ALGORITHM_RESULT_INVALID, "智能调度执行失败，请稍后重试或联系管理员");
         }
     }
 
@@ -1243,7 +1248,7 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public void reviewPlan(DispatchPlanReviewReqVO reqVO) {
 
@@ -1265,24 +1270,21 @@ public class DispatchServiceImpl implements DispatchService {
 
             dispatchPlanMapper.updateById(plan);
 
-            // 派单下发后：给方案涉及车辆司机发微信订阅消息（发送失败不影响派单主流程）
-
-            notifyDriversOfPlan(plan.getId());
-
-              // 通知订单所属用户：方案已下发
-              try {
-                  List<Long> orderIds = selectPlanOrderIds(plan.getId(), null);
-                  DispatchPlanDO planInfo = dispatchPlanMapper.selectById(plan.getId());
-                  String planNo = planInfo != null ? planInfo.getPlanNo() : String.valueOf(plan.getId());
-                  for (Long orderId : orderIds) {
-                      userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_ISSUED,
-                              cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.SUCCESS, false,
-                              "运输方案已下发",
-                              "您的订单已安排运输（方案" + planNo + "），司机将在指定站点取件，请关注配送进度");
-                  }
-              } catch (Exception ex) {
-                  log.warn("[reviewPlan] notify user plan issued failed", ex);
-              }
+            // BE-13：通知（N×2~3 次微信 HTTP + 循环写库）全部移出事务，事务提交后投递；
+            // 事务持续时间不再随车辆数线性增长，发送失败不影响已提交的派单主流程
+            final Long planId = plan.getId();
+            cn.iocoder.yudao.module.transport.util.TransactionAfterCommit.run(() -> {
+                try {
+                    notifyDriversOfPlan(planId);
+                } catch (Exception ex) {
+                    log.warn("[reviewPlan] notify drivers failed", ex);
+                }
+                try {
+                    notifyUsersPlanIssued(planId);
+                } catch (Exception ex) {
+                    log.warn("[reviewPlan] notify user plan issued failed", ex);
+                }
+            });
 
         } else {
 
@@ -1306,6 +1308,19 @@ public class DispatchServiceImpl implements DispatchService {
 
         insertPlanLog(plan.getId(), DispatchPlanStatusEnum.PENDING.getStatus(), plan.getStatus(), reqVO.getReason());
 
+    }
+
+    /** BE-13：通知订单所属用户「方案已下发」（在事务提交后由 TransactionAfterCommit 调用） */
+    private void notifyUsersPlanIssued(Long planId) {
+        List<Long> orderIds = selectPlanOrderIds(planId, null);
+        DispatchPlanDO planInfo = dispatchPlanMapper.selectById(planId);
+        String planNo = planInfo != null ? planInfo.getPlanNo() : String.valueOf(planId);
+        for (Long orderId : orderIds) {
+            userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.PLAN_ISSUED,
+                    cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.SUCCESS, false,
+                    "运输方案已下发",
+                    "您的订单已安排运输（方案" + planNo + "），司机将在指定站点取件，请关注配送进度");
+        }
     }
 
 
@@ -1425,7 +1440,7 @@ public class DispatchServiceImpl implements DispatchService {
 
     @Override
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
 
     public void departureCheck(DispatchCheckReqVO reqVO) {
 
@@ -3760,7 +3775,27 @@ public class DispatchServiceImpl implements DispatchService {
 
         }
 
-        orderMapper.update(updateObj, wrapper);
+        int affected = orderMapper.update(updateObj, wrapper);
+
+        // BE-23：部分命中说明有订单状态已被并发推进（不满足来源约束），静默吞掉会掩盖双派/重复推进问题。
+        // 实测既有流程（发车/归集/审核回池）存在合法的部分推进，抛异常会误伤 → 降级为差异留痕告警。
+        if (affected != orderIds.size()) {
+
+            List<Long> missed = orderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+
+                    .in(TransportOrderDO::getId, orderIds)
+
+                    .ne(TransportOrderDO::getStatus, status.getStatus()))
+
+                    .stream().map(TransportOrderDO::getId).toList();
+
+            log.warn("[updateOrdersStatus] 批量状态推进不完整 status={}->{}, 期望 {} 行实际 {} 行, 未命中 ids={}",
+
+                    source == null ? "任意" : source.getStatus(), status.getStatus(),
+
+                    orderIds.size(), affected, missed);
+
+        }
 
     }
 

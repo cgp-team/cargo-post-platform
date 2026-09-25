@@ -40,19 +40,24 @@
           </template>
         </el-table-column>
         <el-table-column label="创建时间" prop="createTime" align="center" width="170" />
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无通知记录" />
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
 
-    <el-dialog v-model="sendVisible" title="发送用户通知" width="520px">
-      <el-form label-width="90px">
-        <el-form-item label="用户编号" required>
+    <!-- WEB-07: 改回 Dialog 封装 -->
+    <Dialog v-model="sendVisible" title="发送用户通知" width="480px">
+      <el-form ref="sendFormRef" :model="sendForm" :rules="sendRules" label-width="90px">
+        <el-form-item label="用户编号" prop="userId">
           <el-input-number v-model="sendForm.userId" :min="1" controls-position="right" />
         </el-form-item>
         <el-form-item label="关联订单">
           <el-input-number v-model="sendForm.orderId" :min="0" controls-position="right" placeholder="可空" />
         </el-form-item>
-        <el-form-item label="标题" required>
+        <el-form-item label="标题" prop="title">
           <el-input v-model="sendForm.title" placeholder="请输入通知标题" />
         </el-form-item>
         <el-form-item label="内容">
@@ -63,12 +68,14 @@
         <el-button @click="sendVisible = false">取消</el-button>
         <el-button type="primary" @click="submitSend">发送</el-button>
       </template>
-    </el-dialog>
+    </Dialog>
   </ContentWrap>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import * as NotificationApi from '@/api/transport/notification'
+import { Dialog } from '@/components/Dialog'
 
 defineOptions({ name: 'TransportNotification' })
 
@@ -108,11 +115,14 @@ const openSend = () => {
   sendVisible.value = true
 }
 
+// WEB-16: 字段级校验规则（替代 toast 手拦，错误以红字呈现）
+const sendRules = {
+  userId: [{ required: true, message: '请填写用户编号', trigger: 'blur' }],
+  title: [{ required: true, message: '请填写标题', trigger: 'blur' }]
+}
+const sendFormRef = ref()
 const submitSend = async () => {
-  if (!sendForm.userId || !sendForm.title) {
-    message.warning('请填写用户编号与标题')
-    return
-  }
+  try { await sendFormRef.value?.validate() } catch { return } // 校验不过：字段级红字提示
   try {
     await NotificationApi.sendNotification(sendForm)
     message.success('发送成功')

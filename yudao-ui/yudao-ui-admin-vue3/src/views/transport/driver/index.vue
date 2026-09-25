@@ -21,7 +21,7 @@
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="司机姓名" prop="name" align="center" />
         <el-table-column label="手机号" prop="mobile" align="center" />
-        <el-table-column label="驾驶证号" prop="licenseNo" align="center" />
+        <el-table-column label="驾驶证号" prop="licenseNo" align="center" show-overflow-tooltip />
         <el-table-column label="驾照到期日" prop="licenseExpireDate" align="center" />
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
@@ -30,7 +30,13 @@
             <el-button link type="danger" v-hasPermi="['transport:driver:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无司机，点击下方按钮录入第一位司机">
+            <el-button type="primary" @click="openForm('create')">新增司机</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>
@@ -56,7 +62,7 @@ const queryParams = reactive<DriverQueryParams>({
   mobile: '',
 }); const formRef = ref()
 const getList = async () => { loading.value = true; try { const res = await DriverApi.getDriverPage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
-const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
+const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, name: '', mobile: '' }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => { try { await message.confirm('确认删除该司机？'); await DriverApi.deleteDriver(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ } }
 onMounted(getList)

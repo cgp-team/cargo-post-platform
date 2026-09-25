@@ -20,7 +20,7 @@ public class ProductPageReqVO extends PageParam {
     private String name;
     @Schema(description = "产地村庄")
     private String fromVillage;
-    @Schema(description = "状态(0上架 1下架)")
+    @Schema(description = "状态(0下架 1上架)")
     private Integer status;
 
     @DateTimeFormat(pattern = FORMAT_YEAR_MONTH_DAY_HOUR_MINUTE_SECOND)

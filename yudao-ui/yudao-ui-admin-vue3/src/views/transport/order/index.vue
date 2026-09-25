@@ -1,6 +1,6 @@
 <template>
   <ContentWrap title="订单管理">
-    <ContentWrap>
+    <div>
       <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
         <el-form-item label="订单号">
           <el-input v-model="queryParams.orderNo" placeholder="请输入订单号" clearable @keyup.enter="getList" />
@@ -17,8 +17,8 @@
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
-    </ContentWrap>
-    <ContentWrap>
+    </div>
+    <div class="mt-15px">
       <el-button type="primary" v-hasPermi="['transport:order:create']" @click="openForm('create')">
         <Icon icon="ep:plus" />新增订单
       </el-button>
@@ -52,7 +52,7 @@
         <el-table-column label="用户寄货位置" align="center" min-width="180">
           <template #default="scope">
             <div v-if="scope.row.originalAddress">{{ scope.row.originalAddress }}</div>
-            <div v-else class="text-gray-400">-</div>
+            <div v-else class="text-gray-500">-</div>
             <el-tag v-if="scope.row.pickupServiceMode" size="small" :type="serviceModeTag(scope.row.pickupServiceMode)">
               {{ serviceModeLabel(scope.row.pickupServiceMode) }}
             </el-tag>
@@ -65,8 +65,10 @@
         </el-table-column>
         <el-table-column label="物品信息" align="left" min-width="200">
           <template #default="scope">
-            <div>{{ scope.row.goodsName || '-' }}</div>
-            <div class="text-gray-400 text-xs">
+            <el-tooltip :content="scope.row.goodsName || '-'" placement="top" :disabled="!(scope.row.goodsName && scope.row.goodsName.length > 12)">
+              <div class="truncate max-w-190px">{{ scope.row.goodsName || '-' }}</div>
+            </el-tooltip>
+            <div class="text-gray-500 text-xs">
               {{ scope.row.cargoCategory || '未分类' }}
               · {{ scope.row.cargoItemCount != null ? scope.row.cargoItemCount + ' 件' : '-' }}
               · {{ scope.row.cargoWeightKg != null ? scope.row.cargoWeightKg + ' kg' : '-' }}
@@ -119,20 +121,28 @@
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="260" fixed="right">
           <template #default="scope">
-            <el-button v-if="scope.row.orderType === 2 && scope.row.auditStatus === 0" link type="warning" v-hasPermi="['transport:order:update']" @click="openAudit(scope.row)">审核</el-button>
+            <el-tooltip content="仅货运待审核订单可审核" placement="top" :disabled="scope.row.orderType === 2 && scope.row.auditStatus === 0">
+              <el-button :disabled="!(scope.row.orderType === 2 && scope.row.auditStatus === 0)" link type="warning" v-hasPermi="['transport:order:update']" @click="openAudit(scope.row)">审核</el-button>
+            </el-tooltip>
             <el-button link type="primary" @click="openDetail(scope.row)">详情</el-button>
             <el-button link type="primary" v-hasPermi="['transport:order:update']" @click="openForm('update', scope.row.id)">编辑</el-button>
             <el-button link type="danger" v-hasPermi="['transport:order:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无订单，点击下方按钮创建第一笔订单">
+            <el-button type="primary" @click="openForm('create')">新增订单</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
-    </ContentWrap>
+    </div>
   </ContentWrap>
   <OrderForm ref="formRef" @success="getList" />
 
   <!-- 货运物品审核 -->
-  <Dialog v-model="auditVisible" title="审核货运物品" width="560px">
+  <Dialog v-model="auditVisible" title="审核货运物品" width="480px">
     <el-form label-width="100px">
       <el-form-item label="寄件照">
         <el-image v-if="auditRow.photoUrl" :src="auditRow.photoUrl" :preview-src-list="[auditRow.photoUrl]" fit="cover" style="width:120px;height:120px;border-radius:8px" />
@@ -177,7 +187,7 @@
   </Dialog>
 
   <!-- 订单详情：寄货全链路（用户位置 → 交接服务站 → 货物规格 → 收件信息 → 图片凭证） -->
-  <Dialog v-model="detailVisible" :title="`订单详情 ${detail?.orderNo || ''}`" width="760px" v-loading="detailLoading">
+  <Dialog v-model="detailVisible" :title="`订单详情 ${detail?.orderNo || ''}`" width="720px" v-loading="detailLoading">
     <el-descriptions v-if="detail" :column="2" border size="small">
       <el-descriptions-item label="订单类型">{{ orderTypeLabel(detail.orderType!) }}</el-descriptions-item>
       <el-descriptions-item label="订单状态">
@@ -187,7 +197,7 @@
       <el-descriptions-item label="送达站点">{{ detail.deliveryStationName || '-' }}</el-descriptions-item>
       <el-descriptions-item label="用户寄货位置">
         {{ detail.originalAddress || '-' }}
-        <span v-if="detail.originalLatitude && detail.originalLongitude" class="text-gray-400">
+        <span v-if="detail.originalLatitude && detail.originalLongitude" class="text-gray-500">
           （{{ Number(detail.originalLongitude).toFixed(5) }}, {{ Number(detail.originalLatitude).toFixed(5) }}）
         </span>
       </el-descriptions-item>
@@ -197,7 +207,7 @@
       </el-descriptions-item>
       <el-descriptions-item label="承运审核">
         {{ reviewStatusLabel(detail.reviewStatus) }}
-        <span v-if="detail.reviewReasonCodes" class="text-gray-400">（{{ detail.reviewReasonCodes }}）</span>
+        <span v-if="detail.reviewReasonCodes" class="text-gray-500">（{{ detail.reviewReasonCodes }}）</span>
       </el-descriptions-item>
       <el-descriptions-item label="货物名称">{{ detail.goodsName || '-' }}</el-descriptions-item>
       <el-descriptions-item label="货物类别">{{ detail.cargoCategory || '-' }}</el-descriptions-item>
@@ -217,7 +227,7 @@
           fit="cover"
           style="width:120px;height:120px;border-radius:8px"
         />
-        <span v-else class="text-gray-400">无</span>
+        <span v-else class="text-gray-500">无</span>
       </el-descriptions-item>
       <el-descriptions-item label="司机收件照" :span="2">
         <el-image
@@ -227,7 +237,7 @@
           fit="cover"
           style="width:120px;height:120px;border-radius:8px"
         />
-        <span v-else class="text-gray-400">无</span>
+        <span v-else class="text-gray-500">无</span>
       </el-descriptions-item>
     </el-descriptions>
     <template #footer>
@@ -274,7 +284,8 @@ const loadStations = async () => {
   try {
     stations.value = await StationApi.getSimpleStationList()
   } catch (e) {
-    /* 兜底展示失败不影响订单列表 */
+    // WEB-10: 兜底数据失败也要可见提示（不影响订单列表主流程）
+    message.error('站点信息加载失败，下单地址可能不完整')
   }
 }
 
@@ -289,7 +300,14 @@ const getList = async () => {
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderNo: '', orderType: undefined }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
-  try { await message.confirm('确认删除该订单？'); await OrderApi.deleteOrder(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }
+  try {
+    await message.confirm('确认删除该订单？')
+    await OrderApi.deleteOrder(id)
+    message.success('删除成功')
+    // WEB-26: 当前页删空后回退一页，避免停在空页
+    if (list.value.length === 1 && queryParams.pageNo > 1) queryParams.pageNo -= 1
+    getList()
+  } catch (e) { /* cancelled */ }
 }
 // 货运物品审核
 const auditVisible = ref(false)

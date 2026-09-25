@@ -2,7 +2,7 @@
   <ContentWrap title="调度中心（订单池 · 实时地图 · 运输详情 · 事件时间线）">
     <el-row :gutter="12">
       <!-- ① 订单池 -->
-      <el-col :span="6">
+      <el-col :xs="24" :sm="12" :md="8" :lg="6">
         <ContentWrap title="订单池">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <el-button size="small" @click="loadPool"><Icon icon="ep:refresh" />刷新</el-button>
@@ -20,14 +20,22 @@
               <template #default="scope">{{ orderStatusText(scope.row.status) }}</template>
             </el-table-column>
           </el-table>
+          <Pagination
+            v-model:page="poolQuery.pageNo"
+            v-model:limit="poolQuery.pageSize"
+            :total="poolTotal"
+            :pager-count="5"
+            layout="total, prev, pager, next"
+            @pagination="loadPool"
+          />
         </ContentWrap>
       </el-col>
 
       <!-- ② 实时地图 + ③ 运输详情 -->
-      <el-col :span="11">
+      <el-col :xs="24" :sm="12" :md="16" :lg="11">
         <ContentWrap title="实时地图（站点 / 车辆 / 选中订单运输链）">
           <div ref="mapRef" style="width:100%;height:300px"></div>
-          <div v-if="!mapReady" style="color:#909399;font-size:12px;margin-top:6px">
+          <div v-if="!mapReady" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:6px">
             地图未就绪（需后台配置百度地图 Key）；下方运输详情不受影响
           </div>
           <div class="map-legend">
@@ -83,7 +91,7 @@
       </el-col>
 
       <!-- ④ 事件时间线 -->
-      <el-col :span="7">
+      <el-col :xs="24" :sm="24" :md="24" :lg="7">
         <ContentWrap title="事件时间线">
           <el-empty v-if="!topology || !(topology.timeline || []).length" description="暂无事件" />
           <el-timeline v-else>
@@ -94,7 +102,7 @@
               placement="top"
             >
               <b>{{ t.eventTypeName || t.eventType }}</b>
-              <div style="color:#606266;font-size:12px">{{ t.detail }}</div>
+              <div style="color:var(--el-text-color-regular);font-size:12px">{{ t.detail }}</div>
             </el-timeline-item>
           </el-timeline>
         </ContentWrap>
@@ -104,10 +112,17 @@
 </template>
 
 <script setup lang="ts">
+import { reactive, ref } from 'vue'
 import * as DispatchApi from '@/api/transport/dispatch'
 import * as TopologyApi from '@/api/transport/topology'
 import * as MonitoringApi from '@/api/transport/monitoring'
-import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
+import {
+  loadBaiduMapSdk,
+  gcj02ToBd09,
+  clusterByGrid,
+  shouldCluster,
+  clusterBubbleStyle
+} from '@/components/Map/src/utils'
 // 订单状态文案统一走共享常量（原先本页自备的 ORDER_STATUS 缺 6 待审核/7 待客户操作，显示"—"）
 import { ORDER_STATUS_LABELS } from '../constants'
 
@@ -120,18 +135,24 @@ const topology = ref<TopologyApi.OrderTopologyVO | null>(null)
 const mapRef = ref<HTMLDivElement>()
 const mapReady = ref(false)
 let map: any = null
+/** 基础图层（站点 + 车辆）覆盖物，卸载时统一清理 */
+let baseOverlays: any[] = []
 
 /** 车辆线路配色（与调度可视化弹窗同一套颜色，按车牌稳定分配） */
 const LEG_COLORS = [
-  '#1F5E9E', '#E6A23C', '#2E9E6B', '#D9534F', '#7B5BD6', '#0FA3B1',
-  '#D4801A', '#C2185B', '#4A7C1F', '#5A6ACF', '#8D6E63', '#00838F'
+  'var(--brand-primary)', 'var(--el-color-warning)', 'var(--palette-1)', 'var(--palette-2)', 'var(--palette-3)', 'var(--palette-4)',
+  'var(--palette-5)', 'var(--palette-6)', 'var(--palette-7)', 'var(--palette-8)', 'var(--palette-9)', 'var(--palette-10)'
 ]
 
 const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS_LABELS[s] || '—')
 
+// WEB-20: 订单池改为真分页（此前 pageNo=1/pageSize=100 写死，超出 100 条不可见）
+const poolQuery = reactive({ pageNo: 1, pageSize: 20 })
+const poolTotal = ref(0)
 const loadPool = async () => {
-  const res = await DispatchApi.getDispatchPoolPage({ pageNo: 1, pageSize: 100 })
+  const res = await DispatchApi.getDispatchPoolPage(poolQuery)
   pool.value = res.list || []
+  poolTotal.value = Number(res.total) || 0
 }
 
 /** 当前订单运输链的覆盖物：切换订单时逐条移除，避免新旧链路叠加 */
@@ -231,22 +252,7 @@ const initMap = async () => {
     const data = await MonitoringApi.getMonitoringMapData()
     // 站点/线路来自地图数据；车辆走独立接口（MonitoringMapDataVO 不含 vehicles）
     const vehicles = await MonitoringApi.getMonitoringVehicles().catch(() => [])
-    const toPoint = (lng: number, lat: number) => {
-      const bd = gcj02ToBd09(lng, lat)
-      return new BMapGL.Point(bd.lng, bd.lat)
-    }
-    ;(data?.stations || []).forEach((s: any) => {
-      if (s.longitude == null) return
-      const p = toPoint(s.longitude, s.latitude)
-      map.addOverlay(new BMapGL.Circle(p, 60, { strokeColor: '#1F5E9E', fillColor: '#1F5E9E', fillOpacity: 0.3 }))
-      map.addOverlay(new BMapGL.Label(s.stationName, { position: p, offset: new BMapGL.Size(6, -28) }))
-    })
-    ;(vehicles || []).forEach((v: any) => {
-      if (v.longitude == null) return
-      const p = toPoint(v.longitude, v.latitude)
-      map.addOverlay(new BMapGL.Marker(p))
-      map.addOverlay(new BMapGL.Label(v.plateNo || '运输车辆', { position: p, offset: new BMapGL.Size(-20, -30) }))
-    })
+    renderBaseOverlays(data?.stations || [], vehicles || [])
     mapReady.value = true
     renderTopology()
   } catch (e) {
@@ -254,9 +260,88 @@ const initMap = async () => {
   }
 }
 
+/**
+ * 站点 + 车辆基础图层（WEB-14 / SEP-05）。
+ * 点位总数超过阈值时按屏幕像素网格聚合（同格多点合成数量气泡），
+ * 避免一次性叠加数百个 Circle + Label 阻塞渲染；未超阈值时逐点渲染，标签可读性更好。
+ */
+const renderBaseOverlays = (stations: any[], vehicleList: any[]) => {
+  const BMapGL = (window as any).BMapGL
+  const toBd = (lng: number, lat: number) => gcj02ToBd09(lng, lat)
+  const stationPoints = stations
+    .filter((s) => s.longitude != null && s.latitude != null)
+    .map((s) => {
+      const bd = toBd(s.longitude, s.latitude)
+      return { lng: bd.lng, lat: bd.lat, name: s.stationName }
+    })
+  const vehiclePoints = vehicleList
+    .filter((v) => v.longitude != null && v.latitude != null)
+    .map((v) => {
+      const bd = toBd(v.longitude, v.latitude)
+      return { lng: bd.lng, lat: bd.lat, name: v.plateNo || '运输车辆' }
+    })
+
+  const paint = <T extends { lng: number; lat: number }>(
+    points: T[],
+    draw: (item: T, point: any) => void
+  ) => {
+    if (!shouldCluster(points.length)) {
+      points.forEach((p) => draw(p, new BMapGL.Point(p.lng, p.lat)))
+      return
+    }
+    clusterByGrid(points, (p) => {
+      const px = map.pointToPixel(new BMapGL.Point(p.lng, p.lat))
+      return { x: px.x, y: px.y }
+    }).forEach((bucket) => {
+      const point = new BMapGL.Point(bucket.lng, bucket.lat)
+      if (bucket.items.length === 1) {
+        draw(bucket.items[0], point)
+        return
+      }
+      const bubble = new BMapGL.Label(String(bucket.items.length), {
+        position: point,
+        offset: new BMapGL.Size(-18, -18)
+      })
+      bubble.setStyle(clusterBubbleStyle(bucket.items.length))
+      bubble.addEventListener?.('click', () => map.setZoom(Math.min(map.getZoom() + 2, 19)))
+      map.addOverlay(bubble)
+      baseOverlays.push(bubble)
+    })
+  }
+
+  paint(stationPoints, (s, point) => {
+    const circle = new BMapGL.Circle(point, 60, {
+      strokeColor: 'var(--brand-primary)',
+      fillColor: 'var(--brand-primary)',
+      fillOpacity: 0.3
+    })
+    const label = new BMapGL.Label(s.name, { position: point, offset: new BMapGL.Size(6, -28) })
+    map.addOverlay(circle)
+    map.addOverlay(label)
+    baseOverlays.push(circle, label)
+  })
+
+  paint(vehiclePoints, (v, point) => {
+    const marker = new BMapGL.Marker(point)
+    const label = new BMapGL.Label(v.name, { position: point, offset: new BMapGL.Size(-20, -30) })
+    map.addOverlay(marker)
+    map.addOverlay(label)
+    baseOverlays.push(marker, label)
+  })
+}
+
 onMounted(async () => {
   await loadPool()
   initMap()
+})
+
+onUnmounted(() => {
+  baseOverlays = []
+  routeOverlays.length = 0
+  if (map) {
+    map.destroy()
+    map = null
+  }
 })
 </script>
 
@@ -274,7 +359,7 @@ onMounted(async () => {
   flex-wrap: wrap;
   margin-top: 6px;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .map-legend .dot {
@@ -286,20 +371,20 @@ onMounted(async () => {
   vertical-align: middle;
 }
 
-.map-legend .dot.station { background: #1f5e9e; }
-.map-legend .dot.vehicle { background: #2e7bbf; }
-.map-legend .dot.hub { background: #123f6e; }
+.map-legend .dot.station { background: var(--brand-primary); }
+.map-legend .dot.vehicle { background: var(--brand-accent); }
+.map-legend .dot.hub { background: var(--brand-primary-dark); }
 
 .map-legend .line {
   display: inline-block;
   width: 14px;
   height: 3px;
-  background: #1f5e9e;
+  background: var(--brand-primary);
   margin-right: 4px;
   vertical-align: middle;
 }
 
 .map-legend .line.dashed {
-  background: repeating-linear-gradient(90deg, #2e7bbf 0 4px, transparent 4px 7px);
+  background: repeating-linear-gradient(90deg, var(--brand-accent) 0 4px, transparent 4px 7px);
 }
 </style>

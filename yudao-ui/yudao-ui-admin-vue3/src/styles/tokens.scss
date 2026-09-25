@@ -1,0 +1,91 @@
+/**
+ * WEB-02：客货邮平台设计令牌（三端统一 · 山乡夜航/山泉蓝调）
+ *
+ * 主色 = 山泉蓝 #1F5E9E（与小程序 DEFAULT_THEME='blue'、智慧大屏三端一致）。
+ * 站牌绿 #2E7D32 降级为成功/正向语义（--status-success），不再是品牌主色。
+ * 品牌点缀色：陶土橙 #C75B2A（价格/行动）、稻谷金 #D9A441（农产品/公告）
+ * ——是品牌点缀，不映射为 status danger/warning。
+ * 深色模式：业务页用 [data-theme='dark'] 或 Element 的 html.dark 自动切换的 el-* 变量。
+ */
+:root {
+  /* ===== 品牌色 ===== */
+  --brand-primary: #1F5E9E;        /* 山泉蓝（主） */
+  --brand-primary-dark: #123F6E;   /* 深 */
+  --brand-primary-light: #E6EFF5;  /* 浅底 */
+  --brand-accent: #2E7BBF;         /* 强调蓝 */
+  --brand-primary-glow: rgba(31, 95, 158, 0.28); /* 主色发光 */
+
+  /* ===== 品牌点缀（不随 status 语义混用） ===== */
+  --brand-clay: #C75B2A;           /* 陶土橙：价格/行动 */
+  --brand-clay-light: #F8ECE3;
+  --brand-gold: #D9A441;           /* 稻谷金：农产品/公告 */
+  --brand-gold-light: #FBF3DF;
+
+  /* ===== 语义状态 ===== */
+  --status-success: #2E7D32;       /* 成功/正向（原站牌绿降级至此） */
+  --status-warning: #B27A12;       /* 提醒/临近 */
+  --status-danger: #C0392B;        /* 危险/异常 */
+  --status-info: #4F93D6;          /* 信息 */
+
+  /* ===== 表面 ===== */
+  --surface-page: #F5F8FC;         /* 页面底（山泉蓝冷白） */
+  --surface-card: #FFFFFF;         /* 卡片 */
+  --surface-field: #F7FAFD;        /* 输入框底 */
+  --surface-line: #DCE6EE;         /* 描边/分隔 */
+  --surface-line-deep: #C7D5E0;
+
+  /* ===== 文字 ===== */
+  --text-primary: #2B2B28;         /* 正文 */
+  --text-secondary: #6B675C;       /* 辅助（≥4.5:1 适老化基线） */
+  --text-tertiary: #8A8778;        /* 最弱辅助，不允许再浅 */
+  --text-on-primary: #FFFFFF;      /* 主色底上的文字 */
+
+  /* ===== 智慧大屏（山乡夜航 · 深蓝墨底，仅 bigscreen 使用） ===== */
+  --screen-bg: #0B1220;
+  --screen-panel-top: #121E19;     /* 面板渐变顶 */
+  --screen-panel: #111B2B;
+  --screen-line: #1D2C42;
+  --screen-grid: #23364F;
+  --screen-primary: #4F93D6;       /* 主色提亮（深底对比度） */
+  --screen-gold: #E8B855;
+  --screen-clay: #E07A3F;
+  --screen-text: #E6EDF5;
+  --screen-text-sub: #93A5BC;
+  --screen-success: #4CAF50;
+  --screen-offline: #6B7A73;
+
+  /* ===== 圆角 / 间距 ===== */
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --radius-panel: 16px;
+  --radius-pill: 999px;
+
+  /* ===== 类别调色板（线路/任务等 N 类区分色，统一全局） ===== */
+  --palette-1: #2E9E6B;
+  --palette-2: #D9534F;
+  --palette-3: #7B5BD6;
+  --palette-4: #0FA3B1;
+  --palette-5: #D4801A;
+  --palette-6: #C2185B;
+  --palette-7: #4A7C1F;
+  --palette-8: #5A6ACF;
+  --palette-9: #8D6E63;
+  --palette-10: #00838F;
+
+  /* ===== 阴影 ===== */
+  --shadow-card: 0 2px 8px rgba(60, 50, 30, 0.05), 0 8px 24px rgba(60, 50, 30, 0.06);
+  --shadow-float: 0 8px 24px rgba(60, 50, 30, 0.12);
+}
+
+/* 深色模式：跟随 Element Plus 的 html.dark 约定 */
+html.dark {
+  --surface-page: #14161a;
+  --surface-card: #1d1f24;
+  --surface-field: #23262c;
+  --surface-line: #33363d;
+  --surface-line-deep: #454952;
+  --text-primary: #e6edf5;
+  --text-secondary: #a8b0bc;
+  --text-tertiary: #8a92a0;
+}

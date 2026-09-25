@@ -20,7 +20,7 @@
       </el-button>
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="线路编码" prop="routeCode" align="center" />
-        <el-table-column label="线路名称" prop="routeName" align="center" />
+        <el-table-column label="线路名称" prop="routeName" align="center" show-overflow-tooltip />
         <el-table-column label="起点站点ID" prop="startStationId" align="center" />
         <el-table-column label="终点站点ID" prop="endStationId" align="center" />
         <el-table-column label="里程(km)" prop="distanceKm" align="center" />
@@ -49,7 +49,13 @@
             <el-button link type="danger" v-hasPermi="['transport:route:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无线路，点击下方按钮创建第一条线路">
+            <el-button type="primary" @click="openForm('create')">新增线路</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>
@@ -77,7 +83,7 @@ const queryParams = reactive<RouteQueryParams>({
 const serviceText = (t?: string) =>
   t === 'PASSENGER' ? '客运' : (t === 'MIXED' ? '客货邮' : '货运')
 const getList = async () => { loading.value = true; try { const res = await RouteApi.getRoutePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
-const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
+const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, routeCode: '', routeName: '' }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => { try { await message.confirm('确认删除该线路？'); await RouteApi.deleteRoute(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ } }
 onMounted(getList)

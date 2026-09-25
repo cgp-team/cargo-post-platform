@@ -8,6 +8,17 @@ spring:
   main:
     allow-circular-references: true # 允许循环依赖，因为项目是三层架构，无法避免这个情况。
 
+  # 异步任务线程池（BE-20）：显式有界配置，高并发先背压而非 OOM；
+  # 拒绝策略 CallerRunsPolicy 在 YudaoAsyncAutoConfiguration 统一设置
+  task:
+    execution:
+      thread-name-prefix: async-
+      pool:
+        core-size: 8
+        max-size: 32
+        queue-capacity: 200
+        keep-alive: 60s
+
   # Servlet 配置
   servlet:
     # 文件上传相关配置项

@@ -24,19 +24,22 @@ public class AlgorithmProperties {
     private Duration connectTimeout = Duration.ofSeconds(2);
 
     /** 读取超时；算法同步计算最长 10 秒，留有余量 */
-    private Duration readTimeout = Duration.ofSeconds(15);
+    private Duration readTimeout = Duration.ofSeconds(8);
 
     /** 408 轮询间隔，契约建议不低于 2 秒 */
     private Duration pollInterval = Duration.ofSeconds(2);
 
-    /** 最大轮询次数，超过判定任务超时 */
+    /** 最大轮询次数（与 pollBudget 双重上限，先到为准） */
     private Integer maxPollAttempts = 10;
 
+    /** 轮询总预算：408 后的轮询整体不超过该时长，避免单请求长时间独占 Tomcat 线程 */
+    private Duration pollBudget = Duration.ofSeconds(15);
+
     /** 可重试错误（502/503/504 与网络错误）的最大重试次数，不含首次请求 */
-    private Integer maxRetries = 3;
+    private Integer maxRetries = 1;
 
     /** 重试退避间隔 */
-    private Duration retryBackoff = Duration.ofSeconds(1);
+    private Duration retryBackoff = Duration.ofMillis(500);
 
     /** 适配层幂等窗口：相同快照在该时间内复用同一业务任务，与算法侧 requestId 保留期一致 */
     private Duration idempotencyWindow = Duration.ofHours(24);

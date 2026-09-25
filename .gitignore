@@ -75,3 +75,31 @@ outputs/
 
 # Claude Code 本地配置（hooks/skills/settings），不随仓库共享
 .claude/
+
+# ENG-07: Python 测试缓存（根目录 / algorithm/ / mock-algorithm/）
+.pytest_cache/
+**/.pytest_cache/
+
+# AI 编码工具的本地配置目录（各自使用者本地生效，不随仓库共享；沿用 .claude/ 的既有约定）
+.mimocode/
+.mimosa/
+.ai-memory/
+
+# 本地实验产物与外部地图数据（体积大 / 一次性，不进仓库）
+/artifacts/
+/tools/osm-data/
+/tools/graphhopper/
+
+# 误创建文件与临时产物（2026-09-25 清理：shell 重定向失误产生的文件名以中文冒号结尾、测试输出、训练日志）
+*：当前
+*：2026-08-26
+*_t_q*/
+ab_out.txt
+test_*.txt
+full_test_results.txt
+more_test_results.txt
+*.err
+logs/
+scale_train.err
+train*.err
+

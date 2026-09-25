@@ -25,7 +25,7 @@
         class="w-160px"
       />
       <el-button type="primary" :loading="loading" @click="loadTrack">查询轨迹</el-button>
-      <span v-if="trackLoaded && !points.length" class="text-gray-400 text-sm">
+      <span v-if="trackLoaded && !points.length" class="text-gray-500 text-sm">
         该车辆当日无在途轨迹
       </span>
     </div>
@@ -35,7 +35,7 @@
       <div ref="mapRef" class="w-full h-full rounded-4px overflow-hidden"></div>
       <div
         v-if="!mapReady"
-        class="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-400"
+        class="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-500"
       >
         {{ mapError || '地图加载中...' }}
       </div>
@@ -66,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-import { loadBaiduMapSdk } from '@/components/Map/src/utils'
+import { loadBaiduMapSdk, gcj02ToBd09 } from '@/components/Map/src/utils'
 import {
   getMonitoringMapData,
   getMonitoringTrack,
@@ -81,8 +81,8 @@ import { useMessage } from '@/hooks/web/useMessage'
 
 defineOptions({ name: 'TransportMonitoringReplay' })
 
-// 说明：轨迹点为司机端上报的 GCJ-02 坐标，与实时监控页一致直接上图（BD-09 存在既有偏移，
-// 坐标转换待两页统一处理，见 monitoring/index.vue 头部注释）。
+// 说明：司机端上报坐标为 GCJ-02，上图前统一经 gcj02ToBd09 转换（WEB-01：
+// 此前直接上图导致约 500m 偏移，且与监控页位置不重合；现两页同口径）。
 
 const message = useMessage()
 
@@ -141,17 +141,19 @@ const initMap = async () => {
     vehicles.value = await getMonitoringVehicles()
   } catch (e) {
     console.error('加载车辆列表失败', e)
+    message.error('车辆列表加载失败，请刷新重试')
   }
 }
 
-/** 站点坐标均值作为地图中心；无站点时默认成都 */
+/** 站点坐标均值作为地图中心（GCJ-02 空间求均值后转 BD-09）；无站点时默认重庆（与监控页一致） */
 const calcCenter = (coords: { longitude?: number; latitude?: number }[]) => {
   const valid = coords.filter((c) => c.longitude && c.latitude)
-  if (!valid.length) return { lng: 104.0657, lat: 30.5723 }
-  return {
-    lng: valid.reduce((sum, c) => sum + c.longitude!, 0) / valid.length,
-    lat: valid.reduce((sum, c) => sum + c.latitude!, 0) / valid.length
-  }
+  if (!valid.length) return gcj02ToBd09(106.5765, 29.5325)
+  // WEB-01：均值在 GCJ-02 空间计算，输出前统一转 BD-09
+  return gcj02ToBd09(
+    valid.reduce((sum, c) => sum + c.longitude!, 0) / valid.length,
+    valid.reduce((sum, c) => sum + c.latitude!, 0) / valid.length
+  )
 }
 
 /** 背景图层：站点 + 线路（浅色，突出轨迹主线） */
@@ -159,16 +161,17 @@ const drawBackground = (stations: MonitoringStationVO[], routes: MonitoringRoute
   const BMapGL = window.BMapGL
   stations.forEach((station) => {
     if (!station.longitude || !station.latitude) return
-    const point = new BMapGL.Point(station.longitude, station.latitude)
+    const bd = gcj02ToBd09(station.longitude, station.latitude) // WEB-01
+    const point = new BMapGL.Point(bd.lng, bd.lat)
     map.addOverlay(new BMapGL.Marker(point))
     const label = new BMapGL.Label(station.stationName, {
       position: point,
       offset: new BMapGL.Size(8, -8)
     })
     label.setStyle({
-      color: '#909399',
+      color: 'var(--el-text-color-secondary)',
       backgroundColor: 'rgba(255,255,255,0.85)',
-      border: '1px solid #e4e7ed',
+      border: '1px solid var(--el-border-color)',
       borderRadius: '3px',
       padding: '1px 4px',
       fontSize: '11px'
@@ -178,11 +181,14 @@ const drawBackground = (stations: MonitoringStationVO[], routes: MonitoringRoute
   routes.forEach((route) => {
     const path = route.points
       .filter((p) => p.longitude && p.latitude)
-      .map((p) => new BMapGL.Point(p.longitude, p.latitude))
+      .map((p) => {
+        const bd = gcj02ToBd09(p.longitude, p.latitude) // WEB-01
+        return new BMapGL.Point(bd.lng, bd.lat)
+      })
     if (path.length < 2) return
     map.addOverlay(
       new BMapGL.Polyline(path, {
-        strokeColor: '#c0c4cc',
+        strokeColor: 'var(--el-border-color-darker)',
         strokeWeight: 3,
         strokeOpacity: 0.5
       })
@@ -206,6 +212,7 @@ const loadTrack = async () => {
     drawTrack()
   } catch (e) {
     console.error('查询轨迹失败', e)
+    message.error('轨迹查询失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -217,10 +224,13 @@ const drawTrack = () => {
   clearTrack()
   if (!points.value.length) return
   const BMapGL = window.BMapGL
-  const path = points.value.map((p) => new BMapGL.Point(p.longitude!, p.latitude!))
+  const path = points.value.map((p) => {
+    const bd = gcj02ToBd09(p.longitude!, p.latitude!) // WEB-01：与监控页同口径
+    return new BMapGL.Point(bd.lng, bd.lat)
+  })
   trackOverlays.push(
     new BMapGL.Polyline(path, {
-      strokeColor: '#409EFF',
+      strokeColor: 'var(--el-color-primary)',
       strokeWeight: 4,
       strokeOpacity: 0.85
     })
@@ -242,8 +252,8 @@ const drawTrack = () => {
 }
 
 const edgeLabelStyle = {
-  color: '#fff',
-  backgroundColor: '#67C23A',
+  color: 'var(--text-on-primary)',
+  backgroundColor: 'var(--el-color-success)',
   border: 'none',
   borderRadius: '3px',
   padding: '2px 6px',

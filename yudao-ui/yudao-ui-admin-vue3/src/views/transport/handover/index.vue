@@ -50,13 +50,18 @@
             >标记争议</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="未找到交接单，试试调整筛选条件" />
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
 
-    <el-dialog v-model="disputeVisible" title="标记交接争议" width="480px">
-      <el-form label-width="80px">
-        <el-form-item label="争议原因">
+    <!-- WEB-07: 改回 Dialog 封装（复用统一头部/底部与关闭行为） -->
+    <Dialog v-model="disputeVisible" title="标记交接争议" width="480px">
+      <el-form ref="disputeFormRef" :model="disputeForm" :rules="disputeRules" label-width="80px">
+        <el-form-item label="争议原因" prop="remark">
           <el-input v-model="disputeForm.remark" type="textarea" :rows="3" placeholder="如：件数不符 / 货物破损" />
         </el-form-item>
       </el-form>
@@ -64,12 +69,14 @@
         <el-button @click="disputeVisible = false">取消</el-button>
         <el-button type="primary" @click="submitDispute">确定</el-button>
       </template>
-    </el-dialog>
+    </Dialog>
   </ContentWrap>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import * as HandoverApi from '@/api/transport/handover'
+import { Dialog } from '@/components/Dialog'
 
 defineOptions({ name: 'TransportHandover' })
 
@@ -116,7 +123,18 @@ const openDispute = (row: HandoverApi.HandoverVO) => {
   disputeVisible.value = true
 }
 
+// WEB-16: 字段级校验；WEB-17: 标记争议为风险操作，提交前二次确认
+const disputeRules = {
+  remark: [{ required: true, message: '请填写争议原因', trigger: 'blur' }]
+}
+const disputeFormRef = ref()
 const submitDispute = async () => {
+  try { await disputeFormRef.value?.validate() } catch { return }
+  try {
+    await message.confirm('确认标记该交接单为争议？标记后将进入争议处理流程。')
+  } catch {
+    return
+  }
   if (!disputeForm.remark) {
     message.warning('请填写争议原因')
     return

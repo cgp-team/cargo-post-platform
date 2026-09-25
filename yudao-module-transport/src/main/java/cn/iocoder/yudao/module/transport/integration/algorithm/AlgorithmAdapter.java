@@ -61,6 +61,14 @@ public class AlgorithmAdapter {
             return cached;
         }
 
+        // BE-29：同快照请求"进行中"——复用原 requestId 再次提交（算法侧幂等返回同一任务），
+        // 不再重复插记录、重复触发计算；FAILED 的历史记录则走正常新建
+        if (existing != null && AlgorithmRequestStatusEnum.PROCESSING.getStatus().equals(existing.getStatus())) {
+            log.info("[plan][快照 {} 命中进行中记录 requestId={}，复用等待同一算法任务]", snapshotHash, existing.getRequestId());
+            request.setRequestId(existing.getRequestId());
+            return executeAndComplete(request, existing);
+        }
+
         request.setRequestId("req-" + IdUtil.fastSimpleUUID());
         AlgorithmRequestDO record = AlgorithmRequestDO.builder()
                 .requestId(request.getRequestId())
@@ -69,7 +77,11 @@ public class AlgorithmAdapter {
                 .status(AlgorithmRequestStatusEnum.PROCESSING.getStatus())
                 .build();
         algorithmRequestMapper.insert(record);
+        return executeAndComplete(request, record);
+    }
 
+    /** 提交算法并回写请求记录终态（正常/失败），供新建与"进行中复用"两条路径共用 */
+    private AlgorithmPlanRespDTO executeAndComplete(AlgorithmPlanReqDTO request, AlgorithmRequestDO record) {
         try {
             AlgorithmPlanRespDTO result = algorithmClient.plan(request);
             AlgorithmResultValidator.validate(request, result);

@@ -1,5 +1,5 @@
 <template>
-  <Dialog title="回复反馈" v-model="dialogVisible" width="550px">
+  <Dialog title="回复反馈" v-model="dialogVisible" width="480px">
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px" v-loading="formLoading">
       <el-form-item label="姓名">
         <el-input :model-value="detail.name" disabled />

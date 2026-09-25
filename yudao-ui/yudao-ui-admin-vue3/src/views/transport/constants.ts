@@ -63,9 +63,18 @@ export const REVIEW_STATUS_LABELS: Record<number, string> = {
   0: '待审核', 1: '已通过', 2: '需客户操作', 3: '需人工审核', 4: '不承运'
 }
 
-// ===== 车辆状态（VehicleDO.status）：0 空闲 1 在途 2 停用 =====
-export const VEHICLE_STATUS_LABELS: Record<number, string> = { 0: '空闲', 1: '在途', 2: '停用' }
-export const VEHICLE_STATUS_TAGS: Record<number, TagType> = { 0: 'info', 1: 'success', 2: 'danger' }
+// ===== 车辆状态（VehicleDO.status 权威注释：0 空闲可用，1 停用维修）=====
+// WEB-09: 修正——旧表误写「0空闲 1在途 2停用」，混入了 MonitoringVehicleRespVO.monitorStatus 的语义
+export const VEHICLE_STATUS_LABELS: Record<number, string> = { 0: '可用', 1: '停用' }
+export const VEHICLE_STATUS_TAGS: Record<number, TagType> = { 0: 'success', 1: 'danger' }
+
+// ===== 车辆实时运营状态（VehicleDO.realtimeStatus）：0 空闲 1 在途 2 故障 3 离线 =====
+export const VEHICLE_REALTIME_STATUS_LABELS: Record<number, string> = { 0: '空闲', 1: '在途', 2: '故障', 3: '离线' }
+export const VEHICLE_REALTIME_STATUS_TAGS: Record<number, TagType> = { 0: 'success', 1: 'primary', 2: 'danger', 3: 'info' }
+
+// ===== 商品订单状态（ProductOrderStatusEnum）：0 待发货 1 已发货 2 已完成 3 已取消 =====
+export const PRODUCT_ORDER_STATUS_LABELS: Record<number, string> = { 0: '待发货', 1: '已发货', 2: '已完成', 3: '已取消' }
+export const PRODUCT_ORDER_STATUS_TAGS: Record<number, TagType> = { 0: 'info', 1: 'warning', 2: 'success', 3: 'danger' }
 
 // ===== 班次状态（ShiftExecutionDO.status）：0 未发车 1 在途 2 已完成 =====
 export const SHIFT_STATUS_LABELS: Record<number, string> = { 0: '未发车', 1: '在途', 2: '已完成' }
@@ -94,5 +103,9 @@ export const reviewStatusLabel = (status?: number | null) =>
   status === undefined || status === null ? '-' : REVIEW_STATUS_LABELS[status] ?? '-'
 export const vehicleStatusLabel = (status?: number | null) => labelOf(VEHICLE_STATUS_LABELS, status)
 export const vehicleStatusTag = (status?: number | null) => tagOf(VEHICLE_STATUS_TAGS, status)
+export const vehicleRealtimeStatusLabel = (status?: number | null) => labelOf(VEHICLE_REALTIME_STATUS_LABELS, status)
+export const vehicleRealtimeStatusTag = (status?: number | null) => tagOf(VEHICLE_REALTIME_STATUS_TAGS, status)
+export const productOrderStatusLabel = (status?: number | null) => labelOf(PRODUCT_ORDER_STATUS_LABELS, status, '未知')
+export const productOrderStatusTag = (status?: number | null) => tagOf(PRODUCT_ORDER_STATUS_TAGS, status)
 export const shiftStatusLabel = (status?: number | null) => labelOf(SHIFT_STATUS_LABELS, status)
 export const shiftStatusTag = (status?: number | null) => tagOf(SHIFT_STATUS_TAGS, status)

@@ -7,8 +7,8 @@
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="全部" clearable style="width: 120px">
-            <el-option label="上架" :value="0" />
-            <el-option label="下架" :value="1" />
+            <el-option label="上架" :value="1" />
+            <el-option label="下架" :value="0" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -45,7 +45,7 @@
         <el-table-column label="库存" prop="stock" align="center" width="80" />
         <el-table-column label="状态" align="center" width="80">
           <template #default="scope">
-            <el-tag :type="scope.row.status === 0 ? 'success' : 'danger'">{{ scope.row.status === 0 ? '上架' : '下架' }}</el-tag>
+            <el-tag :type="scope.row.status === 1 ? 'success' : 'danger'">{{ scope.row.status === 1 ? '上架' : '下架' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="排序" prop="sort" align="center" width="70" />
@@ -56,7 +56,13 @@
             <el-button link type="danger" v-hasPermi="['transport:product:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无商品，点击下方按钮上架第一款农产品">
+            <el-button type="primary" @click="openForm('create')">新增商品</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>

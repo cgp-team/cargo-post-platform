@@ -68,7 +68,13 @@
             <el-button link type="danger" v-hasPermi="['transport:station:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无站点，点击下方按钮添加第一个站点">
+            <el-button type="primary" @click="openForm('create')">新增站点</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>

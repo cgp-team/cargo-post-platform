@@ -29,15 +29,15 @@
         <el-table-column label="货仓件数" prop="cargoCapacity" align="center" />
         <el-table-column label="状态" prop="status" align="center" width="80">
           <template #default="scope">
-            <el-tag :type="scope.row.status === 1 ? 'danger' : 'success'" size="small">
-              {{ scope.row.status === 1 ? '停用' : '可用' }}
+            <el-tag :type="vehicleStatusTag(scope.row.status)" size="small">
+              {{ vehicleStatusLabel(scope.row.status) }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="实时状态" align="center" width="100">
           <template #default="scope">
-            <el-tag :type="realtimeTagType(scope.row.realtimeStatus)" size="small">
-              {{ realtimeText(scope.row.realtimeStatus) }}
+            <el-tag :type="vehicleRealtimeStatusTag(scope.row.realtimeStatus)" size="small">
+              {{ vehicleRealtimeStatusLabel(scope.row.realtimeStatus) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -48,7 +48,13 @@
             <el-button link type="danger" v-hasPermi="['transport:vehicle:delete']" @click="handleDelete(scope.row.id)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      
+        <template #empty>
+          <el-empty :image-size="60" description="暂无车辆，点击下方按钮登记第一辆车">
+            <el-button type="primary" @click="openForm('create')">新增车辆</el-button>
+          </el-empty>
+        </template>
+        </el-table>
       <Pagination :total="total" v-model:page="queryParams.pageNo" v-model:limit="queryParams.pageSize" @pagination="getList" />
     </ContentWrap>
   </ContentWrap>
@@ -57,13 +63,16 @@
 
 <script setup lang="ts">
 import * as VehicleApi from '@/api/transport/vehicle'
+import {
+  vehicleStatusLabel,
+  vehicleStatusTag,
+  vehicleRealtimeStatusLabel,
+  vehicleRealtimeStatusTag
+} from '../constants'
 import VehicleForm from './VehicleForm.vue'
 defineOptions({ name: 'TransportVehicle' })
 const message = useMessage()
-const realtimeText = (s?: number) =>
-  ({ 0: '空闲', 1: '在途', 2: '故障', 3: '离线' } as Record<number, string>)[s ?? 0] || '空闲'
-const realtimeTagType = (s?: number) =>
-  s === 1 ? 'warning' : (s === 2 ? 'danger' : (s === 3 ? 'info' : 'success'))
+// WEB-09: 车辆状态/实时状态映射统一消费 constants.ts（本地映射已删）
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])
@@ -85,7 +94,7 @@ const getList = async () => {
   loading.value = true
   try { const res = await VehicleApi.getVehiclePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false }
 }
-const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10 }); getList() }
+const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, plateNo: '', status: undefined }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
   try { await message.confirm('确认删除该车辆？'); await VehicleApi.deleteVehicle(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }

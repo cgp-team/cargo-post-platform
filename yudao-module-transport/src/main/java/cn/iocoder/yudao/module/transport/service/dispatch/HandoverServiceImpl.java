@@ -50,6 +50,11 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.*;
 @Slf4j
 public class HandoverServiceImpl implements HandoverService {
 
+    /** BE-31：自代理——markSourceArrived 经代理调 createHandover，消除 this 直调绕过事务代理的隐患 */
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private HandoverServiceImpl self;
+
     @Resource private TransportHandoverMapper handoverMapper;
     @Resource private TransportLegMapper legMapper;
     @Resource private TransportOrderMapper orderMapper;
@@ -61,7 +66,7 @@ public class HandoverServiceImpl implements HandoverService {
     @Resource private StationMapper stationMapper;
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long createHandover(Long orderId, Long legFromId, Long legToId, Integer itemCount,
                                BigDecimal weightKg, String remark) {
         TransportOrderDO order = orderMapper.selectById(orderId);
@@ -100,7 +105,7 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long markSourceArrived(Long orderId, Long legFromId) {
         TransportLegDO legFrom = legMapper.selectById(legFromId);
         if (legFrom == null) {
@@ -112,7 +117,8 @@ public class HandoverServiceImpl implements HandoverService {
             if (legTo == null) {
                 return null; // 最终段无换乘交接
             }
-            Long id = createHandover(orderId, legFromId, legTo.getId(), null, null, null);
+            // BE-31：经代理调用（self 未注入的测试场景退化为 this 直调，行为等价）
+            Long id = (self != null ? self : this).createHandover(orderId, legFromId, legTo.getId(), null, null, null);
             handover = handoverMapper.selectById(id);
         }
         if (Objects.equals(handover.getStatus(), TransportHandoverStatusEnum.WAITING.getStatus())) {
@@ -142,7 +148,7 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void startHandover(Long handoverId, Long driverId) {
         TransportHandoverDO handover = get(handoverId);
         Integer status = handover.getStatus();
@@ -183,7 +189,7 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void confirmHandover(Long handoverId, Long toDriverId, String photoUrl) {
         TransportHandoverDO handover = get(handoverId);
         Integer status = handover.getStatus();
@@ -248,7 +254,7 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void disputeHandover(Long handoverId, String remark) {
         TransportHandoverDO handover = get(handoverId);
         if (Objects.equals(handover.getStatus(), TransportHandoverStatusEnum.COMPLETED.getStatus())) {
@@ -272,7 +278,7 @@ public class HandoverServiceImpl implements HandoverService {
     }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void timeoutHandover(Long handoverId, String remark) {
         TransportHandoverDO handover = get(handoverId);
         if (Objects.equals(handover.getStatus(), TransportHandoverStatusEnum.COMPLETED.getStatus())) {
@@ -420,10 +426,21 @@ public class HandoverServiceImpl implements HandoverService {
                 : TransportOrderStatusEnum.IN_TRANSIT);
     }
 
-    /** 订单状态推进（不动终态订单） */
+    /** 订单状态推进（不动终态订单；BE-21：补状态机流转校验） */
     private void updateOrderStatus(Long orderId, TransportOrderStatusEnum target) {
         if (orderId == null || target == null) {
             return;
+        }
+        TransportOrderDO current = orderMapper.selectById(orderId);
+        if (current == null) {
+            return;
+        }
+        if (Objects.equals(current.getStatus(), target.getStatus())) {
+            return; // 幂等：同状态重复推进跳过
+        }
+        if (!TransportOrderStatusEnum.canTransit(current.getStatus(), target.getStatus())) {
+            throw exception(ORDER_STATUS_TRANSITION_ILLEGAL,
+                    TransportOrderStatusEnum.nameOf(current.getStatus()), target.getName());
         }
         TransportOrderDO update = new TransportOrderDO();
         update.setStatus(target.getStatus());

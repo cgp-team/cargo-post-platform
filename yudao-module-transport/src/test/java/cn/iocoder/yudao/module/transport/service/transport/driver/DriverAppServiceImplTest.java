@@ -456,6 +456,7 @@ class DriverAppServiceImplTest {
         when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
                 .thenReturn(todayExecution(0));
         when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(shiftExecutionMapper.incrementLoadedCountWithinCapacity(50L, 4)).thenReturn(1);
         when(transportOrderMapper.update(any(), any())).thenReturn(1);
 
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
@@ -464,8 +465,8 @@ class DriverAppServiceImplTest {
         reqVO.setDriverPhotoUrl("http://example.com/photo.jpg"); // 货运强制收件照片
         driverAppService.pickupConfirm(reqVO);
 
-        // 订单状态推进已发车 + 执行记录已装件数 +1（SQL 原子自增）
-        verify(shiftExecutionMapper).incrementLoadedCount(50L);
+        // 订单状态推进已发车 + 执行记录已装件数 +1（BE-06：容量条件原子 UPDATE）
+        verify(shiftExecutionMapper).incrementLoadedCountWithinCapacity(50L, 4);
     }
 
     @Test
@@ -479,6 +480,7 @@ class DriverAppServiceImplTest {
         when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
                 .thenReturn(todayExecution(0));
         when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(shiftExecutionMapper.incrementLoadedCountWithinCapacity(50L, 4)).thenReturn(1);
         when(transportOrderMapper.update(any(), any())).thenReturn(1);
 
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
@@ -488,7 +490,7 @@ class DriverAppServiceImplTest {
         driverAppService.pickupConfirm(reqVO);
 
         // 已发车订单装车后仍保持已发车（loaded 记录 +1），deliver 仍可 3→4
-        verify(shiftExecutionMapper).incrementLoadedCount(50L);
+        verify(shiftExecutionMapper).incrementLoadedCountWithinCapacity(50L, 4);
     }
 
     @Test
@@ -504,6 +506,7 @@ class DriverAppServiceImplTest {
         when(shiftExecutionMapper.selectListByDriverAndDate(DRIVER_ID, LocalDate.now()))
                 .thenReturn(List.of(todayExecution(0)));
         when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(shiftExecutionMapper.incrementLoadedCountWithinCapacity(50L, 4)).thenReturn(1);
         when(transportOrderMapper.update(any(), any())).thenReturn(1);
 
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
@@ -512,7 +515,7 @@ class DriverAppServiceImplTest {
         reqVO.setDriverPhotoUrl("http://example.com/photo.jpg");
         driverAppService.pickupConfirm(reqVO);
 
-        verify(shiftExecutionMapper).incrementLoadedCount(50L);
+        verify(shiftExecutionMapper).incrementLoadedCountWithinCapacity(50L, 4);
     }
 
     @Test
@@ -559,6 +562,9 @@ class DriverAppServiceImplTest {
         when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
                 .thenReturn(todayExecution(4)); // 已装 4 件
         when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        // BE-06：容量条件下推到原子 UPDATE，返回 0 行即满仓；CAS 状态推进先于容量判定执行（事务回滚兜底）
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+        when(shiftExecutionMapper.incrementLoadedCountWithinCapacity(50L, 4)).thenReturn(0);
 
         AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
         reqVO.setDriverId(DRIVER_ID);
@@ -567,7 +573,7 @@ class DriverAppServiceImplTest {
         ServiceException ex = assertThrows(ServiceException.class, () -> driverAppService.pickupConfirm(reqVO));
 
         assertEquals(DRIVER_CARGO_FULL.getCode(), ex.getCode());
-        verify(transportOrderMapper, never()).update(any(), any());
+        verify(shiftExecutionMapper).incrementLoadedCountWithinCapacity(50L, 4);
         verify(shiftExecutionMapper, never()).updateById(any(ShiftExecutionDO.class));
     }
 

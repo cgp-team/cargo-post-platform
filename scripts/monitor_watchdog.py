@@ -60,7 +60,7 @@ def check_once() -> dict:
         # 无长跑任务属正常
 
     # 服务探测（云算法优先；未配置 ALGORITHM_BASE_URL 时本地 8000 仅告警一次说明）
-    algo = os.environ.get("ALGORITHM_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    algo = os.environ.get("ALGORITHM_BASE_URL", "http://127.0.0.1:18081").rstrip("/")  # DEP-05：本地默认端口对齐 docker-compose 宿主映射 18081
     gh = os.environ.get("GRAPHHOPPER_URL", "http://127.0.0.1:8080").rstrip("/")
     report["services"]["algorithm"] = {"url": algo, **_probe(f"{algo}/openapi.json")}
     report["services"]["graphhopper"] = {"url": gh, **_probe(f"{gh}/health")}
@@ -101,6 +101,24 @@ def check_once() -> dict:
     return report
 
 
+def _notify_webhook(report: dict) -> None:
+    """DEP-05：健康检查失败时把告警 POST 到 WATCHDOG_WEBHOOK（企业微信/钉钉/自建接收端均可）。
+    未配置环境变量则跳过；网络失败只打日志，不影响 watchdog 主循环。"""
+    url = os.environ.get("WATCHDOG_WEBHOOK", "").strip()
+    if not url:
+        return
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "msgtype": "text",
+            "text": {"content": "[cargo-post watchdog] ALERT " + "; ".join(report.get("alerts", []))},
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as ex:  # noqa: BLE001
+        print(f"[watchdog] webhook notify failed: {type(ex).__name__}: {ex}")
+
+
 def main(interval_s: float = 0, rounds: int = 1) -> None:
     if interval_s <= 0:
         print(json.dumps(check_once(), ensure_ascii=False, indent=2))
@@ -109,6 +127,8 @@ def main(interval_s: float = 0, rounds: int = 1) -> None:
         r = check_once()
         flag = "OK " if r["healthy"] else "ALERT"
         print(f"[{r['ts']}] {flag} alerts={r['alerts']} algo={r['services']['algorithm'].get('ok')} gh={r['services']['graphhopper'].get('ok')}")
+        if not r["healthy"]:
+            _notify_webhook(r)
         if rounds > 0 and i + 1 >= rounds:
             break
         time.sleep(interval_s)

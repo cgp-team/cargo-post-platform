@@ -14,7 +14,10 @@ const props = defineProps({
   width: propTypes.oneOfType([String, Number]).def('40%'),
   scroll: propTypes.bool.def(false), // 是否开启滚动条。如果是的话，按照 maxHeight 设置最大高度
   maxHeight: propTypes.oneOfType([String, Number]).def('400px'),
-  loading: propTypes.bool.def(false)
+  loading: propTypes.bool.def(false),
+  // WEB-06: 默认 false——表单弹窗点遮罩不再误关丢数据（此前模板硬编码 true 且覆盖使用方传参）。
+  // 个别纯展示弹窗如需旧行为，显式传 close-on-click-modal 即可覆盖。
+  closeOnClickModal: propTypes.bool.def(false)
 })
 
 const getBindValue = computed(() => {
@@ -74,7 +77,7 @@ function closedHandler() {
 <template>
   <ElDialog
     v-bind="getBindValue"
-    :close-on-click-modal="true"
+    :close-on-click-modal="closeOnClickModal"
     :fullscreen="isFullscreen"
     :width="width"
     destroy-on-close

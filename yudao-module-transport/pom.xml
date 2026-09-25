@@ -29,6 +29,12 @@
             <artifactId>yudao-spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!-- 保护能力：@Idempotent 下单幂等（BE-08）+ @RateLimiter 匿名接口频控（BE-11） -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-protection</artifactId>
+        </dependency>
+
         <!-- 数据访问：为后续 transport 领域表接入预留。 -->
         <dependency>
             <groupId>cn.iocoder.boot</groupId>
