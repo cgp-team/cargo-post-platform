@@ -40,7 +40,6 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRout
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
@@ -147,7 +146,12 @@ public class MonitoringServiceImpl implements MonitoringService {
     }
 
     @Override
-    @Cacheable(cacheNames = "transport:monitoring:vehicles#12s", key = "'all'")
+    // 注意（2026-09-25 线上故障复盘）：此处曾加 @Cacheable（transport:monitoring:vehicles#12s），
+    // 在 dev 环境导致 /app-api/transport/bus/{realtime,lines,nearby} 100% 返回「系统异常」——
+    // 依赖本方法的接口全部 500，而未依赖的 /bus/line-polyline 正常，据此定位到缓存。
+    // 本项目 Redis 缓存序列化器为 GenericJackson2JsonRedisSerializer（default typing NON_FINAL），
+    // 对含 LocalDateTime 的 VO 往返不可靠。当前前端已有 30s 轮询兜量，缓存收益远小于可用性风险，
+    // 故不再缓存。若将来确需缓存，请改为缓存 String/JSON 字符串并补往返测试。
     public List<MonitoringVehicleRespVO> getRealtimeVehicles() {
         LocalTime now = LocalTime.now();
         // 基础数据
