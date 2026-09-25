@@ -105,7 +105,23 @@ sudo cp deploy/cargo-post.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable cargo-post
 # 允许部署用户免密重启该服务：sudo visudo -f /etc/sudoers.d/cargo-post
 deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart cargo-post
+# Web 静态目录：交给部署用户后，CI 发布前端时全程无需 sudo（推荐做法）
+sudo mkdir -p /opt/cargo-post-web
+sudo chown -R deploy:deploy /opt/cargo-post-web
+# 可选：让 CI 能同步 watchdog systemd timer（不配置则部署时仅告警跳过，不影响发布）
+# echo 'deploy ALL=(root) NOPASSWD: /bin/cp, /bin/mkdir, /usr/bin/systemctl' | sudo tee /etc/sudoers.d/cargo-post-watchdog
+# sudo chmod 440 /etc/sudoers.d/cargo-post-watchdog && sudo visudo -c
 ```
+
+### Web 静态目录权限（前端发布步骤）
+
+CI 的 `Deploy frontend` 步骤需要写入 `/opt/cargo-post-web`。脚本按以下顺序自动选择执行方式：
+
+1. **目录对当前用户可写** → 全程不使用 `sudo`（推荐：按上面的 `chown` 一次性配置）
+2. 否则若**已配置免密 sudo** → 用 `sudo mkdir/rm/cp/rsync`
+3. 两者都不满足 → 步骤失败并直接打印两条修复命令（便于定位，不再只给一个 exit 1）
+
+> 历史故障（2026-09-25）：该步骤曾因 CI 用户无免密 sudo 而失败，且旧脚本无任何诊断输出。现已改为"优先免 sudo + 失败时给出可执行指引"。
 
 服务器专属配置（数据库、Redis 密码等）放 `/opt/cargo-post/config/application-dev.yaml`（Spring Boot 自动读取）或 `/opt/cargo-post/app.env`（systemd EnvironmentFile，权限 600），均不得提交仓库。
 
