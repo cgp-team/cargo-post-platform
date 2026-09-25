@@ -17,7 +17,9 @@ import { setupGlobCom } from '@/components'
 import { setupElementPlus } from '@/plugins/elementPlus'
 
 // 引入 form-create
-import { setupFormCreate } from '@/plugins/formCreate'
+// 注：改为按需加载——form-create/designer/wangeditor 仅「表单构建」页使用，
+// 在入口静态引入会给首屏注入 560KB+ 的 modulepreload，拖慢打开速度。
+// 现由 views/infra/build/index.vue 在挂载时调用 setupFormCreate。
 
 // 引入全局样式
 import '@/styles/index.scss'
@@ -61,8 +63,6 @@ const setupAll = async () => {
   setupGlobCom(app)
 
   setupElementPlus(app)
-
-  setupFormCreate(app)
 
   setupRouter(app)
 
