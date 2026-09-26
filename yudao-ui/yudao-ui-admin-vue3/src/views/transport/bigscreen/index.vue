@@ -66,26 +66,45 @@
             <!-- SEP-05：优先使用百度 GL 官方暗色样式；SDK 不支持 setMapStyleV2 时由该遮罩兜底 -->
             <div v-if="shadeEnabled" class="bs-map__shade"></div>
             <div v-if="mapError" class="bs-map__hint">{{ mapError }}</div>
-            <!-- 划片区快捷条：全域 + 有站点的区县（也可直接点地图任意区域） -->
+            <!-- 划片区快捷条：全部区县可横滚；也可直接点地图任意区域 -->
             <div v-if="districtsReady" class="bs-district-bar">
               <span class="bs-district-bar__tag">片区</span>
+              <div ref="chipBarRef" class="bs-district-bar__scroll">
+                <button
+                  class="bs-chip"
+                  type="button"
+                  :class="{ 'is-active': !selectedDistrict }"
+                  @click="selectDistrict(null)"
+                >
+                  全域
+                </button>
+                <button
+                  v-for="d in districtChips"
+                  :key="d"
+                  class="bs-chip"
+                  type="button"
+                  :class="{ 'is-active': selectedDistrict === d }"
+                  @click="selectDistrict(d)"
+                >
+                  {{ d }}
+                </button>
+              </div>
+            </div>
+            <!-- 底图形态切换：矢量 / 卫星 -->
+            <div class="bs-map-type">
               <button
-                class="bs-chip"
                 type="button"
-                :class="{ 'is-active': !selectedDistrict }"
-                @click="selectDistrict(null)"
+                :class="{ 'is-active': mapType === 'vector' }"
+                @click="setMapType('vector')"
               >
-                全域
+                矢量
               </button>
               <button
-                v-for="d in districtChips"
-                :key="d"
-                class="bs-chip"
                 type="button"
-                :class="{ 'is-active': selectedDistrict === d }"
-                @click="selectDistrict(d)"
+                :class="{ 'is-active': mapType === 'satellite' }"
+                @click="setMapType('satellite')"
               >
-                {{ d }}
+                卫星
               </button>
             </div>
             <div v-if="districtsReady" class="bs-map__tip">点击地图区域可切换片区</div>
@@ -231,12 +250,11 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, computed, watch } from 'vue'
 import echarts from '@/plugins/echarts'
 import {
   loadBaiduMapSdk,
   gcj02ToBd09,
-  bd09ToGcj02,
   clusterByGrid,
   shouldCluster,
   clusterBubbleStyle,
@@ -337,11 +355,7 @@ const pointInRings = (lng: number, lat: number, rings: number[][][]): boolean =>
   return true
 }
 
-/** 点所属区县名（多条目同名飞地取首个命中） */
-const districtOf = (lng: number, lat: number): string | null =>
-  districts.value.find((d) => pointInRings(lng, lat, d.rings))?.name ?? null
-
-/** 是否落在当前选中片区内（未选中=全域，全部通过） */
+/** 是否落在当前选中片区内（未选中=全域，全部通过；GCJ 空间供站点/车辆过滤，地图点击判定另走 BD 空间 districtOfBd） */
 const inSelectedDistrict = (lng?: number | null, lat?: number | null): boolean => {
   if (!selectedDistrict.value) return true
   if (lng == null || lat == null) return false
@@ -371,19 +385,28 @@ const centerKpi = computed(() => ({
   completionRate: completionRateText.value
 }))
 
-/** 快捷片区条：全域 + 有站点的区县（含当前选中），最多 8 个 */
+/** 快捷片区条：全部区县（判定不依赖底图标注，点条目=精确选中），横向滚动 */
 const districtChips = computed(() => {
-  const withStations = new Set<string>()
-  for (const s of cachedMapData?.stations ?? []) {
-    if (s.longitude == null || s.latitude == null) continue
-    const name = districtOf(s.longitude, s.latitude)
-    if (name) withStations.add(name)
+  const seen = new Set<string>()
+  const list: string[] = []
+  for (const d of districts.value) {
+    if (!seen.has(d.name)) {
+      seen.add(d.name)
+      list.push(d.name)
+    }
   }
-  const list = [...withStations]
   if (selectedDistrict.value && !list.includes(selectedDistrict.value)) {
     list.unshift(selectedDistrict.value)
   }
-  return list.slice(0, 8)
+  return list
+})
+const chipBarRef = ref<HTMLDivElement>()
+watch(selectedDistrict, async () => {
+  if (!selectedDistrict.value) return
+  await nextTick()
+  chipBarRef.value
+    ?.querySelector('.bs-chip.is-active')
+    ?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
 })
 
 const completionRateText = computed(() => {
@@ -525,6 +548,10 @@ let clusterBubbles: any[] = []
 /** 数据缓存：与 SDK 下载并行拉取，先到先存，地图就绪后立即渲染 */
 let cachedMapData: MonitoringMapDataVO | null = null
 let cachedVehicles: MonitoringVehicleVO[] | null = null
+/** 区县边界的 BD-09 缓存：点击判定/绘制/质心统一走 BD 空间，与覆盖物命中完全一致（消除转换偏差） */
+let districtsBd: { name: string; rings: number[][][] }[] = []
+/** 底图形态：矢量 / 卫星 */
+const mapType = ref<'vector' | 'satellite'>('vector')
 /** 边界 polygon 点击时间戳：与 map click 双触发时忽略后者（见 initMap） */
 let lastOverlayClickAt = 0
 /** 车辆位置补间：15s 轮询差值平滑移动（真数据，不造假轨迹） */
@@ -559,8 +586,10 @@ const initMap = async () => {
     // 边界 polygon 的 click 可能同时触发 map click，400ms 内忽略后者避免“选中又被取消”
     map.addEventListener('click', (e: any) => {
       if (Date.now() - lastOverlayClickAt < 400) return
-      const gcj = bd09ToGcj02(e.latlng.lng, e.latlng.lat)
-      const name = districtOf(gcj.lng, gcj.lat)
+      const x = e.latlng.lng
+      const y = e.latlng.lat
+      // BD 空间判定（与覆盖物命中完全一致）；落界外（江面/缝隙）时 10px 吸附最近边界
+      const name = districtOfBd(x, y) ?? (districtsBd.length ? snapDistrictBd(x, y) : null)
       if (name) selectDistrict(name)
     })
     mapReady = true
@@ -659,15 +688,141 @@ const renderMapData = () => {
 }
 
 // ============ 区县边界图层（划片区） ============
+/** GCJ → BD 一次转换缓存：点击判定/绘制/质心/吸附统一走 BD 空间，与覆盖物命中几何完全一致 */
+const buildBdCache = () => {
+  districtsBd = districts.value.map((d) => ({
+    name: d.name,
+    rings: d.rings.map((ring) =>
+      ring.map(([lng, lat]) => {
+        const bd = gcj02ToBd09(lng, lat)
+        return [bd.lng, bd.lat]
+      })
+    )
+  }))
+}
+
+/** 射线法（BD 空间） */
+const inRingBd = (ring: number[][], x: number, y: number): boolean => {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+  }
+  return inside
+}
+
+/** BD 点所在区县（districtsBd 顺序 = 真实行政区优先） */
+const districtOfBd = (x: number, y: number): string | null => {
+  for (const d of districtsBd) {
+    if (!inRingBd(d.rings[0], x, y)) continue
+    let hole = false
+    for (let h = 1; h < d.rings.length; h++) {
+      if (inRingBd(d.rings[h], x, y)) {
+        hole = true
+        break
+      }
+    }
+    if (!hole) return d.name
+  }
+  return null
+}
+
+/** 吸附容错：点在所有区县之外（江面/边界缝隙）时，命中 10px 内最近边界所属区县 */
+const snapDistrictBd = (x: number, y: number): string | null => {
+  const BMapGL = (window as any).BMapGL
+  if (!map || !BMapGL) return null
+  const px = map.pointToPixel(new BMapGL.Point(x, y))
+  const TH = 10
+  let best: string | null = null
+  let bestD = TH
+  for (const d of districtsBd) {
+    for (const ring of d.rings) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = map.pointToPixel(new BMapGL.Point(ring[j][0], ring[j][1]))
+        const b = map.pointToPixel(new BMapGL.Point(ring[i][0], ring[i][1]))
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const len2 = dx * dx + dy * dy
+        let t = len2 ? ((px.x - a.x) * dx + (px.y - a.y) * dy) / len2 : 0
+        t = Math.max(0, Math.min(1, t))
+        const dist = Math.hypot(px.x - (a.x + t * dx), px.y - (a.y + t * dy))
+        if (dist < bestD) {
+          bestD = dist
+          best = d.name
+        }
+      }
+    }
+  }
+  return best
+}
+
+/** 面积加权质心（shoelace，BD 空间） */
+const centroidBd = (ring: number[][]): [number, number] => {
+  let a = 0
+  let cx = 0
+  let cy = 0
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x0, y0] = ring[j]
+    const [x1, y1] = ring[i]
+    const f = x0 * y1 - x1 * y0
+    a += f
+    cx += (x0 + x1) * f
+    cy += (y0 + y1) * f
+  }
+  a *= 0.5
+  if (Math.abs(a) < 1e-12) return [ring[0][0], ring[0][1]]
+  return [cx / (6 * a), cy / (6 * a)]
+}
+
+/** 区名标签锚点：同名多块中取包围盒最大的一块（飞地场景主块在主城） */
+const labelCentroidOf = (name: string): [number, number] => {
+  let bestRing: number[][] | null = null
+  let bestArea = -1
+  for (const d of districtsBd) {
+    if (d.name !== name) continue
+    const ring = d.rings[0]
+    let minx = Infinity
+    let miny = Infinity
+    let maxx = -Infinity
+    let maxy = -Infinity
+    for (const [x, y] of ring) {
+      if (x < minx) minx = x
+      if (y < miny) miny = y
+      if (x > maxx) maxx = x
+      if (y > maxy) maxy = y
+    }
+    const area = (maxx - minx) * (maxy - miny)
+    if (area > bestArea) {
+      bestArea = area
+      bestRing = ring
+    }
+  }
+  return bestRing ? centroidBd(bestRing) : [0, 0]
+}
+
 const districtBoundsOf = (name: string): any => {
   const BMapGL = (window as any).BMapGL
   const bounds = new BMapGL.Bounds()
-  for (const d of districts.value) {
+  for (const d of districtsBd) {
     if (d.name !== name) continue
     for (const ring of d.rings) {
       for (const [lng, lat] of ring) {
-        const bd = gcj02ToBd09(lng, lat)
-        bounds.extend(new BMapGL.Point(bd.lng, bd.lat))
+        bounds.extend(new BMapGL.Point(lng, lat))
+      }
+    }
+  }
+  return bounds
+}
+
+/** 重庆全域视野（回「全域」时用） */
+const chongqingBounds = (): any => {
+  const BMapGL = (window as any).BMapGL
+  const bounds = new BMapGL.Bounds()
+  for (const d of districtsBd) {
+    for (const ring of d.rings) {
+      for (const [lng, lat] of ring) {
+        bounds.extend(new BMapGL.Point(lng, lat))
       }
     }
   }
@@ -676,33 +831,86 @@ const districtBoundsOf = (name: string): any => {
 
 const renderDistrictOverlays = () => {
   const BMapGL = (window as any).BMapGL
-  if (!map || !BMapGL || !districts.value.length) return
+  if (!map || !BMapGL || !districtsBd.length) return
   districtOverlays.forEach((o) => map.removeOverlay(o))
   districtOverlays = []
-  // 反向遍历：功能区先画（下层），真实行政区后画（上层，点选/视觉均优先）
-  for (const d of [...districts.value].reverse()) {
-    const selected = d.name === selectedDistrict.value
+  const selected = selectedDistrict.value
+  // 反向遍历：功能区下层、真实行政区上层；选中某区时其余区县隐藏（只看这个区）
+  for (const d of [...districtsBd].reverse()) {
+    if (selected && d.name !== selected) continue
+    const isSel = d.name === selected
     for (const ring of d.rings) {
       if (ring.length < 3) continue
-      const pts = ring.map(([lng, lat]) => {
-        const bd = gcj02ToBd09(lng, lat)
-        return new BMapGL.Point(bd.lng, bd.lat)
-      })
-      const polygon = new BMapGL.Polygon(pts, {
-        strokeColor: selected ? '#8CC0F5' : '#3D6FA8',
-        strokeWeight: selected ? 2 : 1,
-        strokeOpacity: selected ? 0.95 : 0.5,
-        fillColor: selected ? '#2E6BB0' : '#14283F',
-        fillOpacity: selected ? 0.16 : 0.04,
-        enableMassClear: false
-      })
-      polygon.addEventListener('click', () => {
+      const pts = ring.map(([lng, lat]) => new BMapGL.Point(lng, lat))
+      let overlay: any
+      if (isSel && typeof BMapGL.Prism === 'function') {
+        // 选中区县 → 3D 棱柱抬升（科技感展示；SDK 不支持 Prism 时回退平面）
+        overlay = new BMapGL.Prism(pts, 600, {
+          strokeColor: '#8CC0F5',
+          strokeWeight: 2,
+          strokeOpacity: 0.95,
+          fillColor: '#2E6BB0',
+          fillOpacity: 0.5
+        })
+      } else {
+        overlay = new BMapGL.Polygon(pts, {
+          strokeColor: isSel ? '#8CC0F5' : '#5B93CF',
+          strokeWeight: isSel ? 2 : 1.5,
+          strokeOpacity: isSel ? 0.95 : 0.75,
+          fillColor: isSel ? '#2E6BB0' : '#14283F',
+          fillOpacity: isSel ? 0.5 : 0.06,
+          enableMassClear: false
+        })
+      }
+      overlay.addEventListener('click', () => {
         lastOverlayClickAt = Date.now()
         selectDistrict(d.name)
       })
-      map.addOverlay(polygon)
-      districtOverlays.push(polygon)
+      map.addOverlay(overlay)
+      districtOverlays.push(overlay)
     }
+  }
+  // 区名标签：每个 name 一个（锚在最大块质心），可点击；选中时只保留该区
+  const seen = new Set<string>()
+  for (const d of districtsBd) {
+    if (seen.has(d.name)) continue
+    seen.add(d.name)
+    if (selected && d.name !== selected) continue
+    const isSel = d.name === selected
+    const [cx, cy] = labelCentroidOf(d.name)
+    const label = new BMapGL.Label(d.name, {
+      position: new BMapGL.Point(cx, cy),
+      offset: new BMapGL.Size(-22, -11),
+      enableMassClear: false
+    })
+    label.setStyle(
+      isSel
+        ? {
+            color: '#F5D98A',
+            backgroundColor: 'rgba(13,22,36,0.92)',
+            border: '1px solid #F0C566',
+            borderRadius: '3px',
+            fontSize: '13px',
+            fontWeight: '600',
+            letterSpacing: '2px',
+            padding: '2px 10px'
+          }
+        : {
+            color: '#A8C0DC',
+            backgroundColor: 'rgba(13,22,36,0.62)',
+            border: '1px solid rgba(79,147,214,0.3)',
+            borderRadius: '3px',
+            fontSize: '11px',
+            letterSpacing: '1px',
+            padding: '1px 7px'
+          }
+    )
+    label.addEventListener('click', () => {
+      lastOverlayClickAt = Date.now()
+      selectDistrict(d.name)
+    })
+    map.addOverlay(label)
+    districtOverlays.push(label)
   }
 }
 
@@ -713,7 +921,28 @@ const selectDistrict = (name: string | null) => {
   selectedDistrict.value = next
   selectedVehicleId.value = null
   renderDistrictOverlays()
-  if (mapReady && next) map.setViewport(districtBoundsOf(next))
+  if (mapReady) {
+    if (next) {
+      // 只看这个区：紧致视野（留出边距）+ 抬起俯仰角，3D 棱柱/卫星图立体可见
+      try {
+        map.setViewport(districtBoundsOf(next), { margins: [70, 70, 70, 70] })
+      } catch {
+        map.setViewport(districtBoundsOf(next))
+      }
+      try {
+        map.setTilt?.(45)
+      } catch {
+        /* SDK 版本不支持俯仰则保持平面 */
+      }
+    } else {
+      map.setViewport(chongqingBounds())
+      try {
+        map.setTilt?.(0)
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
   if (cachedMapData) renderMapData()
   if (cachedVehicles) renderVehicles()
   paintOverview() // 订单类 KPI 立即切换到新片区口径
@@ -726,9 +955,36 @@ const loadDistricts = async () => {
     districts.value = [...(data.districts ?? [])].sort(
       (a, b) => Number(ZONE_NAMES.has(a.name)) - Number(ZONE_NAMES.has(b.name))
     )
+    buildBdCache()
     if (mapReady) renderDistrictOverlays()
   } catch {
     // 边界不可用时划片区降级（无边界层/无快捷条），其余模块不受影响
+  }
+}
+
+/** 底图形态切换：矢量 ↔ 卫星（卫星下暗色样式自动失效，切回矢量时恢复） */
+const setMapType = (type: 'vector' | 'satellite') => {
+  if (!map || mapType.value === type) return
+  const BMapGL = (window as any).BMapGL
+  try {
+    if (type === 'satellite') {
+      const SAT = (window as any).BMAP_SATELLITE_MAP ?? BMapGL?.BMAP_SATELLITE_MAP
+      if (SAT == null) throw new Error('satellite map type unavailable')
+      map.setMapType(SAT)
+      mapType.value = 'satellite'
+    } else {
+      const NOR = (window as any).BMAP_NORMAL_MAP ?? BMapGL?.BMAP_NORMAL_MAP
+      if (NOR == null) throw new Error('normal map type unavailable')
+      map.setMapType(NOR)
+      mapType.value = 'vector'
+      try {
+        map.setMapStyleV2?.(BIGSCREEN_MAP_STYLE)
+      } catch {
+        /* 保持现状，遮罩兜底逻辑不变 */
+      }
+    }
+  } catch {
+    // 常量不可用：按钮维持当前形态，不报错打扰大屏
   }
 }
 
@@ -743,6 +999,26 @@ const fetchVehicles = async () => {
   } catch {
     if (!vehicleStale.value) vehicleStale.value = Date.now()
   }
+}
+
+/** 3D 风格车辆图标：俯视小货车（车头朝上），data-URI 内联 SVG 零外部依赖，setRotation 控制朝向 */
+const TRUCK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
+  <ellipse cx="13" cy="22.2" rx="8" ry="2.8" fill="rgba(0,0,0,0.45)"/>
+  <rect x="6.5" y="6.2" width="13" height="15.4" rx="3.2" fill="#3D7AB8" stroke="#9CCBF7" stroke-width="1"/>
+  <path d="M8.6 7.4h8.8a1.6 1.6 0 0 1 1.6 1.6v3.4H7V9a1.6 1.6 0 0 1 1.6-1.6z" fill="#DCEEFF"/>
+  <path d="M11 3.9h4a1.5 1.5 0 0 1 1.5 1.5v1.4H9.5V5.4A1.5 1.5 0 0 1 11 3.9z" fill="#5B93CF" stroke="#9CCBF7" stroke-width="0.8"/>
+  <rect x="8.6" y="13.4" width="8.8" height="6.6" rx="1.6" fill="#2E6BB0"/>
+  <rect x="9.9" y="14.5" width="6.2" height="1.4" rx="0.7" fill="#7FB6F0" opacity="0.6"/>
+  <rect x="5" y="9.2" width="1.9" height="1.4" rx="0.5" fill="#9CCBF7"/>
+  <rect x="19.1" y="9.2" width="1.9" height="1.4" rx="0.5" fill="#9CCBF7"/>
+</svg>`
+const truckIcon = () => {
+  const BMapGL = (window as any).BMapGL
+  return new BMapGL.Icon(
+    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(TRUCK_SVG)}`,
+    new BMapGL.Size(26, 26),
+    { anchor: new BMapGL.Size(13, 13) }
+  )
 }
 
 /** 车头朝向（0=正北，顺时针） */
@@ -816,9 +1092,10 @@ const renderVehicles = () => {
       }).forEach((bucket) => {
         const point = new BMapGL.Point(bucket.lng, bucket.lat)
         if (bucket.items.length === 1) {
-          const marker = new BMapGL.Marker(point, { title: bucket.items[0].vehicle.plateNo })
-          const icon = marker.getIcon()
-          icon.setImageSize?.(new BMapGL.Size(18, 26))
+          const marker = new BMapGL.Marker(point, {
+            icon: truckIcon(),
+            title: `${bucket.items[0].vehicle.plateNo} ${bucket.items[0].vehicle.driverName ?? ''}`
+          })
           map.addOverlay(marker)
           vehicleMarkers.set(bucket.items[0].vehicle.vehicleId, marker)
           return
@@ -859,9 +1136,10 @@ const renderVehicles = () => {
       }
       if (!marker) {
         const point = new BMapGL.Point(bd.lng, bd.lat)
-        marker = new BMapGL.Marker(point, { title: `${v.plateNo} ${v.driverName ?? ''}` })
-        const icon = marker.getIcon()
-        icon.setImageSize?.(new BMapGL.Size(18, 26))
+        marker = new BMapGL.Marker(point, {
+          icon: truckIcon(),
+          title: `${v.plateNo} ${v.driverName ?? ''}`
+        })
         marker.addEventListener('click', () => {
           selectedVehicleId.value = v.vehicleId
         })
@@ -1448,16 +1726,62 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 12px;
   left: 14px;
-  right: 14px;
+  right: 150px;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
   z-index: 6;
   pointer-events: none;
 }
 .bs-district-bar > * {
   pointer-events: auto;
+}
+.bs-district-bar__scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(79, 147, 214, 0.4) transparent;
+}
+.bs-district-bar__scroll::-webkit-scrollbar {
+  height: 4px;
+}
+.bs-district-bar__scroll::-webkit-scrollbar-thumb {
+  background: rgba(79, 147, 214, 0.4);
+  border-radius: 2px;
+}
+.bs-district-bar__scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.bs-district-bar__scroll .bs-chip {
+  flex: 0 0 auto;
+}
+.bs-map-type {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 7;
+  display: flex;
+  overflow: hidden;
+  background: rgba(13, 22, 36, 0.88);
+  border: 1px solid var(--screen-line);
+  border-radius: 14px;
+}
+.bs-map-type button {
+  background: none;
+  border: none;
+  color: var(--screen-text-sub);
+  font-size: 12px;
+  padding: 4px 13px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+.bs-map-type button.is-active {
+  background: rgba(79, 147, 214, 0.22);
+  color: #d7ebff;
 }
 .bs-district-bar__tag {
   font-size: 12px;
