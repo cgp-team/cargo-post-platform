@@ -7,7 +7,10 @@
           <span class="bs-dot" :class="connected ? 'is-ok' : 'is-warn'"></span>
           <span class="bs-header__sub">{{ connected ? '数据链路正常' : '数据延迟中' }}</span>
         </div>
-        <h1 class="bs-header__title">山乡客货邮 · 智慧运营大屏</h1>
+        <h1 class="bs-header__title">
+          山乡客货邮 · 智慧运营大屏
+          <span class="bs-header__title-en">SMART OPERATIONS · CHONGQING</span>
+        </h1>
         <div class="bs-header__side bs-header__side--right">
           <span class="bs-header__updated">最后更新 {{ lastUpdatedText }}</span>
           <span class="bs-header__clock">{{ clockText }}</span>
@@ -22,13 +25,19 @@
         <!-- ② 左栏 -->
         <aside class="bs-col bs-col--left">
           <section class="bs-panel">
-            <h2 class="bs-panel__title">运营 KPI</h2>
+            <h2 class="bs-panel__title">
+              运营 KPI
+              <span v-if="selectedDistrict" class="bs-scope">{{ selectedDistrict }}</span>
+            </h2>
             <div class="bs-kpi-grid">
               <div v-for="kpi in kpiList" :key="kpi.label" class="bs-kpi">
                 <div class="bs-kpi__value" :class="kpi.gold ? 'is-gold' : ''">
                   {{ kpi.value ?? '--' }}
                 </div>
-                <div class="bs-kpi__label">{{ kpi.label }}</div>
+                <div class="bs-kpi__label">
+                  {{ kpi.label }}
+                  <span v-if="kpi.global && selectedDistrict" class="bs-scope bs-scope--global">全局</span>
+                </div>
               </div>
             </div>
           </section>
@@ -57,6 +66,61 @@
             <!-- SEP-05：优先使用百度 GL 官方暗色样式；SDK 不支持 setMapStyleV2 时由该遮罩兜底 -->
             <div v-if="shadeEnabled" class="bs-map__shade"></div>
             <div v-if="mapError" class="bs-map__hint">{{ mapError }}</div>
+            <!-- 划片区快捷条：全域 + 有站点的区县（也可直接点地图任意区域） -->
+            <div v-if="districtsReady" class="bs-district-bar">
+              <span class="bs-district-bar__tag">片区</span>
+              <button
+                class="bs-chip"
+                type="button"
+                :class="{ 'is-active': !selectedDistrict }"
+                @click="selectDistrict(null)"
+              >
+                全域
+              </button>
+              <button
+                v-for="d in districtChips"
+                :key="d"
+                class="bs-chip"
+                type="button"
+                :class="{ 'is-active': selectedDistrict === d }"
+                @click="selectDistrict(d)"
+              >
+                {{ d }}
+              </button>
+            </div>
+            <div v-if="districtsReady" class="bs-map__tip">点击地图区域可切换片区</div>
+            <!-- 车辆信息卡（点车辆 marker 打开） -->
+            <div v-if="selectedVehicle" class="bs-vehicle-card">
+              <button class="bs-vehicle-card__close" type="button" @click="selectedVehicleId = null">×</button>
+              <div class="bs-vehicle-card__plate">{{ selectedVehicle.plateNo }}</div>
+              <div class="bs-vehicle-card__row">
+                <span>司机</span>
+                <strong>{{ selectedVehicle.driverName || '-' }}</strong>
+              </div>
+              <div class="bs-vehicle-card__row">
+                <span>线路</span>
+                <strong>{{ selectedVehicle.routeName || '-' }}</strong>
+              </div>
+              <div class="bs-vehicle-card__row">
+                <span>班次</span>
+                <strong>{{ selectedVehicle.shiftCode || '-' }}</strong>
+              </div>
+              <div class="bs-vehicle-card__row">
+                <span>速度</span>
+                <strong class="num">{{ selectedVehicle.speedKmh ?? '-' }} km/h</strong>
+              </div>
+              <div class="bs-vehicle-card__row">
+                <span>状态</span>
+                <strong>{{ vehicleStatusText(selectedVehicle.status) }}</strong>
+              </div>
+              <div class="bs-vehicle-card__foot">
+                {{ selectedVehicle.dataSource === 'REAL_STALE' ? '位置已过期' : '实时位置' }}<span
+                  v-if="selectedVehicle.lastLocationTime"
+                >
+                  · {{ selectedVehicle.lastLocationTime.replace('T', ' ').slice(5, 16) }}</span
+                >
+              </div>
+            </div>
           </div>
           <div class="bs-map-kpis">
             <div class="bs-map-kpi">
@@ -83,6 +147,7 @@
           <section class="bs-panel bs-panel--grow">
             <h2 class="bs-panel__title">
               今日班次执行
+              <span v-if="selectedDistrict" class="bs-scope bs-scope--global">全局</span>
               <span v-if="shiftStale" class="bs-stale">数据延迟 {{ staleMinutes(shiftStale) }} 分钟</span>
             </h2>
             <ul class="bs-shift-list">
@@ -100,6 +165,7 @@
           <section class="bs-panel">
             <h2 class="bs-panel__title">
               返程结算（今日）
+              <span v-if="selectedDistrict" class="bs-scope bs-scope--global">全局</span>
               <span v-if="overview?.settlement == null && !overviewStale" class="bs-stale">数据延迟中</span>
             </h2>
             <template v-if="overview?.settlement">
@@ -167,19 +233,33 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import echarts from '@/plugins/echarts'
-import { loadBaiduMapSdk, gcj02ToBd09, clusterByGrid, shouldCluster, clusterBubbleStyle, BIGSCREEN_MAP_STYLE } from '@/components/Map/src/utils'
+import {
+  loadBaiduMapSdk,
+  gcj02ToBd09,
+  bd09ToGcj02,
+  clusterByGrid,
+  shouldCluster,
+  clusterBubbleStyle,
+  BIGSCREEN_MAP_STYLE
+} from '@/components/Map/src/utils'
 import {
   getBigScreenOverview,
   getBigScreenMapData,
   getBigScreenVehicles,
+  getBigScreenDistricts,
   type BigScreenOverviewVO,
-  type BigScreenShiftVO
+  type BigScreenShiftVO,
+  type BigScreenDistrictsVO
 } from '@/api/transport/bigscreen'
 import { getDriverExpiringList, type DriverVO } from '@/api/transport/driver'
 import { getHandoverPage } from '@/api/transport/handover'
 import type { MonitoringMapDataVO, MonitoringVehicleVO } from '@/api/transport/monitoring'
 
 defineOptions({ name: 'TransportBigScreen' })
+
+// ============ 提速：SDK 与数据全并行（原串行为 SDK→数据→渲染） ============
+// 大屏 chunk 一加载就发起百度 SDK 下载；地图就绪与数据到达谁先都行，到齐即渲染。
+const sdkReady: Promise<void | null> = loadBaiduMapSdk(20000).catch(() => null)
 
 // ============ 刷新分层（SEP-03） ============
 // T1 静态 5min：map-data ｜ T2 中频 60s：overview（后端缓存 48s）｜ T3 高频 15s：vehicles（后端缓存 12s）
@@ -213,6 +293,19 @@ const connected = computed(() => !overviewStale.value && !vehicleStale.value)
 const lastUpdatedText = ref('--:--:--')
 const clockText = ref('')
 
+// ============ 划片区（区县，GCJ-02 多边形来自后端 OSM 资源） ============
+const districts = ref<BigScreenDistrictsVO['districts']>([])
+const districtsReady = computed(() => districts.value.length > 0)
+/** 功能区（两江新区等）与真实区县多边形重叠：判定优先真实行政区（与后端同口径） */
+const ZONE_NAMES = new Set(['两江新区', '重庆高新区', '万盛经济技术开发区'])
+/** null = 全域口径 */
+const selectedDistrict = ref<string | null>(null)
+/** 打开信息卡的车辆（null 关闭） */
+const selectedVehicleId = ref<number | null>(null)
+const selectedVehicle = computed(
+  () => vehicles.value.find((v) => v.vehicleId === selectedVehicleId.value) ?? null
+)
+
 // 各模块"最近一次成功时间"——失败时显示"数据延迟 xm"（SEP-03 规范）
 const overviewStale = ref(0)
 const vehicleStale = ref(0)
@@ -224,6 +317,39 @@ const shiftStale = computed(() => overviewStale.value)
 
 const staleMinutes = (since: number) => (since ? Math.max(1, Math.round((Date.now() - since) / 60000)) : 0)
 
+// ============ 区县几何（前端点包含判断，坐标系 GCJ-02，与站点/车辆同源） ============
+const pointInRings = (lng: number, lat: number, rings: number[][][]): boolean => {
+  const outer = rings[0]
+  if (!outer) return false
+  const inRing = (ring: number[][]): boolean => {
+    let inside = false
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i]
+      const [xj, yj] = ring[j]
+      if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside
+    }
+    return inside
+  }
+  if (!inRing(outer)) return false
+  for (let h = 1; h < rings.length; h++) {
+    if (inRing(rings[h])) return false
+  }
+  return true
+}
+
+/** 点所属区县名（多条目同名飞地取首个命中） */
+const districtOf = (lng: number, lat: number): string | null =>
+  districts.value.find((d) => pointInRings(lng, lat, d.rings))?.name ?? null
+
+/** 是否落在当前选中片区内（未选中=全域，全部通过） */
+const inSelectedDistrict = (lng?: number | null, lat?: number | null): boolean => {
+  if (!selectedDistrict.value) return true
+  if (lng == null || lat == null) return false
+  return districts.value.some(
+    (d) => d.name === selectedDistrict.value && pointInRings(lng, lat, d.rings)
+  )
+}
+
 // ============ KPI ============
 const kpiList = computed(() => [
   { label: '订单总量', value: overview.value?.orderTotal },
@@ -231,15 +357,34 @@ const kpiList = computed(() => [
   { label: '营收总额(元)', value: overview.value?.orderAmountTotal, gold: true },
   { label: '今日营收(元)', value: overview.value?.orderAmountToday, gold: true },
   { label: '站点数', value: overview.value?.stationCount },
-  { label: '司机数', value: overview.value?.driverTotal }
+  { label: '司机数', value: overview.value?.driverTotal, global: true }
 ])
 
+// 划片区口径：车辆三态按当前片区统计（司机数/班次等无属地维度保持全局，UI 标注）
+const vehiclesInDistrict = computed(() =>
+  vehicles.value.filter((v) => inSelectedDistrict(v.longitude, v.latitude))
+)
 const centerKpi = computed(() => ({
-  inTransit: vehicles.value.filter((v) => v.status === 1).length,
-  idle: vehicles.value.filter((v) => v.status === 0).length,
-  disabled: vehicles.value.filter((v) => v.status === 2).length,
+  inTransit: vehiclesInDistrict.value.filter((v) => v.status === 1).length,
+  idle: vehiclesInDistrict.value.filter((v) => v.status === 0).length,
+  disabled: vehiclesInDistrict.value.filter((v) => v.status === 2).length,
   completionRate: completionRateText.value
 }))
+
+/** 快捷片区条：全域 + 有站点的区县（含当前选中），最多 8 个 */
+const districtChips = computed(() => {
+  const withStations = new Set<string>()
+  for (const s of cachedMapData?.stations ?? []) {
+    if (s.longitude == null || s.latitude == null) continue
+    const name = districtOf(s.longitude, s.latitude)
+    if (name) withStations.add(name)
+  }
+  const list = [...withStations]
+  if (selectedDistrict.value && !list.includes(selectedDistrict.value)) {
+    list.unshift(selectedDistrict.value)
+  }
+  return list.slice(0, 8)
+})
 
 const completionRateText = computed(() => {
   const s = overview.value?.shiftSummary
@@ -367,21 +512,42 @@ const initCharts = async () => {
   renderType()
 }
 
-// ============ 地图（T1 层） ============
+// ============ 地图（T1 层 · 提速：SDK/数据并行，到齐即渲染） ============
 const mapRef = ref<HTMLDivElement>()
 let map: any = null
+let mapReady = false
 let routeOverlays: any[] = []
+let districtOverlays: any[] = []
 let vehicleMarkers = new Map<number, any>()
+let vehicleLabels = new Map<number, any>()
 /** SEP-05：车辆聚合气泡覆盖物 */
 let clusterBubbles: any[] = []
+/** 数据缓存：与 SDK 下载并行拉取，先到先存，地图就绪后立即渲染 */
+let cachedMapData: MonitoringMapDataVO | null = null
+let cachedVehicles: MonitoringVehicleVO[] | null = null
+/** 边界 polygon 点击时间戳：与 map click 双触发时忽略后者（见 initMap） */
+let lastOverlayClickAt = 0
+/** 车辆位置补间：15s 轮询差值平滑移动（真数据，不造假轨迹） */
+const tweens = new Map<number, { marker: any; label: any; from: any; to: any; start: number }>()
+let tweenRaf = 0
+const TWEEN_MS = 1600
+
+// 重庆默认视图（主城中心）。原实现中心写死黔南山区(107.5,26.6)，站点接口无数据时地图停在贵州
+const CQ_CENTER = { lng: 106.5511, lat: 29.563, zoom: 9 }
+/** 重庆辖区包围盒（GCJ-02 近似），防止异常站点把视野拉出重庆 */
+const CQ_BOUNDS = { minLng: 105.2, maxLng: 110.3, minLat: 28.1, maxLat: 32.3 }
+
+const vehicleStatusText = (status: number) =>
+  ({ 0: '空闲', 1: '在途', 2: '停用' })[status] ?? '未知'
 
 const initMap = async () => {
   try {
-    await loadBaiduMapSdk(15000)
+    await sdkReady
     const BMapGL = (window as any).BMapGL
     if (!mapRef.value || !BMapGL) return
-    map = new BMapGL.Map(mapRef.value, { enableMapClick: false })
-    map.centerAndZoom(new BMapGL.Point(107.5, 26.6), 11) // 默认中心（黔南山区），后续由站点集合自适应
+    // 启用地图点击：点任意区域命中区县即切换片区
+    map = new BMapGL.Map(mapRef.value, { enableMapClick: true })
+    map.centerAndZoom(new BMapGL.Point(CQ_CENTER.lng, CQ_CENTER.lat), CQ_CENTER.zoom)
     map.enableScrollWheelZoom(false)
     // SEP-05：优先用百度 GL 官方暗色样式（无需控制台配置）；不被支持时保留 CSS 遮罩兜底
     try {
@@ -390,92 +556,256 @@ const initMap = async () => {
     } catch {
       shadeEnabled.value = true
     }
-    await loadMapData()
-    await paintVehicles()
+    // 边界 polygon 的 click 可能同时触发 map click，400ms 内忽略后者避免“选中又被取消”
+    map.addEventListener('click', (e: any) => {
+      if (Date.now() - lastOverlayClickAt < 400) return
+      const gcj = bd09ToGcj02(e.latlng.lng, e.latlng.lat)
+      const name = districtOf(gcj.lng, gcj.lat)
+      if (name) selectDistrict(name)
+    })
+    mapReady = true
+    if (districts.value.length) renderDistrictOverlays()
+    if (cachedMapData) renderMapData()
+    if (cachedVehicles) renderVehicles()
   } catch {
     mapError.value = '地图加载失败：请检查百度地图 AK Referer 白名单或网络后刷新'
   }
 }
 
-const loadMapData = async () => {
+const fetchMapData = async () => {
   try {
-    const data: MonitoringMapDataVO = await getBigScreenMapData()
-    const BMapGL = (window as any).BMapGL
-    if (!map || !BMapGL) return
-    routeOverlays.forEach((o) => map.removeOverlay(o))
-    routeOverlays = []
-    const bounds = new BMapGL.Bounds()
-    let hasPoint = false
-    // 线路：真实道路折线优先，否则虚线示意（与监控页同口径）
-    for (const route of data.routes ?? []) {
-      const pts: any[] = []
-      const line = route.roadPoints?.length
-        ? route.roadPoints.map((p) => gcj02ToBd09(p.longitude, p.latitude))
-        : route.points.map((p) => gcj02ToBd09(p.longitude, p.latitude))
-      for (const bd of line) {
-        pts.push(new BMapGL.Point(bd.lng, bd.lat))
-        bounds.extend(pts[pts.length - 1])
-        hasPoint = true
-      }
-      if (pts.length >= 2) {
-        const polyline = new BMapGL.Polyline(pts, {
-          strokeColor: 'var(--screen-primary)',
-          strokeWeight: route.roadPoints?.length ? 3 : 2,
-          strokeOpacity: route.roadPoints?.length ? 0.85 : 0.5,
-          strokeStyle: route.roadPoints?.length ? 'solid' : 'dashed'
-        })
-        map.addOverlay(polyline)
-        routeOverlays.push(polyline)
-      }
-    }
-    // 站点
-    for (const s of data.stations ?? []) {
-      if (s.longitude == null || s.latitude == null) continue
-      const bd = gcj02ToBd09(s.longitude, s.latitude)
-      const point = new BMapGL.Point(bd.lng, bd.lat)
-      bounds.extend(point)
-      hasPoint = true
-      const marker = new BMapGL.Marker(point)
-      map.addOverlay(marker)
-      routeOverlays.push(marker)
-      const label = new BMapGL.Label(s.stationName, {
-        offset: new BMapGL.Size(8, -8),
-        enableMassClear: false
-      })
-      label.setStyle({
-        color: 'var(--screen-text)',
-        backgroundColor: 'rgba(17,27,43,0.85)',
-        border: '1px solid var(--screen-line)',
-        borderRadius: '4px',
-        fontSize: '11px',
-        padding: '1px 5px'
-      })
-      map.addOverlay(label)
-      routeOverlays.push(label)
-    }
-    if (hasPoint) map.setViewport(bounds)
-    mapError.value = ''
+    cachedMapData = await getBigScreenMapData()
     mapStale.value = 0
+    if (mapReady) renderMapData()
   } catch {
     if (!mapStale.value) mapStale.value = Date.now()
   }
 }
 
-const paintVehicles = async () => {
+/** 站点/线路视野（限重庆范围内）；划片区时视野由 selectDistrict 负责 */
+const fitWithinChongqing = (bounds: any) => {
+  const sw = bounds.getSouthWest()
+  const ne = bounds.getNorthEast()
+  const cx = (sw.lng + ne.lng) / 2
+  const cy = (sw.lat + ne.lat) / 2
+  if (cx >= CQ_BOUNDS.minLng && cx <= CQ_BOUNDS.maxLng && cy >= CQ_BOUNDS.minLat && cy <= CQ_BOUNDS.maxLat) {
+    map.setViewport(bounds)
+  }
+}
+
+const renderMapData = () => {
+  const data = cachedMapData
+  const BMapGL = (window as any).BMapGL
+  if (!map || !BMapGL || !data) return
+  routeOverlays.forEach((o) => map.removeOverlay(o))
+  routeOverlays = []
+  const bounds = new BMapGL.Bounds()
+  let hasPoint = false
+  // 线路：真实道路折线优先，否则虚线示意（与监控页同口径）；划片区时仅保留途经该片区的线路
+  for (const route of data.routes ?? []) {
+    const rawPoints = route.roadPoints?.length ? route.roadPoints : route.points
+    if (selectedDistrict.value && !rawPoints.some((p) => inSelectedDistrict(p.longitude, p.latitude))) {
+      continue
+    }
+    const pts: any[] = rawPoints.map((p) => {
+      const bd = gcj02ToBd09(p.longitude, p.latitude)
+      const pt = new BMapGL.Point(bd.lng, bd.lat)
+      bounds.extend(pt)
+      hasPoint = true
+      return pt
+    })
+    if (pts.length >= 2) {
+      const polyline = new BMapGL.Polyline(pts, {
+        // canvas 覆盖物不认 CSS 变量，必须字面量色值（SEP-04 同口径）
+        strokeColor: '#4F93D6',
+        strokeWeight: route.roadPoints?.length ? 3 : 2,
+        strokeOpacity: route.roadPoints?.length ? 0.85 : 0.5,
+        strokeStyle: route.roadPoints?.length ? 'solid' : 'dashed'
+      })
+      map.addOverlay(polyline)
+      routeOverlays.push(polyline)
+    }
+  }
+  // 站点（划片区时仅显示区内站点）
+  for (const s of data.stations ?? []) {
+    if (s.longitude == null || s.latitude == null) continue
+    if (!inSelectedDistrict(s.longitude, s.latitude)) continue
+    const bd = gcj02ToBd09(s.longitude, s.latitude)
+    const point = new BMapGL.Point(bd.lng, bd.lat)
+    bounds.extend(point)
+    hasPoint = true
+    const marker = new BMapGL.Marker(point)
+    map.addOverlay(marker)
+    routeOverlays.push(marker)
+    const label = new BMapGL.Label(s.stationName, {
+      position: point,
+      offset: new BMapGL.Size(8, -8),
+      enableMassClear: false
+    })
+    label.setStyle({
+      color: '#DCE8F5',
+      backgroundColor: 'rgba(13,22,36,0.9)',
+      border: '1px solid rgba(79,147,214,0.35)',
+      borderRadius: '4px',
+      fontSize: '11px',
+      padding: '1px 5px'
+    })
+    map.addOverlay(label)
+    routeOverlays.push(label)
+  }
+  if (hasPoint && !selectedDistrict.value) fitWithinChongqing(bounds)
+  mapError.value = ''
+  mapStale.value = 0
+}
+
+// ============ 区县边界图层（划片区） ============
+const districtBoundsOf = (name: string): any => {
+  const BMapGL = (window as any).BMapGL
+  const bounds = new BMapGL.Bounds()
+  for (const d of districts.value) {
+    if (d.name !== name) continue
+    for (const ring of d.rings) {
+      for (const [lng, lat] of ring) {
+        const bd = gcj02ToBd09(lng, lat)
+        bounds.extend(new BMapGL.Point(bd.lng, bd.lat))
+      }
+    }
+  }
+  return bounds
+}
+
+const renderDistrictOverlays = () => {
+  const BMapGL = (window as any).BMapGL
+  if (!map || !BMapGL || !districts.value.length) return
+  districtOverlays.forEach((o) => map.removeOverlay(o))
+  districtOverlays = []
+  // 反向遍历：功能区先画（下层），真实行政区后画（上层，点选/视觉均优先）
+  for (const d of [...districts.value].reverse()) {
+    const selected = d.name === selectedDistrict.value
+    for (const ring of d.rings) {
+      if (ring.length < 3) continue
+      const pts = ring.map(([lng, lat]) => {
+        const bd = gcj02ToBd09(lng, lat)
+        return new BMapGL.Point(bd.lng, bd.lat)
+      })
+      const polygon = new BMapGL.Polygon(pts, {
+        strokeColor: selected ? '#8CC0F5' : '#3D6FA8',
+        strokeWeight: selected ? 2 : 1,
+        strokeOpacity: selected ? 0.95 : 0.5,
+        fillColor: selected ? '#2E6BB0' : '#14283F',
+        fillOpacity: selected ? 0.16 : 0.04,
+        enableMassClear: false
+      })
+      polygon.addEventListener('click', () => {
+        lastOverlayClickAt = Date.now()
+        selectDistrict(d.name)
+      })
+      map.addOverlay(polygon)
+      districtOverlays.push(polygon)
+    }
+  }
+}
+
+/** 选中片区（再次点击同一片区/点「全域」回全局口径） */
+const selectDistrict = (name: string | null) => {
+  const next = selectedDistrict.value === name ? null : name
+  if (selectedDistrict.value === next) return
+  selectedDistrict.value = next
+  selectedVehicleId.value = null
+  renderDistrictOverlays()
+  if (mapReady && next) map.setViewport(districtBoundsOf(next))
+  if (cachedMapData) renderMapData()
+  if (cachedVehicles) renderVehicles()
+  paintOverview() // 订单类 KPI 立即切换到新片区口径
+}
+
+const loadDistricts = async () => {
+  try {
+    const data = await getBigScreenDistricts()
+    // 真实行政区排前（点包含优先命中）；绘制时反向遍历让功能区在下层、真实区县在上层（点选一致）
+    districts.value = [...(data.districts ?? [])].sort(
+      (a, b) => Number(ZONE_NAMES.has(a.name)) - Number(ZONE_NAMES.has(b.name))
+    )
+    if (mapReady) renderDistrictOverlays()
+  } catch {
+    // 边界不可用时划片区降级（无边界层/无快捷条），其余模块不受影响
+  }
+}
+
+const fetchVehicles = async () => {
   try {
     const list: MonitoringVehicleVO[] = await getBigScreenVehicles()
+    cachedVehicles = list
     vehicles.value = list
     vehicleStale.value = 0
     lastUpdatedText.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    if (mapReady) renderVehicles()
+  } catch {
+    if (!vehicleStale.value) vehicleStale.value = Date.now()
+  }
+}
+
+/** 车头朝向（0=正北，顺时针） */
+const headingDeg = (from: any, to: any) => {
+  const dy = to.lat - from.lat
+  const dx = (to.lng - from.lng) * Math.cos((((from.lat + to.lat) / 2) * Math.PI) / 180)
+  return (Math.atan2(dx, dy) * 180) / Math.PI
+}
+
+const stepTweens = () => {
+  const now = performance.now()
+  const BMapGL = (window as any).BMapGL
+  tweens.forEach((t, id) => {
+    const k = Math.min(1, (now - t.start) / TWEEN_MS)
+    const p = new BMapGL.Point(
+      t.from.lng + (t.to.lng - t.from.lng) * k,
+      t.from.lat + (t.to.lat - t.from.lat) * k
+    )
+    t.marker.setPosition(p)
+    t.label?.setPosition?.(p)
+    if (k >= 1) tweens.delete(id)
+  })
+  tweenRaf = tweens.size ? requestAnimationFrame(stepTweens) : 0
+}
+
+/** 位置补间 + 车头朝向；坐标未变则不动 */
+const tweenVehicle = (marker: any, id: number, label: any, to: { lng: number; lat: number }) => {
+  const from = marker.getPosition()
+  if (!from || (from.lng === to.lng && from.lat === to.lat)) return
+  tweens.delete(id)
+  marker.setRotation?.(headingDeg(from, to))
+  tweens.set(id, { marker, label, from, to, start: performance.now() })
+  if (!tweenRaf) tweenRaf = requestAnimationFrame(stepTweens)
+}
+
+const clearClusterBubbles = () => {
+  clusterBubbles.forEach((b) => map.removeOverlay(b))
+  clusterBubbles = []
+}
+
+const clearVehicleMarkers = () => {
+  tweens.clear()
+  vehicleMarkers.forEach((m, id) => {
+    map.removeOverlay(m)
+    const lb = vehicleLabels.get(id)
+    if (lb) map.removeOverlay(lb)
+  })
+  vehicleMarkers = new Map()
+  vehicleLabels = new Map()
+}
+
+const renderVehicles = () => {
+  try {
     const BMapGL = (window as any).BMapGL
     if (!map || !BMapGL) return
-    // 全量重建（车辆数少；超过阈值时改走网格聚合，避免 T3 15s 刷新时叠加数百覆盖物）
-    vehicleMarkers.forEach((m) => map.removeOverlay(m))
-    vehicleMarkers = new Map()
-    clusterBubbles.forEach((b) => map.removeOverlay(b))
-    clusterBubbles = []
-    const visible = list.filter((v) => v.status === 1 && v.longitude != null && v.latitude != null)
+    // 划片区口径：仅区内 + 在途 + 有坐标
+    const visible = (cachedVehicles ?? []).filter(
+      (v) => v.status === 1 && v.longitude != null && v.latitude != null && inSelectedDistrict(v.longitude, v.latitude)
+    )
     if (shouldCluster(visible.length)) {
+      // 车辆数大时退回网格聚合（聚合气泡不参与补间动画）
+      clearVehicleMarkers()
+      clearClusterBubbles()
       const points = visible.map((v) => {
         const bd = gcj02ToBd09(v.longitude!, v.latitude!)
         return { lng: bd.lng, lat: bd.lat, vehicle: v }
@@ -503,14 +833,60 @@ const paintVehicles = async () => {
       })
       return
     }
+    clearClusterBubbles()
+    // 增量更新：新建缺失 marker，其余走补间（真数据平滑移动）
+    const ids = new Set(visible.map((v) => v.vehicleId))
+    ;[...vehicleMarkers.keys()].forEach((id) => {
+      if (!ids.has(id)) {
+        const m = vehicleMarkers.get(id)
+        const lb = vehicleLabels.get(id)
+        if (m) map.removeOverlay(m)
+        if (lb) map.removeOverlay(lb)
+        vehicleMarkers.delete(id)
+        vehicleLabels.delete(id)
+        tweens.delete(id)
+      }
+    })
     for (const v of visible) {
-      const vBd = gcj02ToBd09(v.longitude!, v.latitude!)
-      const point = new BMapGL.Point(vBd.lng, vBd.lat)
-      const marker = new BMapGL.Marker(point, { title: v.plateNo })
-      const icon = marker.getIcon()
-      icon.setImageSize?.(new BMapGL.Size(18, 26))
-      map.addOverlay(marker)
-      vehicleMarkers.set(v.vehicleId, marker)
+      const bd = gcj02ToBd09(v.longitude!, v.latitude!)
+      let marker = vehicleMarkers.get(v.vehicleId)
+      let label = vehicleLabels.get(v.vehicleId)
+      // 聚合模式遗留的无标签 marker：重建以带上车牌标签与点击信息卡
+      if (marker && !label) {
+        map.removeOverlay(marker)
+        vehicleMarkers.delete(v.vehicleId)
+        marker = undefined
+      }
+      if (!marker) {
+        const point = new BMapGL.Point(bd.lng, bd.lat)
+        marker = new BMapGL.Marker(point, { title: `${v.plateNo} ${v.driverName ?? ''}` })
+        const icon = marker.getIcon()
+        icon.setImageSize?.(new BMapGL.Size(18, 26))
+        marker.addEventListener('click', () => {
+          selectedVehicleId.value = v.vehicleId
+        })
+        label = new BMapGL.Label(`${v.plateNo}${v.driverName ? ' · ' + v.driverName : ''}`, {
+          position: point,
+          offset: new BMapGL.Size(-36, -32),
+          enableMassClear: false
+        })
+        label.setStyle({
+          color: '#E8F2FD',
+          backgroundColor: 'rgba(13,22,36,0.92)',
+          border: '1px solid rgba(79,147,214,0.65)',
+          borderRadius: '3px',
+          fontSize: '10px',
+          lineHeight: '14px',
+          padding: '0 5px',
+          whiteSpace: 'nowrap',
+          fontFamily: "'DIN Alternate','PingFang SC',sans-serif"
+        })
+        map.addOverlay(marker)
+        map.addOverlay(label)
+        vehicleMarkers.set(v.vehicleId, marker)
+        vehicleLabels.set(v.vehicleId, label)
+      }
+      tweenVehicle(marker, v.vehicleId, label, bd)
     }
   } catch {
     if (!vehicleStale.value) vehicleStale.value = Date.now()
@@ -519,7 +895,7 @@ const paintVehicles = async () => {
 
 const paintOverview = async () => {
   try {
-    const data = await getBigScreenOverview()
+    const data = await getBigScreenOverview(selectedDistrict.value ?? undefined)
     overview.value = data
     overviewStale.value = 0
     renderTrend()
@@ -566,18 +942,25 @@ onMounted(() => {
   tickClock()
   clockTimer = window.setInterval(tickClock, 1000)
   initCharts()
-  initMap()
+  // 提速：地图数据/车辆/区县边界/KPI 全部并行发起，与百度 SDK 下载同时进行
+  fetchMapData()
+  fetchVehicles()
+  loadDistricts()
   paintOverview()
   loadAlerts()
-  t1Timer = window.setInterval(loadMapData, T1_MS)
+  initMap()
+  t1Timer = window.setInterval(fetchMapData, T1_MS)
   t2Timer = window.setInterval(paintOverview, T2_MS)
-  t3Timer = window.setInterval(paintVehicles, T3_MS)
+  t3Timer = window.setInterval(fetchVehicles, T3_MS)
   alertTimer = window.setInterval(loadAlerts, ALERT_MS)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', rescale)
   ;[clockTimer, t1Timer, t2Timer, t3Timer, alertTimer].forEach((t) => t && window.clearInterval(t))
+  if (tweenRaf) cancelAnimationFrame(tweenRaf)
+  tweenRaf = 0
+  tweens.clear()
   trendChart?.dispose()
   typeChart?.dispose()
   map?.destroy?.()
@@ -599,7 +982,12 @@ onBeforeUnmount(() => {
   left: 0;
   display: flex;
   flex-direction: column;
-  background: var(--screen-bg);
+  /* 科技感：静态细网格底纹（静态纹理非循环动画，符合 7×24 规范） */
+  background-color: var(--screen-bg);
+  background-image:
+    linear-gradient(rgba(79, 147, 214, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 147, 214, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
   color: var(--screen-text);
   font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
@@ -617,11 +1005,20 @@ onBeforeUnmount(() => {
 }
 .bs-header__title {
   margin: 0;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: 6px;
   color: var(--screen-text);
   text-shadow: 0 0 24px rgba(79, 147, 214, 0.28);
+  text-align: center;
+}
+.bs-header__title-en {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 7px;
+  color: rgba(79, 147, 214, 0.75);
+  margin-top: 2px;
 }
 .bs-header__side {
   display: flex;
@@ -716,6 +1113,19 @@ onBeforeUnmount(() => {
   width: 3px;
   border-radius: 2px;
   background: var(--screen-primary);
+}
+/* 科技角标：面板右上切角（::before 已被左侧光条占用） */
+.bs-panel::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 18px;
+  height: 18px;
+  border-top: 2px solid rgba(79, 147, 214, 0.75);
+  border-right: 2px solid rgba(79, 147, 214, 0.75);
+  border-top-right-radius: 16px;
+  pointer-events: none;
 }
 .bs-panel__title {
   margin: 0 0 12px;
@@ -838,6 +1248,7 @@ onBeforeUnmount(() => {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--screen-primary);
+  text-shadow: 0 0 16px rgba(79, 147, 214, 0.45);
 }
 .bs-map-kpi__label {
   font-size: 12px;
@@ -1015,5 +1426,157 @@ onBeforeUnmount(() => {
   color: var(--screen-offline);
   font-size: 13px;
   padding: 8px 0;
+}
+
+/* ============ 划片区（区县） ============ */
+.bs-scope {
+  font-size: 11px;
+  font-weight: 400;
+  color: #cfe6ff;
+  background: rgba(79, 147, 214, 0.18);
+  border: 1px solid rgba(79, 147, 214, 0.5);
+  border-radius: 3px;
+  padding: 1px 7px;
+  letter-spacing: 1px;
+}
+.bs-scope--global {
+  color: var(--screen-text-sub);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--screen-line);
+}
+.bs-district-bar {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  z-index: 6;
+  pointer-events: none;
+}
+.bs-district-bar > * {
+  pointer-events: auto;
+}
+.bs-district-bar__tag {
+  font-size: 12px;
+  color: var(--screen-text-sub);
+  letter-spacing: 4px;
+  padding-right: 8px;
+  border-right: 1px solid var(--screen-line);
+}
+.bs-chip {
+  background: rgba(13, 22, 36, 0.88);
+  border: 1px solid var(--screen-line);
+  color: var(--screen-text-sub);
+  font-size: 12px;
+  padding: 4px 13px;
+  border-radius: 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.2s ease;
+}
+.bs-chip:hover {
+  color: var(--screen-text);
+  border-color: rgba(79, 147, 214, 0.5);
+}
+.bs-chip.is-active {
+  background: rgba(79, 147, 214, 0.2);
+  border-color: var(--screen-primary);
+  color: #d7ebff;
+  box-shadow: 0 0 14px rgba(79, 147, 214, 0.4);
+}
+.bs-map__tip {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 6;
+  font-size: 11px;
+  color: var(--screen-text-sub);
+  background: rgba(13, 22, 36, 0.78);
+  border: 1px dashed rgba(79, 147, 214, 0.4);
+  padding: 3px 10px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* 车辆信息卡 */
+.bs-vehicle-card {
+  position: absolute;
+  top: 56px;
+  right: 14px;
+  width: 236px;
+  background: rgba(11, 18, 32, 0.96);
+  border: 1px solid rgba(79, 147, 214, 0.55);
+  border-radius: 10px;
+  padding: 14px 16px 12px;
+  z-index: 7;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.5);
+}
+.bs-vehicle-card::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 16px;
+  height: 16px;
+  border-top: 2px solid var(--screen-gold);
+  border-left: 2px solid var(--screen-gold);
+  border-top-left-radius: 10px;
+}
+.bs-vehicle-card__close {
+  position: absolute;
+  top: 6px;
+  right: 9px;
+  background: none;
+  border: none;
+  color: var(--screen-text-sub);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+}
+.bs-vehicle-card__close:hover {
+  color: var(--screen-text);
+}
+.bs-vehicle-card__plate {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--screen-gold);
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.bs-vehicle-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.bs-vehicle-card__row span {
+  color: var(--screen-text-sub);
+  flex: 0 0 auto;
+}
+.bs-vehicle-card__row strong {
+  color: var(--screen-text);
+  font-weight: 500;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bs-vehicle-card__row .num {
+  font-variant-numeric: tabular-nums;
+  color: #8cc0f5;
+}
+.bs-vehicle-card__foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--screen-line);
+  font-size: 11px;
+  color: var(--screen-success);
 }
 </style>
