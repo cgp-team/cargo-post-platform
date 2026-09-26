@@ -119,8 +119,14 @@ export const generateRoute = (routes: AppCustomRouteRecordRaw[]): AppRouteRecord
 
     // 2. 生成 data（AppRouteRecordRaw）
     // 路由地址转首字母大写驼峰，作为路由名称，适配keepAlive
+    // 顶级路由必须是绝对路径（vue-router 5 直接抛 "Invalid path"）；
+    // 兼容后端漏写前导斜杠的顶级目录（如 V022 会员中心 path='member'，会打断整个动态路由注册）。
+    const rootPath =
+      Number(route.parentId) === 0 && !isUrl(route.path) && !route.path.startsWith('/')
+        ? '/' + route.path
+        : route.path
     let data: AppRouteRecordRaw = {
-      path: route.path,
+      path: rootPath,
       name:
         route.componentName && route.componentName.length > 0
           ? route.componentName
@@ -156,7 +162,7 @@ export const generateRoute = (routes: AppCustomRouteRecordRaw[]): AppRouteRecord
       if (route.children?.length && !route.component) {
         // 顶级目录承载后台整体框架；非顶级目录只作为 router-view 占位，避免多级菜单嵌套 Layout。
         data.component = Number(route.parentId) === 0 ? Layout : getParentLayout()
-        data.redirect = getRedirect(route.path, route.children)
+        data.redirect = getRedirect(rootPath, route.children)
         // 外链
       } else if (isUrl(route.path)) {
         const externalPath = getExternalRoutePath(route.id, data.name)
