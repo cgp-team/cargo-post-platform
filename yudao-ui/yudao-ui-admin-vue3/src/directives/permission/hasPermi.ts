@@ -1,5 +1,5 @@
 import type { App } from 'vue'
-import { useUserStore } from '@/store/modules/user'
+import { useUserStoreWithOut } from '@/store/modules/user'
 
 const { t } = useI18n() // 国际化
 
@@ -21,7 +21,9 @@ export function hasPermi(app: App<Element>) {
 }
 
 /** 判断权限的方法 function */
-const userStore = useUserStore()
+// 必须用 WithOut（显式传入 pinia 实例）：本行在模块顶层执行，早于 main.ts 的 app.use(pinia)，
+// 裸调 useUserStore() 会因 activePinia 未激活而在生产构建直接抛 `pinia._s` TypeError。
+const userStore = useUserStoreWithOut()
 const all_permission = '*:*:*'
 export const hasPermission = (permission: string[]) => {
   return (
