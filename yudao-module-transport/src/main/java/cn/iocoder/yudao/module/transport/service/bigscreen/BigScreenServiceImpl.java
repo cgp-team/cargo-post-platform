@@ -6,6 +6,7 @@ import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.DispatchSe
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringShiftRespVO;
 import cn.iocoder.yudao.module.transport.controller.admin.monitoring.vo.MonitoringVehicleRespVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.route.RouteMapper;
@@ -25,9 +26,12 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
 
 /**
  * 智慧大屏聚合 Service 实现
@@ -50,6 +54,7 @@ public class BigScreenServiceImpl implements BigScreenService {
     @Resource private TransportOrderMapper transportOrderMapper;
     @Resource private MonitoringService monitoringService;
     @Resource private DispatchService dispatchService;
+    @Resource private DistrictGeometryService districtGeometryService;
 
     @Override
     // 注意（2026-09-25 故障复盘）：此处曾加 @Cacheable（transport:bigscreen:overview#48s）。
@@ -59,18 +64,51 @@ public class BigScreenServiceImpl implements BigScreenService {
     // /app-api/transport/bus/{realtime,lines,nearby} 100% 返回「系统异常」。
     // 大屏按 5min/60s 分层刷新，缓存收益有限，故取消。
     // 若将来确需缓存：改缓存 JSON 字符串，并补一次"写入→读出"往返测试。
-    public Map<String, Object> getOverview() {
+    public Map<String, Object> getOverview(String district) {
         Map<String, Object> result = new HashMap<>();
         result.put("generatedAt", LocalDateTime.now());
+        // 划片区口径：district 非空时订单类指标按「取货站点 → 区县多边形」归属过滤；为空时保持全局 SQL 聚合
+        final String scopedDistrict = (district == null || district.isBlank()) ? null : district.trim();
+        result.put("district", scopedDistrict);
+        List<TransportOrderDO> scopedOrders = null;
         // ===== 摘要 KPI（与 /dashboard/summary 同口径） =====
-        result.put("orderTotal", transportOrderMapper.selectCount(null));
         LocalDate today = LocalDate.now();
-        result.put("orderToday", transportOrderMapper.selectCount(new LambdaQueryWrapperX<TransportOrderDO>()
-                .ge(TransportOrderDO::getCreateTime, today.atStartOfDay())));
-        result.put("orderAmountTotal", sumOrderAmount(null));
-        result.put("orderAmountToday", sumOrderAmount(today));
+        if (scopedDistrict != null) {
+            Set<Long> stationIds = stationIdsInDistrict(scopedDistrict);
+            List<TransportOrderDO> allOrders = transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                    .select(TransportOrderDO::getId, TransportOrderDO::getPickupStationId, TransportOrderDO::getTotalAmount,
+                            TransportOrderDO::getOrderType, TransportOrderDO::getStatus, TransportOrderDO::getCreateTime));
+            final Set<Long> inDistrictStationIds = stationIds;
+            scopedOrders = allOrders.stream()
+                    .filter(o -> inDistrictStationIds.contains(o.getPickupStationId()))
+                    .toList();
+            LocalDateTime todayStart = today.atStartOfDay();
+            BigDecimal amountTotal = BigDecimal.ZERO;
+            BigDecimal amountToday = BigDecimal.ZERO;
+            long orderToday = 0;
+            for (TransportOrderDO o : scopedOrders) {
+                BigDecimal amount = o.getTotalAmount() == null ? BigDecimal.ZERO : o.getTotalAmount();
+                amountTotal = amountTotal.add(amount);
+                if (o.getCreateTime() != null && !o.getCreateTime().isBefore(todayStart)) {
+                    orderToday++;
+                    amountToday = amountToday.add(amount);
+                }
+            }
+            result.put("orderTotal", (long) scopedOrders.size());
+            result.put("orderToday", orderToday);
+            result.put("orderAmountTotal", amountTotal);
+            result.put("orderAmountToday", amountToday);
+            result.put("stationCount", (long) stationIds.size());
+        } else {
+            result.put("orderTotal", transportOrderMapper.selectCount(null));
+            result.put("orderToday", transportOrderMapper.selectCount(new LambdaQueryWrapperX<TransportOrderDO>()
+                    .ge(TransportOrderDO::getCreateTime, today.atStartOfDay())));
+            result.put("orderAmountTotal", sumOrderAmount(null));
+            result.put("orderAmountToday", sumOrderAmount(today));
+            result.put("stationCount", stationMapper.selectCount(null));
+        }
+        // 以下无属地维度，始终为全局口径（前端划片区时标注「全局」）
         result.put("vehicleTotal", vehicleMapper.selectCount(null));
-        result.put("stationCount", stationMapper.selectCount(null));
         result.put("routeCount", routeMapper.selectCount(null));
         result.put("driverTotal", driverMapper.selectCount(null));
         // ===== 今日班次 =====
@@ -84,15 +122,88 @@ public class BigScreenServiceImpl implements BigScreenService {
         result.put("shiftExecution", shifts);
         // ===== 返程结算（今日）===== 失败互不拖垮：置 null 由前端如实标注
         result.put("settlement", buildTodaySettlement());
-        // ===== 订单趋势（24 小时）+ 分布 =====
-        result.put("hourlyTrend", buildHourlyTrend());
-        result.put("typeDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
-                .select("order_type AS type", "COUNT(*) AS count")
-                .groupBy("order_type")));
-        result.put("statusDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
-                .select("status AS status", "COUNT(*) AS count")
-                .groupBy("status")));
+        // ===== 订单趋势（24 小时）+ 分布（区县模式用内存聚合，与 SQL 版同口径） =====
+        if (scopedOrders != null) {
+            result.put("hourlyTrend", buildHourlyTrend(scopedOrders));
+            result.put("typeDistribution", groupCount(scopedOrders, TransportOrderDO::getOrderType, "type"));
+            result.put("statusDistribution", groupCount(scopedOrders, TransportOrderDO::getStatus, "status"));
+        } else {
+            result.put("hourlyTrend", buildHourlyTrend());
+            result.put("typeDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
+                    .select("order_type AS type", "COUNT(*) AS count")
+                    .groupBy("order_type")));
+            result.put("statusDistribution", transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
+                    .select("status AS status", "COUNT(*) AS count")
+                    .groupBy("status")));
+        }
         return result;
+    }
+
+    /**
+     * 划片区：按区县多边形筛出该区县内的站点 id（站点坐标 GCJ-02，与边界资源同坐标系）。
+     * 站点为小表（全量内存判定），订单侧只做 stationId 命中查找，避免逐单做几何运算。
+     */
+    private Set<Long> stationIdsInDistrict(String district) {
+        Set<Long> ids = new HashSet<>();
+        for (StationDO s : stationMapper.selectList(null)) {
+            if (s.getLongitude() == null || s.getLatitude() == null) {
+                continue;
+            }
+            if (district.equals(districtGeometryService.findDistrict(
+                    s.getLongitude().doubleValue(), s.getLatitude().doubleValue()))) {
+                ids.add(s.getId());
+            }
+        }
+        return ids;
+    }
+
+    /** 划片区：订单按 key 字段计数（与 SQL groupBy 结果同结构：{key 别名, count}） */
+    private List<Map<String, Object>> groupCount(List<TransportOrderDO> orders,
+                                                 Function<TransportOrderDO, Integer> keyFn, String alias) {
+        Map<Integer, Long> counts = new LinkedHashMap<>();
+        for (TransportOrderDO o : orders) {
+            Integer key = keyFn.apply(o);
+            if (key == null) {
+                continue;
+            }
+            counts.merge(key, 1L, Long::sum);
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        counts.forEach((key, count) -> {
+            Map<String, Object> row = new HashMap<>();
+            row.put(alias, key);
+            row.put("count", count);
+            rows.add(row);
+        });
+        return rows;
+    }
+
+    /** 划片区：订单趋势（与 SQL 版 buildHourlyTrend 同一窗口/桶键/补零口径，仅数据源换为已过滤订单） */
+    private List<Map<String, Object>> buildHourlyTrend(List<TransportOrderDO> orders) {
+        LocalDateTime start = LocalDate.now().minusDays(1).atStartOfDay();
+        Map<String, Map<String, Object>> byHour = new LinkedHashMap<>();
+        for (int i = 0; i < 24; i++) {
+            String hour = start.plusHours(i).format(HOUR_FMT);
+            Map<String, Object> zero = new HashMap<>();
+            zero.put("date", hour);
+            zero.put("count", 0L);
+            zero.put("amount", BigDecimal.ZERO);
+            byHour.put(hour, zero);
+        }
+        for (TransportOrderDO o : orders) {
+            if (o.getCreateTime() == null || o.getCreateTime().isBefore(start)) {
+                continue;
+            }
+            String hour = o.getCreateTime().format(HOUR_FMT);
+            Map<String, Object> bucket = byHour.get(hour);
+            if (bucket == null) {
+                continue;
+            }
+            bucket.put("count", ((Number) bucket.get("count")).longValue() + 1);
+            bucket.put("amount", ((BigDecimal) bucket.get("amount"))
+                    .add(o.getTotalAmount() == null ? BigDecimal.ZERO : o.getTotalAmount()));
+        }
+        return new ArrayList<>(byHour.values());
     }
 
     /** 今日返程结算；范围 [今日 00:00, 明日 00:00)。任何异常降级为 null 并留痕，不影响其余模块 */

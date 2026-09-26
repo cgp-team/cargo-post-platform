@@ -2,12 +2,14 @@ package cn.iocoder.yudao.module.transport.controller.admin.bigscreen;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.module.transport.service.bigscreen.BigScreenService;
+import cn.iocoder.yudao.module.transport.service.bigscreen.DistrictGeometryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -27,12 +29,20 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 public class BigScreenController {
 
     @Resource private BigScreenService bigScreenService;
+    @Resource private DistrictGeometryService districtGeometryService;
 
     @GetMapping("/overview")
     @Operation(summary = "大屏聚合数据（缓存 48s）")
     @PreAuthorize("@ss.hasPermission('transport:dashboard:query')")
-    public CommonResult<Map<String, Object>> overview() {
-        return success(bigScreenService.getOverview());
+    public CommonResult<Map<String, Object>> overview(@RequestParam(value = "district", required = false) String district) {
+        return success(bigScreenService.getOverview(district));
+    }
+
+    @GetMapping("/districts")
+    @Operation(summary = "重庆区县边界（GCJ-02，大屏划片区用）")
+    @PreAuthorize("@ss.hasPermission('transport:dashboard:query')")
+    public CommonResult<Map<String, Object>> districts() {
+        return success(districtGeometryService.getGeoData());
     }
 
 }

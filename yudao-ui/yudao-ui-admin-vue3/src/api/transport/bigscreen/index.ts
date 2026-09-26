@@ -58,11 +58,29 @@ export interface BigScreenOverviewVO {
   hourlyTrend: BigScreenTrendPointVO[]
   typeDistribution: BigScreenDistributionVO[]
   statusDistribution: BigScreenDistributionVO[]
+  /** 当前口径：非空表示本次聚合按该区县过滤（划片区）；null/缺失为全局 */
+  district?: string | null
 }
 
-/** 获取大屏聚合数据（T2 层，60s 轮询；后端 Redis 缓存 48s 挡并发） */
-export const getBigScreenOverview = (): Promise<BigScreenOverviewVO> => {
-  return request.get({ url: '/transport/bigscreen/overview' })
+/** 大屏 · 区县边界（GCJ-02 顶点，来自后端 OSM 抽取资源） */
+export interface BigScreenDistrictsVO {
+  source?: string
+  coordinateSystem?: string
+  districts: {
+    name: string
+    /** rings[0] 为外环，其后为洞；同名飞地会拆成多个条目 */
+    rings: number[][][]
+  }[]
+}
+
+/** 获取大屏聚合数据（T2 层，60s 轮询；district 非空时订单类 KPI 按区县过滤） */
+export const getBigScreenOverview = (district?: string): Promise<BigScreenOverviewVO> => {
+  return request.get({ url: '/transport/bigscreen/overview', params: district ? { district } : undefined })
+}
+
+/** 大屏 · 重庆区县边界（进入大屏时拉取一次） */
+export const getBigScreenDistricts = (): Promise<BigScreenDistrictsVO> => {
+  return request.get({ url: '/transport/bigscreen/districts' })
 }
 
 /** 大屏地图图层数据（T1 层，5min 轮询） */

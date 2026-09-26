@@ -53,6 +53,10 @@ export interface MonitoringVehicleVO {
   progress?: number
   nextStationName?: string
   speedKmh?: number
+  /** 位置来源：REAL=司机15分钟内上报真实位置 / REAL_STALE=上报已过期 */
+  dataSource?: string
+  /** 最后位置时间（司机真实上报时间，ISO 字符串） */
+  lastLocationTime?: string
 }
 
 /** 班次执行状态 */
