@@ -832,7 +832,13 @@ const chongqingBounds = (): any => {
 const renderDistrictOverlays = () => {
   const BMapGL = (window as any).BMapGL
   if (!map || !BMapGL || !districtsBd.length) return
-  districtOverlays.forEach((o) => map.removeOverlay(o))
+  districtOverlays.forEach((o) => {
+    try {
+      map.removeOverlay(o)
+    } catch {
+      /* 单个移除失败不阻断 */
+    }
+  })
   districtOverlays = []
   const selected = selectedDistrict.value
   // 反向遍历：功能区下层、真实行政区上层；选中某区时其余区县隐藏（只看这个区）
@@ -841,19 +847,10 @@ const renderDistrictOverlays = () => {
     const isSel = d.name === selected
     for (const ring of d.rings) {
       if (ring.length < 3) continue
-      const pts = ring.map(([lng, lat]) => new BMapGL.Point(lng, lat))
-      let overlay: any
-      if (isSel && typeof BMapGL.Prism === 'function') {
-        // 选中区县 → 3D 棱柱抬升（科技感展示；SDK 不支持 Prism 时回退平面）
-        overlay = new BMapGL.Prism(pts, 600, {
-          strokeColor: '#8CC0F5',
-          strokeWeight: 2,
-          strokeOpacity: 0.95,
-          fillColor: '#2E6BB0',
-          fillOpacity: 0.5
-        })
-      } else {
-        overlay = new BMapGL.Polygon(pts, {
+      try {
+        const pts = ring.map(([lng, lat]) => new BMapGL.Point(lng, lat))
+        // 平面多边形始终绘制（保底可见）
+        const polygon = new BMapGL.Polygon(pts, {
           strokeColor: isSel ? '#8CC0F5' : '#5B93CF',
           strokeWeight: isSel ? 2 : 1.5,
           strokeOpacity: isSel ? 0.95 : 0.75,
@@ -861,13 +858,35 @@ const renderDistrictOverlays = () => {
           fillOpacity: isSel ? 0.5 : 0.06,
           enableMassClear: false
         })
+        polygon.addEventListener('click', () => {
+          lastOverlayClickAt = Date.now()
+          selectDistrict(d.name)
+        })
+        map.addOverlay(polygon)
+        districtOverlays.push(polygon)
+        // 选中区县叠加 3D 棱柱（增强展示；构造失败仅降级，不影响保底多边形）
+        if (isSel && typeof BMapGL.Prism === 'function') {
+          try {
+            const prism = new BMapGL.Prism(pts, 600, {
+              strokeColor: '#8CC0F5',
+              strokeWeight: 2,
+              strokeOpacity: 0.95,
+              fillColor: '#2E6BB0',
+              fillOpacity: 0.5
+            })
+            prism.addEventListener('click', () => {
+              lastOverlayClickAt = Date.now()
+              selectDistrict(d.name)
+            })
+            map.addOverlay(prism)
+            districtOverlays.push(prism)
+          } catch (e) {
+            console.warn('[bigscreen] Prism 构造失败，已回退平面多边形', e)
+          }
+        }
+      } catch (e) {
+        console.warn('[bigscreen] 区县多边形渲染失败', d.name, e)
       }
-      overlay.addEventListener('click', () => {
-        lastOverlayClickAt = Date.now()
-        selectDistrict(d.name)
-      })
-      map.addOverlay(overlay)
-      districtOverlays.push(overlay)
     }
   }
   // 区名标签：每个 name 一个（锚在最大块质心），可点击；选中时只保留该区
@@ -876,41 +895,45 @@ const renderDistrictOverlays = () => {
     if (seen.has(d.name)) continue
     seen.add(d.name)
     if (selected && d.name !== selected) continue
-    const isSel = d.name === selected
-    const [cx, cy] = labelCentroidOf(d.name)
-    const label = new BMapGL.Label(d.name, {
-      position: new BMapGL.Point(cx, cy),
-      offset: new BMapGL.Size(-22, -11),
-      enableMassClear: false
-    })
-    label.setStyle(
-      isSel
-        ? {
-            color: '#F5D98A',
-            backgroundColor: 'rgba(13,22,36,0.92)',
-            border: '1px solid #F0C566',
-            borderRadius: '3px',
-            fontSize: '13px',
-            fontWeight: '600',
-            letterSpacing: '2px',
-            padding: '2px 10px'
-          }
-        : {
-            color: '#A8C0DC',
-            backgroundColor: 'rgba(13,22,36,0.62)',
-            border: '1px solid rgba(79,147,214,0.3)',
-            borderRadius: '3px',
-            fontSize: '11px',
-            letterSpacing: '1px',
-            padding: '1px 7px'
-          }
-    )
-    label.addEventListener('click', () => {
-      lastOverlayClickAt = Date.now()
-      selectDistrict(d.name)
-    })
-    map.addOverlay(label)
-    districtOverlays.push(label)
+    try {
+      const isSel = d.name === selected
+      const [cx, cy] = labelCentroidOf(d.name)
+      const label = new BMapGL.Label(d.name, {
+        position: new BMapGL.Point(cx, cy),
+        offset: new BMapGL.Size(-22, -11),
+        enableMassClear: false
+      })
+      label.setStyle(
+        isSel
+          ? {
+              color: '#F5D98A',
+              backgroundColor: 'rgba(13,22,36,0.92)',
+              border: '1px solid #F0C566',
+              borderRadius: '3px',
+              fontSize: '13px',
+              fontWeight: '600',
+              letterSpacing: '2px',
+              padding: '2px 10px'
+            }
+          : {
+              color: '#A8C0DC',
+              backgroundColor: 'rgba(13,22,36,0.62)',
+              border: '1px solid rgba(79,147,214,0.3)',
+              borderRadius: '3px',
+              fontSize: '11px',
+              letterSpacing: '1px',
+              padding: '1px 7px'
+            }
+      )
+      label.addEventListener('click', () => {
+        lastOverlayClickAt = Date.now()
+        selectDistrict(d.name)
+      })
+      map.addOverlay(label)
+      districtOverlays.push(label)
+    } catch (e) {
+      console.warn('[bigscreen] 区名标签渲染失败', d.name, e)
+    }
   }
 }
 
@@ -920,29 +943,48 @@ const selectDistrict = (name: string | null) => {
   if (selectedDistrict.value === next) return
   selectedDistrict.value = next
   selectedVehicleId.value = null
-  renderDistrictOverlays()
-  if (mapReady) {
+  console.info('[bigscreen] 片区切换 →', next ?? '全域', '| 区县数据条目:', districtsBd.length)
+  // ① 先取景 + 俯仰（即使后续渲染异常，「只看这个区」的镜头效果也必须生效）
+  const fitTarget = () => {
+    if (!mapReady) return
     if (next) {
-      // 只看这个区：紧致视野（留出边距）+ 抬起俯仰角，3D 棱柱/卫星图立体可见
+      const bounds = districtBoundsOf(next)
       try {
-        map.setViewport(districtBoundsOf(next), { margins: [70, 70, 70, 70] })
+        map.setViewport(bounds, { margins: [70, 70, 70, 70] })
       } catch {
-        map.setViewport(districtBoundsOf(next))
-      }
-      try {
-        map.setTilt?.(45)
-      } catch {
-        /* SDK 版本不支持俯仰则保持平面 */
+        try {
+          map.setViewport(bounds)
+        } catch (e) {
+          console.warn('[bigscreen] 片区取景失败', e)
+        }
       }
     } else {
-      map.setViewport(chongqingBounds())
       try {
-        map.setTilt?.(0)
-      } catch {
-        /* 忽略 */
+        map.setViewport(chongqingBounds())
+      } catch (e) {
+        console.warn('[bigscreen] 全域取景失败', e)
       }
     }
   }
+  try {
+    map.setTilt?.(next ? 45 : 0)
+  } catch {
+    /* SDK 不支持俯仰则保持平面 */
+  }
+  fitTarget()
+  // 俯仰动画会改变可见地表范围，取景补一帧（仍选中同一片区才补）
+  if (next) {
+    window.setTimeout(() => {
+      if (selectedDistrict.value === next) fitTarget()
+    }, 450)
+  }
+  // ② 重建边界（内部已逐元素兜底，整体再兜一层）
+  try {
+    renderDistrictOverlays()
+  } catch (e) {
+    console.warn('[bigscreen] 边界渲染失败', e)
+  }
+  // ③ 数据联动
   if (cachedMapData) renderMapData()
   if (cachedVehicles) renderVehicles()
   paintOverview() // 订单类 KPI 立即切换到新片区口径
@@ -956,9 +998,11 @@ const loadDistricts = async () => {
       (a, b) => Number(ZONE_NAMES.has(a.name)) - Number(ZONE_NAMES.has(b.name))
     )
     buildBdCache()
+    console.info('[bigscreen] 区县边界加载完成:', districtsBd.length, '个几何条目')
     if (mapReady) renderDistrictOverlays()
-  } catch {
+  } catch (e) {
     // 边界不可用时划片区降级（无边界层/无快捷条），其余模块不受影响
+    console.warn('[bigscreen] 区县边界加载失败，划片区降级', e)
   }
 }
 
