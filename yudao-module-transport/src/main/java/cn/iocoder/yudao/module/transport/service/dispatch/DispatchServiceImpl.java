@@ -1965,15 +1965,21 @@ public class DispatchServiceImpl implements DispatchService {
                 List<double[]> road = routeCorridorService == null ? null
                         : routeCorridorService.resolveForLeg(
                                 leg.getVehicleId(), leg.getFromStationId(), leg.getToStationId());
+            boolean fromStorage = false;
             if (road == null) {
                 road = parseNavigationPolyline(leg.getNavigationPolyline());
+                // 库里已有的几何只回读、不重写：它的 navigation_source 记的是真实出处
+                // （AMAP / OSM_GRAPHHOPPER / MIXED），再落一次库会把真实来源抹成 AMAP。
+                fromStorage = road != null;
             }
             if (road == null) {
                 road = roadPolylineService.route(from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
                         to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
             }
             if (road != null && road.size() >= 2) {
-                persistLegPolyline(leg, road);
+                if (!fromStorage) {
+                    persistLegPolyline(leg, road);
+                }
                 fetched++;
             }
         }

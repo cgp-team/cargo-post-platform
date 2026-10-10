@@ -1,7 +1,10 @@
-"""POST /api/v1/route 端点测试：坐标→坐标单路线（实时公交 ETA）。
+"""POST /api/v1/route 端点测试：坐标→坐标单路线（实时公交 ETA / 司机导航）。
 
-覆盖：成功/不可达/降级/duration/distance/缓存/malformed 坐标/相同起终点/高并发。
-外部 HTTP 以 _FakeAmapClient 模拟，不发真实请求。
+覆盖：成功/不可达/无来源时必须不可用/GraphHopper 二级来源与坐标换算/duration/distance/缓存/
+malformed 坐标/相同起终点/高并发。外部 HTTP 以 _FakeAmapClient 模拟，不发真实请求。
+
+钉住的红线：这条接口带 polyline，高德与 GraphHopper 都拿不到道路时必须是 available=false，
+绝不返回"起终点两点直线"。
 """
 
 from __future__ import annotations
@@ -12,11 +15,20 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.distance import AmapDistanceProvider
+from app.routing.coordinate import to_gcj02
+from app.routing.models import RouteGeometryResult
 
 
 @pytest.fixture(autouse=True)
 def _no_real_sleep(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.distance.time.sleep", lambda _seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_graphhopper(monkeypatch: pytest.MonkeyPatch):
+    """默认关闭 tier-2：这些用例只验高德链与"没有道路就不可用"，不连本机 GraphHopper。"""
+    monkeypatch.delenv("GRAPHHOPPER_URL", raising=False)
+    monkeypatch.setattr(main, "_graphhopper_engine", None)
 
 
 class _FakeResponse:
@@ -110,31 +122,89 @@ def test_route_unreachable_returns_available_false(monkeypatch: pytest.MonkeyPat
         response = http.post("/api/v1/route", json=_payload())
     body = response.json()
     assert body["available"] is False
-    assert body["reasonCode"] == "ROUTE_UNAVAILABLE"
+    assert body["reasonCode"] == "REAL_ROAD_UNAVAILABLE"
     assert body.get("distanceKm") is None
     assert body.get("durationSeconds") is None
 
 
 @pytest.mark.parametrize("failure", ["transport", "status0"])
-def test_route_failure_falls_back_euclidean(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+def test_route_amap_failure_does_not_draw_straight_line(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    """高德失败/超限时不给几何 —— 这条接口带 polyline，宁可 available=false 也不能给两点直线。"""
     client = _FakeAmapClient(failure=failure)
     monkeypatch.setattr(main, "amap_provider", AmapDistanceProvider(key="test-key", client=client))
     with TestClient(main.app) as http:
         response = http.post("/api/v1/route", json=_payload())
     body = response.json()
-    assert body["available"] is True
-    assert body["provider"] == "euclidean"
-    assert body["distanceKm"] > 0
+    assert body["available"] is False
+    assert body["provider"] == "unavailable"
+    assert body["reasonCode"] == "REAL_ROAD_UNAVAILABLE"
+    assert body.get("polyline") is None
+    assert body.get("distanceKm") is None
 
 
-def test_route_without_key_returns_euclidean(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_without_any_road_source_returns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """没配 AMAP_KEY、也没起 GraphHopper：明确不可用，而不是 euclidean 直线估算。"""
     monkeypatch.setattr(main, "amap_provider", None)
     with TestClient(main.app) as http:
         response = http.post("/api/v1/route", json=_payload())
     body = response.json()
+    assert body["available"] is False
+    assert body["provider"] == "unavailable"
+    assert body.get("polyline") is None
+
+
+class _FakeGraphHopper:
+    """模拟 GraphHopperRoutingEngine：返回 WGS-84 折线（内部口径 (lat, lon)）。"""
+
+    def __init__(self):
+        self.requests: list[tuple[tuple[float, float], tuple[float, float], str]] = []
+
+    def route(self, origin, destination, waypoints=(), *, profile="bus", route_type=None):
+        self.requests.append((origin, destination, profile))
+        return RouteGeometryResult(
+            available=True, distance_m=6400.0, duration_s=900.0,
+            polyline=((30.5700, 104.0640), (30.5800, 104.0700), (30.6000, 104.1220)),
+            provider="graphhopper",
+        )
+
+
+def test_route_falls_back_to_graphhopper_and_returns_gcj02(monkeypatch: pytest.MonkeyPatch) -> None:
+    """高德不可用 → 本机 GraphHopper(OSM) 顶上来，且坐标换算成 GCJ-02 后再下发。"""
+    engine = _FakeGraphHopper()
+    monkeypatch.setattr(main, "amap_provider", None)
+    monkeypatch.setattr(main, "_graphhopper", lambda: engine)
+    with TestClient(main.app) as http:
+        response = http.post("/api/v1/route", json=_payload())
+    body = response.json()
     assert body["available"] is True
-    assert body["provider"] == "euclidean"
-    assert body["distanceKm"] > 0
+    assert body["provider"] == "graphhopper"
+    assert body["distanceKm"] == 6.4
+    assert body["durationSeconds"] == 900
+    assert len(body["polyline"]) == 3
+    # 请求侧：GCJ-02 入参先换算成 WGS-84 才打 GraphHopper
+    sent_origin_lat, sent_origin_lon = engine.requests[0][0]
+    assert (sent_origin_lat, sent_origin_lon) != (30.5723, 104.0657)
+    # 返回侧：WGS-84 折线换算回 GCJ-02（重庆偏移约百米级，即 ~0.001°~0.006°）
+    expect_lat, expect_lon = to_gcj02((30.5700, 104.0640))
+    assert body["polyline"][0]["latitude"] == pytest.approx(expect_lat, abs=1e-6)
+    assert body["polyline"][0]["longitude"] == pytest.approx(expect_lon, abs=1e-6)
+    assert abs(body["polyline"][0]["latitude"] - 30.5700) < 0.01
+
+
+def test_route_graphhopper_unavailable_returns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GraphHopper 也没给出道路（未启动/无折线）时同样不可用，不编造耗时与里程。"""
+    class _NoRoad:
+        def route(self, origin, destination, waypoints=(), *, profile="bus", route_type=None):
+            return RouteGeometryResult(available=False, provider="graphhopper")
+
+    monkeypatch.setattr(main, "amap_provider", None)
+    monkeypatch.setattr(main, "_graphhopper", lambda: _NoRoad())
+    with TestClient(main.app) as http:
+        response = http.post("/api/v1/route", json=_payload())
+    body = response.json()
+    assert body["available"] is False
+    assert body.get("polyline") is None
+    assert body.get("distanceKm") is None
 
 
 def test_route_cache_reuses_polyline_without_extra_calls(monkeypatch: pytest.MonkeyPatch) -> None:

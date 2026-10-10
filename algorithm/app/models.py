@@ -64,6 +64,12 @@ class Vehicle(BaseModel):
     # 公交骨架（Mandatory Passenger Service）：车辆必须按顺序经停的站点编号列表（不含场站）。
     # 提供时该车辆按骨架顺序强制停靠，货运/揽收作为绕行插入骨架间隙；缺省为纯 VRP。
     skeleton: list[str] | None = None
+    # 出发/收班场站（可选，多起点公交线场景）：缺省为 None，表示使用 request.depot
+    # （单车场站模型，所有车辆同出同回）。设置后该车辆从 startStationId 发车、
+    # 收班于 endStationId（公交线两端均为真实始发/终点站，回程属反向班次不建模）。
+    # 站点必须出现在 request.stations 中，否则返回 infeasible。
+    startStationId: str | None = None
+    endStationId: str | None = None
     # DISPATCH_CORE_V047 (section 18): 可选重量/体积运力；未配置时保持旧 itemCount 口径。
     cargoWeightCapacityKg: float | None = Field(default=None, ge=0)
     cargoVolumeCapacityM3: float | None = Field(default=None, ge=0)
@@ -84,6 +90,11 @@ class PlanOrder(BaseModel):
     # 可选经济价值（向后兼容）：业务层可在进算法前传入真实运费/结算金额。
     # 缺省 None 表示无经济字段，算法不报错、不造假价格；仅用于性价比比较。
     economicValue: float | None = Field(default=None, ge=0)
+    # 公交通行预检结果（业务侧可选传入；缺省 None = 未做预检，行为完全不变）：
+    #   "BLOCKED"      —— 该点位只能经巷道/窄路到达，公交车（大型车）进不去 →
+    #                     算法不得安排绕行上门，改为最近站点交接
+    #   "NEAR_STATION" —— 该点位距最近站点 ≤100 m，顺路在站点交接即可，不必绕进巷道
+    roadAccess: str | None = None
 
 
 class AlgorithmMode(str, Enum):

@@ -38,6 +38,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
 import jakarta.annotation.Resource;
 import org.springframework.context.annotation.Lazy;
@@ -124,14 +125,14 @@ public class MonitoringServiceImpl implements MonitoringService {
             item.setRouteName(route.getRouteName());
             item.setDistanceKm(toDouble(route.getDistanceKm()));
             item.setPoints(buildPoints(routeStations.getOrDefault(route.getId(), List.of()), stationMap));
-            // 线路真实道路折线：库里预热过就用真实几何（监控地图不再用"站点直连"冒充路线）；
+            // 线路真实道路折线：库里预热过且来源在真实路网白名单内就用真实几何（监控地图不再用"站点直连"冒充路线）；
             // 没预热过的线路在前端画成虚线示意（明确不是真实轨迹）。
-            if (route.getNavigationPolyline() != null
-                    && "AMAP".equalsIgnoreCase(route.getNavigationSource())) {
+            String corridorSource = RealRoadProviders.labelOf(route.getNavigationSource());
+            if (route.getNavigationPolyline() != null && corridorSource != null) {
                 List<double[]> corridor = cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService
                         .parse(route.getNavigationPolyline());
                 if (corridor.size() >= 2) {
-                    item.setRoadProvider("AMAP");
+                    item.setRoadProvider(corridorSource);
                     item.setRoadPoints(corridor.stream().map(p -> {
                         MonitoringMapDataRespVO.RoadPoint rp = new MonitoringMapDataRespVO.RoadPoint();
                         rp.setLongitude(p[0]);
@@ -422,8 +423,11 @@ public class MonitoringServiceImpl implements MonitoringService {
         Map<Long, String> orderNoMap = orderIds.isEmpty() ? Map.of()
                 : transportOrderMapper.selectBatchIds(orderIds).stream()
                         .collect(Collectors.toMap(TransportOrderDO::getId, TransportOrderDO::getOrderNo, (a, b) -> a));
-        // 真实道路 polyline（RoadSegments，与司机端同一份；来源恒为 amap，逐段 euclidean 兜底不深究）
+        // 真实道路 polyline（与司机端同一份口径）：逐段拼接，一旦某段没有真实道路就在此截断 ——
+        // 跨过缺口继续拼会在两个站之间连出一条不存在的路。
         List<double[]> fullPolyline = new ArrayList<>();
+        Set<String> polylineProviders = new LinkedHashSet<>();
+        boolean polylineOpen = true;
         List<MonitoringPlanRespVO.Stop> stops = new ArrayList<>();
         for (int i = 0; i < items.size(); i++) {
             DispatchPlanItemDO item = items.get(i);
@@ -445,34 +449,45 @@ public class MonitoringServiceImpl implements MonitoringService {
             stop.setStatus(item.getStatus());
             stop.setStatusName(TaskItemStatusEnum.nameOf(item.getStatus()));
             stops.add(stop);
-            if (i > 0) {
+            if (i > 0 && polylineOpen) {
                 DispatchPlanItemDO prev = items.get(i - 1);
                 StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
-                List<double[]> seg = fetchPlanPolyline(vehicleId, prev.getStationId(), item.getStationId(), from, station);
-                if (seg != null) {
+                PlanSegment seg = fetchPlanPolyline(vehicleId, prev.getStationId(), item.getStationId(), from, station);
+                if (seg == null) {
+                    polylineOpen = false;
+                } else {
+                    polylineProviders.add(seg.provider());
                     if (fullPolyline.isEmpty()) {
-                        fullPolyline.addAll(seg);
+                        fullPolyline.addAll(seg.points());
                     } else {
-                        fullPolyline.addAll(seg.subList(1, seg.size()));
+                        fullPolyline.addAll(seg.points().subList(1, seg.points().size()));
                     }
                 }
             }
         }
         vo.setStops(stops);
         vo.setPolyline(fullPolyline.stream().map(p -> new MonitoringPlanRespVO.Point(p[0], p[1])).toList());
-        // BE-28：routeProvider 反映真实来源——有折线才是 amap，否则如实标注 none（之前恒为 "amap" 误导排查）
-        vo.setRouteProvider(fullPolyline.isEmpty() ? "none" : "amap");
+        // BE-28：routeProvider 反映真实来源——有折线才标注来源，且逐段来源不同时如实给 MIXED；
+        // 没有任何折线时是 none（以前恒为 "amap"，误导排查）。
+        vo.setRouteProvider(fullPolyline.isEmpty() ? "none"
+                : polylineProviders.size() == 1 ? polylineProviders.iterator().next() : RealRoadProviders.MIXED);
+        vo.setRouteComplete(polylineOpen && !fullPolyline.isEmpty());
         return vo;
+    }
+
+    /** 一段方案折线 + 它的真实路网来源标签（{@link cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders}） */
+    private record PlanSegment(List<double[]> points, String provider) {
     }
 
     /**
      * 坐标对 → 真实道路 polyline。
      *
-     * <p>优先级：车辆运营线路走廊 → 算法 /route（只认 provider=amap）→ 取不到返回 {@code null}
-     * （调用方断开折线，绝不回退"两点直线"：演示里那种直线既不好看也不可靠）。</p>
+     * <p>优先级：车辆运营线路走廊 → 算法 /route（来源必须在 {@link RealRoadProviders} 白名单内：
+     * 高德路网或 GraphHopper/OSM）→ 取不到返回 {@code null}
+     * （调用方在此截断折线，绝不回退"两点直线"：直线既不好看也不可靠）。</p>
      */
-    private List<double[]> fetchPlanPolyline(Long vehicleId, Long fromStationId, Long toStationId,
-                                             StationDO from, StationDO to) {
+    private PlanSegment fetchPlanPolyline(Long vehicleId, Long fromStationId, Long toStationId,
+                                          StationDO from, StationDO to) {
         if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
                 || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
@@ -480,7 +495,7 @@ public class MonitoringServiceImpl implements MonitoringService {
         if (routeCorridorService != null) {
             List<double[]> corridor = routeCorridorService.resolveForLeg(vehicleId, fromStationId, toStationId);
             if (corridor != null && corridor.size() >= 2) {
-                return corridor;
+                return new PlanSegment(corridor, RealRoadProviders.AMAP);
             }
         }
         try {
@@ -491,10 +506,11 @@ public class MonitoringServiceImpl implements MonitoringService {
                             .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
                     .build());
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
-                    && route.getPolyline().size() >= 2 && "amap".equalsIgnoreCase(route.getProvider())) {
-                return route.getPolyline().stream()
+                    && route.getPolyline().size() >= 2 && RealRoadProviders.isRealRoad(route.getProvider())) {
+                List<double[]> points = route.getPolyline().stream()
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
+                return new PlanSegment(points, RealRoadProviders.labelOf(route.getProvider()));
             }
         } catch (Exception ex) {
             // BE-28：降级必须留痕，"静默 ignored" 会让折线消失却查不到原因

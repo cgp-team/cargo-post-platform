@@ -35,6 +35,12 @@ SOLVER_TIME_LIMIT_SECONDS = 5
 # 有限绕行改派的最大迭代轮数（每轮改派一批超阈值站点后重求解，避免死循环）
 MAX_REROUTE_ITERATIONS = 3
 
+# 公交通行预检 → 原因码：车是公交车，不是小货车，有些点位它进不去
+ROAD_ACCESS_REASON = {
+    "BLOCKED": "ROAD_NOT_BUS_ACCESSIBLE",   # 只能经巷道/窄路到达，公交车进不去
+    "NEAR_STATION": "NEAR_STATION_WITHIN_100M",   # 距最近站点 ≤100 m，站点交接即可
+}
+
 
 @dataclass
 class SolveOutcome:
@@ -129,10 +135,16 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
         if missing:
             return SolveOutcome(status="infeasible", reason_code="DISTANCE_MATRIX_INCOMPLETE")
 
-    # 节点 0 为场站，其后按订单展开作业节点
-    nodes: list[_Node] = [_Node(station_id=request.depot.stationId, action=StopAction.DEPART)]
+    # 作业节点：全局 depot 节点**按需创建**（下方 start/end 解析时首次引用才追加），
+    # 避免无人使用时 depot 成为可自由插入路线的零载荷节点（会被顺路经过产生假 DEPART 停靠）。
+    nodes: list[_Node] = []
+    depot_node_idx: int | None = None
     passenger_pairs: list[tuple[int, int]] = []  # (board_node, alight_node)
     shipment_pairs: list[tuple[int, int, str]] = []  # (pickup_node, delivery_node, shipmentId)
+    # 公交通行预检（业务侧可选传入 roadAccess）：进不去/不必进的点位，一律就近站点交接
+    road_access: dict[str, str] = {
+        o.orderId: o.roadAccess for o in request.orders if getattr(o, "roadAccess", None)
+    }
     for order in request.orders:
         if order.orderType == OrderType.PASSENGER:
             board_node = len(nodes)
@@ -145,11 +157,14 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             nodes.append(_Node(order.stationId, StopAction.PICKUP, order.orderId))
 
     # PlanShipment 展开为 PICKUP + DELIVERY 配对
+    shipment_counterpart: dict[int, int] = {}   # 节点索引 -> 配对节点索引（防坍缩改派用）
     for shipment in request.shipments:
         pickup_node = len(nodes)
         nodes.append(_Node(shipment.pickupStationId, StopAction.PICKUP, shipment.shipmentId))
         nodes.append(_Node(shipment.deliveryStationId, StopAction.DELIVER, shipment.shipmentId))
         shipment_pairs.append((pickup_node, pickup_node + 1, shipment.shipmentId))
+        shipment_counterpart[pickup_node] = pickup_node + 1
+        shipment_counterpart[pickup_node + 1] = pickup_node
 
     # 公交骨架节点（Mandatory Passenger Service）：提供 skeleton 的车辆必须按顺序经停。
     # 骨架站点作为 PASS 经停，货运/揽收作为绕行插入骨架间隙。
@@ -167,6 +182,53 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             idxs.append(len(nodes) - 1)
         skeleton_nodes[vehicle_index] = idxs
         skeleton_sets[vehicle_index] = set(skel_stations)
+
+    # 车辆各自出发/收班场站（可选 startStationId/endStationId，多起点公交线场景）。
+    # 缺省（未设置）时全部使用全局 depot 节点 0，行为与旧单场站模型完全一致。
+    veh_start: list = []          # vehicle_index -> 出发场站（Station）
+    veh_end: list = []            # vehicle_index -> 收班场站（Station）
+    start_node_of: list[int] = []  # vehicle_index -> 出发节点索引
+    end_node_of: list[int] = []    # vehicle_index -> 收班节点索引
+    for vehicle_index, vehicle in enumerate(request.vehicles):
+        start, end = request.depot, request.depot
+        sid = getattr(vehicle, "startStationId", None)
+        if sid and sid != request.depot.stationId:
+            st = station_map.get(sid)
+            if st is None:
+                return SolveOutcome(status="infeasible",
+                                    reason_code="VEHICLE_START_STATION_NOT_FOUND")
+            start = st
+        eid = getattr(vehicle, "endStationId", None)
+        if eid and eid != request.depot.stationId:
+            st = station_map.get(eid)
+            if st is None:
+                return SolveOutcome(status="infeasible",
+                                    reason_code="VEHICLE_END_STATION_NOT_FOUND")
+            end = st
+        veh_start.append(start)
+        veh_end.append(end)
+
+        def _ensure_depot_node() -> int:
+            nonlocal depot_node_idx
+            if depot_node_idx is None:
+                nodes.append(_Node(request.depot.stationId, StopAction.DEPART))
+                depot_node_idx = len(nodes) - 1
+            return depot_node_idx
+
+        # 出发节点：全局 depot 复用同一节点；自定义始发站追加专属 DEPART 节点
+        if start is request.depot:
+            start_node_of.append(_ensure_depot_node())
+        else:
+            nodes.append(_Node(start.stationId, StopAction.DEPART))
+            start_node_of.append(len(nodes) - 1)
+        # 收班节点：与出发同站时复用出发节点；全局 depot 复用 depot 节点；否则追加专属节点
+        if end is start:
+            end_node_of.append(start_node_of[-1])
+        elif end is request.depot:
+            end_node_of.append(_ensure_depot_node())
+        else:
+            nodes.append(_Node(end.stationId, StopAction.RETURN))
+            end_node_of.append(len(nodes) - 1)
 
     num_vehicles = len(request.vehicles)
 
@@ -196,7 +258,8 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
 
     def _build_and_solve(time_capacity: int | None):
         """构建路由模型并求解。time_capacity 为 None 时不添加时间硬约束（用于二次归因）。"""
-        manager = pywrapcp.RoutingIndexManager(len(nodes), num_vehicles, 0)
+        manager = pywrapcp.RoutingIndexManager(
+            len(nodes), num_vehicles, start_node_of, end_node_of)
         routing = pywrapcp.RoutingModel(manager)
 
         def distance_callback(from_index: int, to_index: int) -> int:
@@ -423,7 +486,8 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             index = routing.Start(vehicle_index)
             if routing.IsEnd(solution.Value(routing.NextVar(index))):
                 continue  # 未启用的车辆不输出方案
-            stops = [RouteStop(stationId=request.depot.stationId, action=StopAction.DEPART)]
+            stops = [RouteStop(stationId=veh_start[vehicle_index].stationId,
+                               action=StopAction.DEPART)]
             scaled_total = 0
             current_passengers = vehicle.initialPassengerLoad  # 出发时车上已有乘客（上一站上车未下车）
 
@@ -443,7 +507,7 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
 
                 from_station = station_map[nodes[manager.IndexToNode(prev_index)].station_id]
                 if routing.IsEnd(curr_index):
-                    to_station = request.depot
+                    to_station = veh_end[vehicle_index]
                 else:
                     to_station = station_map[nodes[manager.IndexToNode(curr_index)].station_id]
 
@@ -454,7 +518,7 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
 
                 if routing.IsEnd(curr_index):
                     stops.append(RouteStop(
-                        stationId=request.depot.stationId,
+                        stationId=veh_end[vehicle_index].stationId,
                         action=StopAction.RETURN,
                         segmentDistance=segment_km,
                         segmentDuration=seg_sec,
@@ -488,19 +552,19 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
                     if not on_skeleton and step + 1 < len(route_indices):
                         next_stop_index = route_indices[step + 1]
                         if routing.IsEnd(next_stop_index):
-                            next_station = request.depot
+                            next_station = veh_end[vehicle_index]
                         else:
                             next_station = station_map[nodes[manager.IndexToNode(next_stop_index)].station_id]
 
-                        # 绕行距离统一用 haversine 真实公里（从 GCJ-02 坐标算，不依赖矩阵口径），
-                        # 与阈值 maxDetourDistanceKm 可比。此前用「度」与 km 比较，单位错；
-                        # 且 EuclideanDistanceProvider 矩阵第一元素是「度」而非 km，不可直接当 km 用。
-                        direct_km = haversine_km(from_station.longitude, from_station.latitude,
-                                                 next_station.longitude, next_station.latitude)
-                        via_km = haversine_km(from_station.longitude, from_station.latitude,
-                                              to_station.longitude, to_station.latitude) \
-                            + haversine_km(to_station.longitude, to_station.latitude,
-                                           next_station.longitude, next_station.latitude)
+                        # 绕行距离与**优化目标同口径**：传入距离矩阵（真实路网/AMAP）时取矩阵公里数，
+                        # 无矩阵（Euclidean 场景，本就没有路网可依）回落 haversine 直线公里。
+                        # 此前固定用 haversine：判定（直线）与目标函数（真实路网）两套口径，
+                        # 阈值筛选系统性偏松——实测同一单可差数百米至上千米（如判定 203 m / 路网 1400 m）。
+                        # 注：矩阵第一元素必须是 km；EuclideanDistanceProvider 给的是「度」，
+                        # 那种场景不要传矩阵（走 haversine 回落），否则单位错。
+                        direct_km = segment_info(from_station, next_station)[0]
+                        via_km = (segment_info(from_station, to_station)[0]
+                                  + segment_info(to_station, next_station)[0])
                         detour_distance = max(0.0, via_km - direct_km)
 
                         direct_sec = segment_seconds(from_station, next_station)
@@ -538,7 +602,24 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
                             reason_code = "PASSENGER_IMPACT_EXCEEDED"
                             service_mode = "NEAREST_STATION"
 
-                    if not accepted:
+                    # 公交通行预检（业务侧判定"公交车进不去/不必进"）：
+                    # 这类点位不作绕行上门，一律就近站点交接 —— 与绕行超阈值同归 NEAREST_STATION，
+                    # 但原因码区分清楚：不是"绕路不划算"，而是"车进不去 / 站点就在旁边"。
+                    # 两种情形：
+                    #  ① 业务侧已把它改派到站点（stop 就在骨架站上）→ 只标注原因，无需再改派；
+                    #  ② 仍挂在不可通行的点位上 → 判不接受并交改派守卫，下一轮换到最近骨架站。
+                    road_blocked = False
+                    ra = road_access.get(node.order_id)
+                    if ra:
+                        accepted = False
+                        service_mode = "NEAREST_STATION"
+                        reason_code = ROAD_ACCESS_REASON.get(ra, "ROAD_NOT_BUS_ACCESSIBLE")
+                        if node.station_id in skeleton_sets.get(vehicle_index, set()):
+                            road_blocked = True
+                        else:
+                            over_threshold.append((node_index, vehicle_index, node.station_id))
+
+                    if not accepted and not road_blocked and not ra:
                         over_threshold.append((node_index, vehicle_index, node.station_id))
 
                     route_stop.update(
@@ -582,10 +663,15 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
             break
 
         # 改派：把超阈值经停的站点替换为最近骨架站（原地修改 nodes，供下一轮 _build_and_solve）
+        # 防坍缩守卫：shipment 配对节点（揽收/送达）不得被改派到与配对节点相同的站，
+        # 否则会出现"揽收与送达同站"的退化方案（看似零成本，实则业务无效）。
         changed = False
         for node_index, vehicle_index, station_id in over_threshold:
             nearest = _nearest_skeleton(station_id, vehicle_index)
             if nearest is not None and nearest != station_id:
+                counter = shipment_counterpart.get(node_index)
+                if counter is not None and nodes[counter].station_id == nearest:
+                    continue
                 nodes[node_index].station_id = nearest
                 changed = True
         if not changed:

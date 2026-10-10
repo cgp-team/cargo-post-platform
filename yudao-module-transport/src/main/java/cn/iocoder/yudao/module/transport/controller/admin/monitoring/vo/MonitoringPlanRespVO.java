@@ -33,10 +33,13 @@ public class MonitoringPlanRespVO {
     @Schema(description = "位置数据来源：REAL / NO_LOCATION")
     private String dataSource;
 
-    @Schema(description = "路线来源：amap=高德真实道路 / euclidean=直线兜底")
+    @Schema(description = "路线来源：AMAP / OSM_GRAPHHOPPER / OSM_ROAD_GRAPH / VALHALLA / MIXED / none（直线兜底不存在于此接口）")
     private String routeProvider;
 
-    /** 全路线 polyline（真实道路；euclidean 兜底为两点直线） */
+    @Schema(description = "折线是否覆盖全部任务段；false=中途某段没有真实道路，折线已在那里截断（未补线）")
+    private Boolean routeComplete;
+
+    /** 全路线 polyline：逐段真实道路；某段缺路网则整条线在该段起点前截断，绝不两点连线 */
     @Schema(description = "全路线 polyline")
     private List<Point> polyline;
 

@@ -48,6 +48,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
 import cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService;
 
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
@@ -653,7 +654,11 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         .collect(java.util.stream.Collectors.joining(";")));
 
-                leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
+                // 来源如实记录：AMAP / OSM_GRAPHHOPPER 都是真实路网（界面按白名单渲染），
+                // 只有白名单外的来源才退回 ESTIMATED（宁可少画，不把估算说成路网）
+                String roadLabel = RealRoadProviders.labelOf(route.getProvider());
+
+                leg.setNavigationSource(roadLabel != null ? roadLabel : "ESTIMATED");
 
                 if (route.getDistanceKm() != null) {
 

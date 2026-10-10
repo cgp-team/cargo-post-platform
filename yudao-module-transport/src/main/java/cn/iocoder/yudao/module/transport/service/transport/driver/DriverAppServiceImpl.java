@@ -59,6 +59,8 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRout
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.dispatch.HandoverService;
 import cn.iocoder.yudao.module.transport.service.dispatch.MultiLegService;
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
+import cn.iocoder.yudao.module.transport.service.geo.RoadPolylineService;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
 import cn.iocoder.yudao.module.transport.service.transport.order.ProductOrderService;
@@ -478,11 +480,9 @@ public class DriverAppServiceImpl implements DriverAppService {
         AppDriverRouteRespVO vo = new AppDriverRouteRespVO();
         vo.setPlanId(planId);
         vo.setVehicleId(vehicleId);
+        Map<Long, String> orderNoMap = orderNoMap(items);
         List<AppDriverRouteRespVO.Stop> stops = new ArrayList<>();
-        List<double[]> fullPolyline = new ArrayList<>();
-        String provider = "amap";
-        for (int i = 0; i < items.size(); i++) {
-            DispatchPlanItemDO item = items.get(i);
+        for (DispatchPlanItemDO item : items) {
             StationDO station = item.getStationId() != null ? stationMap.get(item.getStationId()) : null;
             AppDriverRouteRespVO.Stop stop = new AppDriverRouteRespVO.Stop();
             stop.setStationId(item.getStationId());
@@ -492,66 +492,171 @@ public class DriverAppServiceImpl implements DriverAppService {
                 stop.setLatitude(station.getLatitude() != null ? station.getLatitude().doubleValue() : null);
             }
             stop.setVisitSequence(item.getVisitSequence());
+            stop.setActionType(item.getActionType());
             stop.setActionName(ACTION_NAMES.getOrDefault(item.getActionType(), ""));
+            stop.setOrderId(item.getOrderId());
+            stop.setOrderNo(item.getOrderId() != null ? orderNoMap.get(item.getOrderId()) : null);
+            stop.setQuantity(item.getQuantity());
+            stop.setEstimatedArrivalTime(item.getEstimatedArrivalTime());
+            stop.setPlannedDepartureTime(item.getPlannedDepartureTime());
             stop.setStatus(item.getStatus());
             stop.setStatusName(TaskItemStatusEnum.nameOf(item.getStatus()));
             stops.add(stop);
-            // 拼接每段真实道路 polyline（首段起点为上一站）
-            if (i > 0) {
-                DispatchPlanItemDO prev = items.get(i - 1);
-                StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
-                RouteFetch fetched = fetchRoutePolyline(operatingRouteId, prev.getStationId(), item.getStationId(),
-                        from, station);
-                if (fetched != null) {
-                    if (fullPolyline.isEmpty()) {
-                        fullPolyline.addAll(fetched.points); // 整段从上一站起
-                    } else {
-                        // 去掉与上段末点重复的起点，再拼接
-                        List<double[]> tail = fetched.points.subList(1, fetched.points.size());
-                        fullPolyline.addAll(tail);
-                    }
-                    if ("euclidean".equals(fetched.provider)) {
-                        provider = "euclidean";
-                    }
-                }
-            }
         }
         vo.setStops(stops);
-        vo.setPolyline(fullPolyline.stream()
-                .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
-        vo.setRouteProvider(provider);
         // 实时地图：下一动作 + 当前任务段导航（真实道路）
         VehicleLocationDO liveLoc0 = vehicleLocationMapper.selectByVehicleId(vehicleId);
         if (liveLoc0 != null && liveLoc0.getLongitude() != null && liveLoc0.getLatitude() != null) {
             vo.setCurrentLongitude(liveLoc0.getLongitude().doubleValue());
             vo.setCurrentLatitude(liveLoc0.getLatitude().doubleValue());
         }
+        // 逐段拼真实道路 polyline：只接受"从第一段起连续取得到"的段落。
+        // 中间某段取不到就在这里截断 —— 接着往下拼等于凭空画一条司机不该走（也不存在）的直线。
+        RouteSpine spine = buildRouteSpine(items, stationMap, operatingRouteId);
+        vo.setPolyline(spine.points.stream().map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
+        vo.setRouteAvailable(spine.available());
+        vo.setRouteProvider(spine.provider());
+        vo.setRouteUnavailableReason(spine.unavailableReason());
+        vo.setRouteComplete(spine.complete());
+        vo.setRouteDistanceMeters(spine.distanceMeters());
+        vo.setRouteDurationSeconds(spine.durationSeconds());
         fillNextActionAndNav(vo, items, stationMap, operatingRouteId, vehicleId);
-        // 偏航判定：车辆当前上报位置 → 距规划 polyline 最小距离（>100m 标记 ROUTE_DEVIATED，只报警）
+        // 偏航判定：车辆当前上报位置 → 距已下发 polyline 最小距离（>100m 标记 ROUTE_DEVIATED，只报警）。
+        // 只在折线完整覆盖任务段时才有意义：截断后的 polyline 不含缺口之后的走向，越界告警会误报。
         VehicleLocationDO loc = vehicleLocationMapper.selectByVehicleId(vehicleId);
-        if (loc != null && loc.getLongitude() != null && loc.getLatitude() != null && fullPolyline.size() >= 2) {
+        if (loc != null && loc.getLongitude() != null && loc.getLatitude() != null
+                && spine.available() && spine.complete()) {
             double dev = GeoDistanceUtil.deviationMetersFromPolyline(
-                    loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(), fullPolyline);
+                    loc.getLongitude().doubleValue(), loc.getLatitude().doubleValue(), spine.points);
             vo.setDeviationMeters(Math.round(dev * 10) / 10.0);
             vo.setDeviated(dev > GeoDistanceUtil.DEVIATION_THRESHOLD_METERS);
         }
         return vo;
     }
 
-    /** 实时地图：下一动作（完成订单/去站点/揽收/交接）+ 当前任务段导航 polyline。 */
+    private Map<Long, String> orderNoMap(List<DispatchPlanItemDO> items) {
+        Set<Long> orderIdSet = items.stream().map(DispatchPlanItemDO::getOrderId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        return orderIdSet.isEmpty() ? Map.of()
+                : transportOrderMapper.selectList(new LambdaQueryWrapperX<TransportOrderDO>()
+                        .in(TransportOrderDO::getId, orderIdSet))
+                .stream().collect(Collectors.toMap(TransportOrderDO::getId, TransportOrderDO::getOrderNo));
+    }
+
+    /**
+     * 任务段"骨架"：从头连续可得的真实道路折线 + 同源里程/耗时。
+     *
+     * <p>语义（HARD RULES：宁可没有路线，不允许假路线）：</p>
+     * <ul>
+     *   <li>{@code points}：只含真实道路几何，且<b>无内部缺口</b>；某段取不到就在此停止拼接。</li>
+     *   <li>{@code provider}：折线来源；一段都没有就是 {@code unavailable}，不会再出现 {@code euclidean}。</li>
+     *   <li>{@code distanceMeters}/{@code durationSeconds}：只有在<b>每一段</b>都拿到路网里程/耗时时才累加，
+     *       否则返回 null —— 客户端显示"接口未给"，而不是用直线距离或固定均速凑一个数。</li>
+     * </ul>
+     */
+    private record RouteSpine(List<double[]> points, String provider, int coveredSegments, int segmentCount,
+                              boolean distanceKnown, double distanceSumMeters,
+                              boolean durationKnown, long durationSumSeconds) {
+
+        boolean available() {
+            return points.size() >= 2 && provider != null;
+        }
+
+        boolean complete() {
+            return coveredSegments == segmentCount;
+        }
+
+        Double distanceMeters() {
+            return available() && distanceKnown ? Math.round(distanceSumMeters * 10) / 10.0 : null;
+        }
+
+        Integer durationSeconds() {
+            return available() && durationKnown ? (int) durationSumSeconds : null;
+        }
+
+        /** 没有/不完整时给客户端一句能直接展示的真话；完整返回 null */
+        String unavailableReason() {
+            if (!available()) {
+                return segmentCount == 0
+                        ? "本班只有 1 个任务点，没有站间道路可规划"
+                        : "线路走廊 / 高德路网 / 算法服务都没有取到真实道路，服务端不画两点直线";
+            }
+            if (!complete()) {
+                return "第 " + (coveredSegments + 1) + " 段（共 " + segmentCount + " 段）暂无真实道路，折线已在此截断";
+            }
+            return null;
+        }
+    }
+
+    /** 逐段取真实道路并拼成无缺口折线（见 {@link RouteSpine}）。 */
+    private RouteSpine buildRouteSpine(List<DispatchPlanItemDO> items, Map<Long, StationDO> stationMap,
+                                       Long operatingRouteId) {
+        List<double[]> points = new ArrayList<>();
+        String provider = null;
+        boolean sameSource = true;
+        int covered = 0;
+        boolean distanceKnown = true;
+        double distanceSum = 0;
+        boolean durationKnown = true;
+        long durationSum = 0;
+        for (int i = 1; i < items.size(); i++) {
+            DispatchPlanItemDO prev = items.get(i - 1);
+            DispatchPlanItemDO current = items.get(i);
+            StationDO from = prev.getStationId() != null ? stationMap.get(prev.getStationId()) : null;
+            StationDO to = current.getStationId() != null ? stationMap.get(current.getStationId()) : null;
+            RouteFetch fetched = fetchRoutePolyline(operatingRouteId, prev.getStationId(), current.getStationId(),
+                    from, to, null, null);
+            if (fetched == null || fetched.points == null || fetched.points.size() < 2) {
+                // 这一段没有真实道路：在这里停住。继续往下拼会在缺口处连出一条不存在的路。
+                break;
+            }
+            if (points.isEmpty()) {
+                points.addAll(fetched.points);
+            } else {
+                // 去掉与上段末点重复的起点，再拼接
+                points.addAll(fetched.points.subList(1, fetched.points.size()));
+            }
+            if (provider != null && !provider.equals(fetched.provider)) {
+                // 逐段来源不同（例如前段走线路走廊、后段走 GraphHopper）：如实标 MIXED，
+                // 而不是挑一个来源的名字冒充整条线都是它。
+                sameSource = false;
+            }
+            provider = fetched.provider;
+            covered++;
+            if (fetched.distanceMeters == null) {
+                distanceKnown = false;
+            } else {
+                distanceSum += fetched.distanceMeters;
+            }
+            if (fetched.durationSeconds == null) {
+                durationKnown = false;
+            } else {
+                durationSum += fetched.durationSeconds;
+            }
+        }
+        return new RouteSpine(points, sameSource ? provider : RealRoadProviders.MIXED, covered, Math.max(items.size() - 1, 0),
+                distanceKnown && covered > 0, distanceSum, durationKnown && covered > 0, durationSum);
+    }
+
+    /**
+     * 实时地图：下一动作（完成订单/去站点/揽收/交接）+ 当前任务段导航（真实道路）。
+     *
+     * <p>下一任务点由**调度层**（{@code transport_dispatch_plan_item.visit_sequence}）决定，
+     * 本方法只负责"去哪儿"之后把"怎么走"取回来；导航层不得重排任务顺序。</p>
+     */
     private void fillNextActionAndNav(AppDriverRouteRespVO vo, List<DispatchPlanItemDO> items,
                                       Map<Long, StationDO> stationMap, Long operatingRouteId, Long vehicleId) {
         DispatchPlanItemDO next = null;
         DispatchPlanItemDO prevDone = null;
         for (DispatchPlanItemDO item : items) {
-            boolean done = item.getStatus() != null && item.getStatus() >= 2; // 假设 2+ 已完成
-            if (!done && next == null) {
+            // TaskItemStatusEnum 里 2..6 是"已到这个点上、正在作业"，只有 7 才是闭环。
+            // 旧口径 status>=2 当完成，会把刚到站/装卸中的任务直接跳过，司机还没走就丢下了下一站。
+            boolean done = Objects.equals(item.getStatus(), TaskItemStatusEnum.COMPLETED.getStatus());
+            if (!done) {
                 next = item;
                 break;
             }
-            if (done) {
-                prevDone = item;
-            }
+            prevDone = item;
         }
         if (next == null) {
             vo.setNextAction("DONE");
@@ -560,7 +665,7 @@ public class DriverAppServiceImpl implements DriverAppService {
         }
         Integer action = next.getActionType();
         String actionName = ACTION_NAMES.getOrDefault(action, "");
-        vo.setNextStopName(next.getStationName() != null ? next.getStationName() : actionName);
+        vo.setNextStopName(next.getStationId() != null ? stationName(stationMap, next) : actionName);
         // 2=送客/派送 3=派送 4=揽收 1=到站停靠（按现有 actionType 口径）
         if (action != null && action == 4) {
             vo.setNextAction("PICKUP");
@@ -572,87 +677,156 @@ public class DriverAppServiceImpl implements DriverAppService {
             vo.setNextAction("GO_STOP");
             vo.setNextActionName("去站点 " + vo.getNextStopName());
         }
+        // 旧字段：直线距离 + 固定均速换算的 ETA。保留只为不破坏老客户端，
+        // 明确标注是直线值，正式界面必须改读 nextStopRoad*（来自真实路网，没有就留 null）。
         if (vo.getCurrentLongitude() != null && next.getStationId() != null) {
             StationDO st = stationMap.get(next.getStationId());
             if (st != null && st.getLongitude() != null && st.getLatitude() != null) {
                 double km = GeoDistanceUtil.haversineKm(vo.getCurrentLongitude(), vo.getCurrentLatitude(),
                         st.getLongitude().doubleValue(), st.getLatitude().doubleValue());
                 vo.setNextStopDistanceMeters(Math.round(km * 1000 * 10) / 10.0);
-                // 城区均速 25km/h
                 vo.setNextStopEtaSeconds((double) Math.round(km / 25.0 * 3600));
             }
         }
-        // 当前任务段真实道路（上一完成点 → 下一任务点）
-        if (prevDone != null && next != null) {
-            StationDO from = prevDone.getStationId() != null ? stationMap.get(prevDone.getStationId()) : null;
-            StationDO to = next.getStationId() != null ? stationMap.get(next.getStationId()) : null;
-            RouteFetch seg = fetchRoutePolyline(operatingRouteId, prevDone.getStationId(), next.getStationId(), from, to);
-            if (seg != null && seg.points() != null) {
-                vo.setCurrentSegmentPolyline(seg.points().stream()
-                        .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
-            }
+        // 当前任务段真实道路：起点优先用车辆实时上报位置（司机此刻在哪儿就往哪儿导航），
+        // 没有上报位置才用上一个已完成经停点。取不到道路就留空，客户端显示"暂无真实路线"。
+        StationDO to = next.getStationId() != null ? stationMap.get(next.getStationId()) : null;
+        if (to == null) {
+            return;
         }
+        Double fromLongitude = vo.getCurrentLongitude();
+        Double fromLatitude = vo.getCurrentLatitude();
+        Long fromStationId = null;
+        if (fromLongitude == null || fromLatitude == null) {
+            StationDO from = prevDone != null && prevDone.getStationId() != null
+                    ? stationMap.get(prevDone.getStationId()) : null;
+            if (from == null || from.getLongitude() == null || from.getLatitude() == null) {
+                return;
+            }
+            fromStationId = prevDone.getStationId();
+            fromLongitude = from.getLongitude().doubleValue();
+            fromLatitude = from.getLatitude().doubleValue();
+        }
+        RouteFetch seg = fetchRoutePolyline(operatingRouteId, fromStationId, next.getStationId(),
+                fromStationId == null ? null : prevDoneStation(stationMap, prevDone), to, fromLongitude, fromLatitude);
+        if (seg == null || seg.points == null || seg.points.size() < 2) {
+            return;
+        }
+        vo.setCurrentSegmentPolyline(seg.points.stream()
+                .map(p -> new AppDriverRouteRespVO.Point(p[0], p[1])).toList());
+        vo.setNextStopRoadDistanceMeters(seg.distanceMeters);
+        vo.setNextStopRoadEtaSeconds(seg.durationSeconds);
     }
 
-    /** 单段真实道路 polyline 抓取结果 */
-    private record RouteFetch(List<double[]> points, String provider) {
+    private static String stationName(Map<Long, StationDO> stationMap, DispatchPlanItemDO item) {
+        StationDO station = stationMap.get(item.getStationId());
+        return station != null ? station.getStationName() : item.getStationName();
+    }
+
+    private static StationDO prevDoneStation(Map<Long, StationDO> stationMap, DispatchPlanItemDO prevDone) {
+        return prevDone == null || prevDone.getStationId() == null ? null : stationMap.get(prevDone.getStationId());
     }
 
     /**
-     * 站间真实道路 polyline。取几何优先级：
+     * 单段真实道路 polyline 抓取结果。
+     *
+     * <p>{@code distanceMeters}/{@code durationSeconds} 为 null 表示<b>该来源没有给出道路里程/耗时</b>，
+     * 调用方必须下发 null，禁止用直线距离或固定均速补齐。</p>
+     */
+    private record RouteFetch(List<double[]> points, String provider,
+                              Double distanceMeters, Integer durationSeconds) {
+    }
+
+    /**
+     * 站间真实道路 polyline。取几何优先级（取不到就返回 null，<b>绝不两点直线兜底</b>）：
      * ① **车辆运营线路走廊切片**（站间走向跟线路走：站牌在道路另一侧/需上下桥时，
      *   点对点驾车规划会给出"进隧道 → 绕远 → 掉头"的走法，与司机实际按线路行驶不符）；
-     * ② 后端直连高德驾车路网；③ 算法服务 /route；④ 最后才两点直线兜底（provider=euclidean，不伪装真实道路）。
+     * ② 同时经过这两站的那条线路走廊；
+     * ③ 后端直连高德驾车路网（带缓存，返回真实道路里程/耗时）；
+     * ④ 算法服务 /route（只接受 {@link RealRoadProviders} 白名单内的路网结果：高德 / GraphHopper-OSM）。
+     *
+     * @param fromLongitude/fromLatitude 非空时作为起点坐标（车辆实时位置），此时跳过走廊（走廊按站点编号切片）
      */
     private RouteFetch fetchRoutePolyline(Long operatingRouteId, Long fromStationId, Long toStationId,
-                                          StationDO from, StationDO to) {
-        if (from == null || to == null || from.getLongitude() == null || from.getLatitude() == null
-                || to.getLongitude() == null || to.getLatitude() == null) {
+                                          StationDO from, StationDO to,
+                                          Double fromLongitude, Double fromLatitude) {
+        if (to == null || to.getLongitude() == null || to.getLatitude() == null) {
             return null;
         }
+        boolean corridorPossible = fromStationId != null && toStationId != null
+                && from != null && from.getLongitude() != null && from.getLatitude() != null;
         // 1) 线路走廊（车辆运营线路的真实几何切片）
-        if (routeCorridorService != null && operatingRouteId != null) {
+        if (corridorPossible && routeCorridorService != null && operatingRouteId != null) {
             List<double[]> corridor = routeCorridorService.alongRoute(operatingRouteId, fromStationId, toStationId);
-            if (corridor != null && corridor.size() >= 2) {
-                return new RouteFetch(corridor, "amap");
+            RouteFetch fetched = fromCorridor(corridor);
+            if (fetched != null) {
+                return fetched;
             }
         }
         // 1.5) 车辆线路不覆盖这一对站点时，改按"同时经过这两站的那条公交线"取走廊切片：
         //      司机导航线仍然贴着公交线路走（用户要求：不能远离基本公交线路），
         //      只有连线路都覆盖不到时才退回点对点路网。
-        if (routeCorridorService != null) {
-            List<double[]> anyLine = routeCorridorService.alongAnyLine(fromStationId, toStationId);
-            if (anyLine != null && anyLine.size() >= 2) {
-                return new RouteFetch(anyLine, "amap");
+        if (corridorPossible && routeCorridorService != null) {
+            RouteFetch fetched = fromCorridor(routeCorridorService.alongAnyLine(fromStationId, toStationId));
+            if (fetched != null) {
+                return fetched;
             }
         }
-        // 2) 后端直连高德驾车路网（带缓存）：司机导航轨迹不因算法服务不可用而变直线
-        List<double[]> direct = roadPolylineService == null ? null : roadPolylineService.route(
-                from.getLongitude().doubleValue(), from.getLatitude().doubleValue(),
-                to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
-        if (direct != null && direct.size() >= 2) {
-            return new RouteFetch(direct, "amap");
+        double originLongitude = fromLongitude != null ? fromLongitude
+                : from != null && from.getLongitude() != null ? from.getLongitude().doubleValue() : Double.NaN;
+        double originLatitude = fromLatitude != null ? fromLatitude
+                : from != null && from.getLatitude() != null ? from.getLatitude().doubleValue() : Double.NaN;
+        if (Double.isNaN(originLongitude) || Double.isNaN(originLatitude)) {
+            return null;
         }
-        // 2) 高德不可用：退回算法服务 /route
+        // 2) 后端直连高德驾车路网（带缓存）：里程/耗时用高德按路网算出的真实值
+        if (roadPolylineService != null) {
+            RoadPolylineService.RoadRoute route = roadPolylineService.routeWithMetrics(
+                    originLongitude, originLatitude,
+                    to.getLongitude().doubleValue(), to.getLatitude().doubleValue());
+            if (route != null && route.usable()) {
+                return new RouteFetch(route.points(), RealRoadProviders.AMAP, route.distanceMeters(),
+                        route.durationSeconds());
+            }
+        }
+        // 3) 高德不可用：退回算法服务 /route（它内部是 高德 → GraphHopper/OSM 的真实路网链；
+        //    provider 不在白名单里的（euclidean / 未知来源）一律不收，见 RealRoadProviders）
         try {
             AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                     .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
-                            .longitude(from.getLongitude().doubleValue()).latitude(from.getLatitude().doubleValue()).build())
+                            .longitude(originLongitude).latitude(originLatitude).build())
                     .destination(AlgorithmRouteReqDTO.RoutePoint.builder()
                             .longitude(to.getLongitude().doubleValue()).latitude(to.getLatitude().doubleValue()).build())
                     .build());
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getPolyline() != null
-                    && route.getPolyline().size() >= 2 && "amap".equalsIgnoreCase(route.getProvider())) {
+                    && route.getPolyline().size() >= 2 && RealRoadProviders.isRealRoad(route.getProvider())) {
                 List<double[]> points = route.getPolyline().stream()
                         .map(p -> new double[]{p.getLongitude(), p.getLatitude()})
                         .collect(Collectors.toList());
-                return new RouteFetch(points, "amap");
+                Double distance = route.getDistanceKm() == null ? null : route.getDistanceKm() * 1000;
+                Integer duration = route.getDurationSeconds() == null ? null
+                        : (int) Math.round(route.getDurationSeconds());
+                return new RouteFetch(points, RealRoadProviders.labelOf(route.getProvider()), distance, duration);
             }
-        } catch (Exception ignored) {
-            // 算法不可用：走直线兜底
+        } catch (Exception ex) {
+            // 算法服务不可用：本段就没有道路，由调用方截断折线并说明原因（原先静默吞掉，线上看不出为什么没线）
+            log.warn("[fetchRoutePolyline] 算法服务 /route 不可用：from={} to={} {}", originLongitude, toStationId,
+                    ex.toString());
         }
-        // 3) 全都拿不到：返回 null（调用方断开折线），绝不画"两点直线"
+        // 4) 全都拿不到：返回 null（调用方在此截断折线），绝不画"两点直线"
         return null;
+    }
+
+    /**
+     * 走廊切片本身来自 {@code transport_route.navigation_polyline}（按逐站 waypoints 从高德取回的整线真实几何），
+     * 所以是真实道路；里程按这条真实折线的顶点累加得到（<b>不是</b>起终点直线距离），
+     * 路网耗时无来源 → 返回 null，由上层把 routeDurationSeconds 下发为 null。
+     */
+    private static RouteFetch fromCorridor(List<double[]> corridor) {
+        if (corridor == null || corridor.size() < 2) {
+            return null;
+        }
+        return new RouteFetch(corridor, RealRoadProviders.AMAP, RoadPolylineService.lengthKm(corridor) * 1000, null);
     }
 
     // ==================== 司机端写操作闭环 ====================

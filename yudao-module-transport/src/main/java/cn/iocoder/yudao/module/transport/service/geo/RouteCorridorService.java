@@ -177,8 +177,8 @@ public class RouteCorridorService {
     }
 
     /**
-     * 线路整条真实走廊：库里有（且来源 AMAP）直接用；没有就按站序逐站 waypoints 取一次并落库。
-     * 高德不可用时返回 {@code null}（不伪造几何）。
+     * 线路整条真实走廊：库里有（且来源在真实路网白名单内）直接用；
+     * 没有就按站序逐站 waypoints 取一次并落库。高德不可用时返回 {@code null}（不伪造几何）。
      */
     public List<double[]> corridor(Long routeId, List<Long> stationIdsInOrder) {
         if (routeId == null || routeMapper == null || roadPolylineService == null) {
@@ -186,7 +186,7 @@ public class RouteCorridorService {
         }
         RouteDO route = routeMapper.selectById(routeId);
         if (route != null && StrUtil.isNotBlank(route.getNavigationPolyline())
-                && "AMAP".equalsIgnoreCase(route.getNavigationSource())) {
+                && RealRoadProviders.isRealRoad(route.getNavigationSource())) {
             List<double[]> stored = parse(route.getNavigationPolyline());
             if (stored.size() >= 2) {
                 return stored;
