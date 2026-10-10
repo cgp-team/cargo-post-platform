@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -127,14 +128,34 @@ class DynamicDispatchCoordinator:
         self.global_haco_trigger_count = 0
 
     # ── public API ──
-    def plan(self, req: DispatchRequest) -> DispatchPlan:
+    def plan(self, req: DispatchRequest, *, time_budget_s: float | None = None) -> DispatchPlan:
         order = req.order
         trace = DecisionTrace(order.order_id)
+        deadline = time.monotonic() + time_budget_s if time_budget_s else None
 
         candidates = self._build_candidates(req)
         evaluated: list[tuple[DispatchCandidate, CandidateReachability, EconomicAdmission]] = []
+        budget_exhausted = False
 
         for cand in candidates:
+            if deadline is not None and time.monotonic() >= deadline:
+                # 评估预算耗尽：停止评估新候选，降级返回已评估的最佳结果或 HOLD
+                budget_exhausted = True
+                trace.add(
+                    DecisionTraceRecord(
+                        order_id=order.order_id,
+                        candidate_id="__budget__",
+                        candidate_type="BUDGET",
+                        feasible=False,
+                        reason_code="EVALUATION_BUDGET_EXHAUSTED",
+                        detail={
+                            "evaluated": len(evaluated),
+                            "skipped": len(candidates) - len(evaluated),
+                            "timeBudgetS": time_budget_s,
+                        },
+                    )
+                )
+                break
             reach = self._reachability(cand)
             economic = self._economic(cand, req, reach)
             feasible = self._apply_lock_and_constraints(cand, reach, economic, req)
@@ -146,6 +167,9 @@ class DynamicDispatchCoordinator:
         if ranked:
             chosen = ranked[0]
             trace.mark_selected(chosen.candidate_id, level=self._level_of(chosen))
+            explanation = trace.why_selected()
+            if budget_exhausted:
+                explanation += "（评估预算耗尽，基于已评估候选降级决策）"
             return DispatchPlan(
                 order_id=order.order_id,
                 status="ASSIGNED",
@@ -153,7 +177,7 @@ class DynamicDispatchCoordinator:
                 chosen=chosen,
                 candidates=[c for c, _, _ in evaluated],
                 reason_code=chosen.reason_code,
-                explanation=trace.why_selected(),
+                explanation=explanation,
                 trace=trace,
             )
 

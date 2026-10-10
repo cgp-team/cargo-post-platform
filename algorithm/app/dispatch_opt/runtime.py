@@ -169,14 +169,19 @@ def allocate_dispatch(
     payload: DispatchAllocatePayload,
     *,
     route_provider: RouteCostProvider | None = None,
+    time_budget_s: float | None = None,
 ) -> dict[str, Any]:
-    """运行时入口：返回 DispatchPlan（含 Decision Trace）。"""
+    """运行时入口：返回 DispatchPlan（含 Decision Trace）。
+
+    `time_budget_s`：候选评估的剩余时间预算（秒）；耗尽后停止评估新候选，
+    降级返回已评估的最佳结果或 HOLD。
+    """
     coordinator = DynamicDispatchCoordinator(
         route_provider=route_provider if route_provider is not None else get_route_cost_provider(),
         now=payload.now,
         max_passenger_impact_s=payload.maxPassengerImpactSeconds,
     )
-    plan = coordinator.plan(build_dispatch_request(payload))
+    plan = coordinator.plan(build_dispatch_request(payload), time_budget_s=time_budget_s)
     out = plan.as_dict()
     out["globalHacoTriggerCount"] = coordinator.global_haco_trigger_count
     return out

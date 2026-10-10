@@ -55,6 +55,11 @@ IDEMPOTENCY_TTL_SECONDS = 24 * 3600
 # 契约 10 秒计算超时（docs/api/algorithm-api.yaml）：超时后转异步轮询 /api/v1/result/{requestId}
 SOLVE_TIMEOUT_SECONDS = 10.0
 
+# /api/v1/dispatch/allocate：同步端点超时保护（无轮询通道，超时直接返回明确错误）；
+# 候选评估预算略小于端点超时，给序列化/兜底留余量
+ALLOCATE_TIMEOUT_SECONDS = 15.0
+ALLOCATE_EVAL_BUDGET_SECONDS = 12.0
+
 # 进程内任务记录上限：防长时间运行 jobs 字典内存单调增长（超出后按创建时间淘汰最旧）
 MAX_JOBS = 1000
 
@@ -381,14 +386,32 @@ def get_route(request: RouteRequest):
 
 
 @app.post("/api/v1/dispatch/allocate", response_model=None)
-def dispatch_allocate(payload: DispatchAllocatePayload) -> dict:
+async def dispatch_allocate(payload: DispatchAllocatePayload) -> dict:
     """新订单动态调度唯一主入口：Candidate → Reachability → TripLock → MarginalCost
     → Passenger/SLA → Economic Admission → Compare → DispatchPlan → Decision Trace.
 
     正式路由成本由 RouteCostProvider 给出；拿不到正式真实道路时显式返回 UNKNOWN，
     不会用直线距离冒充正式成本。
     """
-    return allocate_dispatch(payload)
+    try:
+        # 参照 /api/v1/plan：线程池求解 + wait_for 超时保护；
+        # 候选评估侧另有 ALLOCATE_EVAL_BUDGET_SECONDS 预算，耗尽即降级
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                allocate_dispatch, payload, time_budget_s=ALLOCATE_EVAL_BUDGET_SECONDS
+            ),
+            timeout=ALLOCATE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("动态调度超时 orderId=%s", payload.order.orderId)
+        return error_response(
+            408, "ALLOCATE_TIMEOUT",
+            f"动态调度求解超时（{ALLOCATE_TIMEOUT_SECONDS:.0f}s），请重试或转人工调度",
+            payload.order.orderId,
+        )
+    except Exception as exc:
+        logger.exception("动态调度异常 orderId=%s", payload.order.orderId)
+        return error_response(500, "ALGORITHM_INTERNAL_ERROR", f"动态调度失败：{exc}", payload.order.orderId)
 
 
 @app.get(
