@@ -1,14 +1,23 @@
 name: cargo-post-platform
 
+# 统一日志策略：json-file 单文件 50MB × 3 份滚动，防容器日志撑爆磁盘
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   mysql:
     image: mysql:8.4.5
     restart: unless-stopped
+    logging: *default-logging
     environment:
       MYSQL_DATABASE: ${DB_NAME:?set DB_NAME}
       MYSQL_USER: ${DB_USER:?set DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      # root 密码与业务账号分离（DB_ROOT_PASSWORD），业务连接仍用 DB_PASSWORD
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD}
       TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:${DB_PORT:-3306}:3306" # 仅本机：后端跑在宿主机，无需对公网开放
@@ -22,7 +31,8 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      # 密码走 MYSQL_PWD 环境变量，不出现在容器内 ps 的命令行参数里
+      test: ["CMD-SHELL", "MYSQL_PWD=$${MYSQL_PASSWORD} mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --silent"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -31,6 +41,7 @@ services:
   redis:
     image: redis:7.4.5-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
     ports:
@@ -44,7 +55,8 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep PONG"]
+      # 密码走 REDISCLI_AUTH 环境变量，不出现在容器内 ps 的命令行参数里
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${REDIS_PASSWORD} redis-cli --no-auth-warning ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -77,6 +89,7 @@ services:
       dockerfile: Dockerfile
     image: cargo-post/algorithm:1.0.0
     restart: unless-stopped
+    logging: *default-logging
     # DEP-02：资源上限（算法 CPU 密集，给 2 核 2G）
     deploy:
       resources:
@@ -86,6 +99,10 @@ services:
     environment:
       # 高德「距离测量」Web 服务 key：配置后切驾车路网距离（km），留空走欧氏直线（度）
       AMAP_KEY: ${AMAP_KEY:-}
+      # GraphHopper 路网服务地址（统一默认 http://127.0.0.1:8080；GH 按
+      # docs/routing/GRAPHHOPPER_DEPLOYMENT.md 以独立进程部署在宿主机，容器内需改为
+      # host.docker.internal 或内网地址，通过 .env 的 GRAPHHOPPER_URL 覆盖）
+      GRAPHHOPPER_URL: ${GRAPHHOPPER_URL:-http://127.0.0.1:8080}
     ports:
       - "127.0.0.1:${ALGORITHM_PORT:-18081}:8000" # 仅本机：只允许后端内网访问
     healthcheck:

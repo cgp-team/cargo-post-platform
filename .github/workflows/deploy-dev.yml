@@ -787,7 +787,20 @@ jobs:
               # DEP-01：自动回滚前端备份
               if [[ -d /opt/cargo-post-web.bak ]]; then
                 echo "Rolling back frontend..."
-                sudo rsync -a --delete /opt/cargo-post-web.bak/ /opt/cargo-post-web/
+                # 与 Deploy frontend 步骤同一套权限判定：目录可写则不用 sudo，
+                # 否则用免密 sudo；两者都没有时明确报错（裸 sudo 在无免密场景会直接失败）
+                SUDO=""
+                if [ -d /opt/cargo-post-web ] && [ -w /opt/cargo-post-web ]; then
+                  echo "权限：/opt/cargo-post-web 对当前用户可写，回滚不使用 sudo"
+                elif sudo -n true 2>/dev/null; then
+                  SUDO="sudo"
+                  echo "权限：/opt/cargo-post-web 不可直接写，改用已配置的免密 sudo"
+                else
+                  echo "ERROR: 既不能直接写 /opt/cargo-post-web，当前用户也没有免密 sudo 权限，无法自动回滚，需人工处理" >&2
+                  exit 1
+                fi
+                _run() { if [ -n "${SUDO}" ]; then sudo "$@"; else "$@"; fi; }
+                _run rsync -a --delete /opt/cargo-post-web.bak/ /opt/cargo-post-web/
                 echo "Frontend rollback done."
               fi
               exit 1
