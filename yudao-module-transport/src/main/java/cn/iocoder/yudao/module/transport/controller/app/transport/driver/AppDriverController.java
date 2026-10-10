@@ -223,6 +223,13 @@ public class AppDriverController {
         return success(true);
     }
 
+    @PostMapping("/leg/exception")
+    @Operation(summary = "上报运输段异常（车辆故障/道路阻断等：段与订单置异常、记事件并告警后台重调度）")
+    public CommonResult<Boolean> legException(@Valid @RequestBody AppDriverLegActionReqVO reqVO) {
+        driverAppService.legAction("exception", reqVO);
+        return success(true);
+    }
+
     @GetMapping("/messages")
     @Operation(summary = "司机消息中心分页")
     @Parameter(name = "driverId", description = "司机编号", required = true)

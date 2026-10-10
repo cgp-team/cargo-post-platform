@@ -28,6 +28,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.shift.ShiftDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.util.StationAccessUtil;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.vehicle.VehicleLocationDO;
@@ -36,7 +37,6 @@ import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.DispatchPlanMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.driver.DriverMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.TransportOrderMapper;
-import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
@@ -98,7 +98,6 @@ public class AppSendController {
     @Resource private ShiftMapper shiftMapper;
     @Resource private DriverMapper driverMapper;
     @Resource private VehicleLocationMapper vehicleLocationMapper;
-    @Resource private StationMapper stationMapper;
     @Resource private MultiLegService multiLegService;
     @Resource private TransportTopologyService transportTopologyService;
     @Resource private CargoPricingService cargoPricingService;
@@ -167,15 +166,33 @@ public class AppSendController {
             return success(List.of());
         }
         List<TransportLegDO> legs = multiLegService.getLegsByOrderId(order.getId());
+        Map<Long, StationDO> stationMap = stationMap();
         return success(legs.stream().map(leg -> {
             AppSendLegRespVO vo = new AppSendLegRespVO();
             vo.setLegSequence(leg.getLegSequence());
-            vo.setFromStationName(stationName(leg.getFromStationId()));
-            vo.setToStationName(stationName(leg.getToStationId()));
+            StationDO from = stationMap.get(leg.getFromStationId());
+            StationDO to = stationMap.get(leg.getToStationId());
+            vo.setFromStationName(from != null ? from.getStationName() : null);
+            vo.setToStationName(to != null ? to.getStationName() : null);
+            // 站点坐标只在档案里真的有值时下发；没有就是 null，前端不补线
+            if (from != null && from.getLongitude() != null && from.getLatitude() != null) {
+                vo.setFromLongitude(from.getLongitude().doubleValue());
+                vo.setFromLatitude(from.getLatitude().doubleValue());
+            }
+            if (to != null && to.getLongitude() != null && to.getLatitude() != null) {
+                vo.setToLongitude(to.getLongitude().doubleValue());
+                vo.setToLatitude(to.getLatitude().doubleValue());
+            }
             vo.setStatus(leg.getStatus());
             vo.setStatusName(TransportLegStatusEnum.nameOf(leg.getStatus()));
+            vo.setEstimatedDeparture(leg.getEstimatedDeparture());
             vo.setEstimatedArrival(leg.getEstimatedArrival());
             vo.setActualArrival(leg.getActualArrival());
+            vo.setDistanceKm(leg.getDistanceKm());
+            vo.setDurationMinutes(leg.getDurationMinutes());
+            vo.setNavigationSource(leg.getNavigationSource());
+            vo.setNavigationPolyline(parseLegPolyline(leg.getNavigationPolyline()));
+            vo.setHandoverRequired(leg.getHandoverRequired());
             if (leg.getDriverId() != null) {
                 DriverDO driver = driverMapper.selectById(leg.getDriverId());
                 vo.setDriverName(driver != null ? driver.getName() : null);
@@ -200,13 +217,33 @@ public class AppSendController {
         return success(transportTopologyService.getByOrderId(order.getId()));
     }
 
-    /** 站点名（不存在/无编号返回 null） */
-    private String stationName(Long stationId) {
-        if (stationId == null) {
+    /** 站点档案（id → 站点）：一次加载，供分段进度的名称与坐标取值 */
+    private Map<Long, StationDO> stationMap() {
+        return stationService.getSimpleList().stream()
+                .collect(Collectors.toMap(StationDO::getId, Function.identity(), (a, b) -> a));
+    }
+
+    /** 解析段上存储的紧凑 polyline（"lon,lat;lon,lat;..."）→ 道路点列表；空串/全非法返回 null（不返回空列表，前端据此区分"没给"） */
+    static List<AppSendLegRespVO.RoadPoint> parseLegPolyline(String raw) {
+        if (raw == null || raw.isBlank()) {
             return null;
         }
-        StationDO station = stationMapper.selectById(stationId);
-        return station != null ? station.getStationName() : null;
+        List<AppSendLegRespVO.RoadPoint> points = new java.util.ArrayList<>();
+        for (String segment : raw.split(";")) {
+            int comma = segment.indexOf(',');
+            if (comma <= 0) {
+                continue;
+            }
+            try {
+                AppSendLegRespVO.RoadPoint p = new AppSendLegRespVO.RoadPoint();
+                p.setLongitude(Double.valueOf(segment.substring(0, comma).trim()));
+                p.setLatitude(Double.valueOf(segment.substring(comma + 1).trim()));
+                points.add(p);
+            } catch (NumberFormatException ignored) {
+                // 单点解析失败不影响整条轨迹
+            }
+        }
+        return points.isEmpty() ? null : points;
     }
 
     /** 填充到达预估（仅 track 详情调用；未分配车辆/班次时字段全 null，不影响原流程） */
@@ -483,7 +520,8 @@ public class AppSendController {
     @Operation(summary = "获得寄货站点列表")
     @PermitAll
     public CommonResult<List<StationSimpleRespVO>> stations() {
-        return success(BeanUtils.toBean(stationService.getSimpleList(), StationSimpleRespVO.class));
+        // 下单在 TransportOrderServiceImpl.requireEnabledStation 里校验车辆可达，这里同源过滤，避免用户选中禁行区站点后被 1005016009 拒单
+        return success(BeanUtils.toBean(stationService.getSimpleList().stream().filter(s -> StationAccessUtil.userAccessible(s) && StationAccessUtil.vehicleAccessible(s)).collect(Collectors.toList()), StationSimpleRespVO.class));
     }
 
     @PostMapping("/route-preview")

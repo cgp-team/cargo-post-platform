@@ -33,7 +33,8 @@ public class AppBusLineRespVO {
     @Schema(description = "该线路当前在线车辆")
     private List<AppBusRespVO> buses;
 
-    @Schema(description = "真实道路轨迹（GCJ-02，来自高德路网；算法不可用时为 null，前端回退到 points 直线）")
+    @Schema(description = "真实道路轨迹（GCJ-02，逐点都来自真实路网：AMAP / OSM_GRAPHHOPPER / MIXED；"
+            + "取不到真实道路几何时为 null，中途断线则返回截断后的前缀——前端不得用 points 直线补线）")
     private List<RoadPoint> roadPolyline;
 
     @Schema(description = "线路途经点")

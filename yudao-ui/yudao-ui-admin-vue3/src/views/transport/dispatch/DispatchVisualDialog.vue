@@ -553,6 +553,11 @@ const selectJourney = (key: string) => {
   redraw()
 }
 
+/** 真实路网来源标签白名单，与后端 `RealRoadProviders` / Android `core/map/RouteSource` 同一口径 */
+const REAL_ROAD_SOURCES = new Set([
+  'AMAP', 'OSM_GRAPHHOPPER', 'OSM_ROAD_GRAPH', 'VALHALLA', 'CACHE_REAL_ROAD', 'MIXED'
+])
+
 /**
  * 取某段运输段的真实道路折线。
  *
@@ -561,9 +566,9 @@ const selectJourney = (key: string) => {
  * 需求明确要求"把直线去掉"，所以缺路网数据的段宁可不画（列表里标注"缺路网轨迹"）。
  */
 const resolveLegRoad = (leg: TopologyApi.TopologyLeg): { lng: number; lat: number }[] => {
-  // 该段路网来源不是高德真实道路（EUCLIDEAN 直线兜底）→ 不画，避免斜穿城市的假轨迹。
-  // 只在高德可用（navigationSource=AMAP）且轨迹点足够时才绘制真实道路。
-  if (leg.navigationSource && leg.navigationSource !== 'AMAP') return []
+  // 来源必须在白名单内：AMAP 与本地路网（GraphHopper/RoadGraph/Valhalla/离线缓存）都算真实道路，
+  // 白名单外（EUCLIDEAN 直线兜底、ESTIMATED 估算、未知写法）一律不画。
+  if (leg.navigationSource && !REAL_ROAD_SOURCES.has(leg.navigationSource)) return []
   const stored = (leg.navigationPolyline ?? [])
     .filter((p) => p.longitude != null && p.latitude != null)
     .map((p) => ({ lng: Number(p.longitude), lat: Number(p.latitude) }))

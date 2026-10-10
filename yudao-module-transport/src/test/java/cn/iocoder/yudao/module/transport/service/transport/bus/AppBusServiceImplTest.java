@@ -10,6 +10,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.shift.ShiftMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
 import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
 import cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider;
@@ -478,6 +479,86 @@ class AppBusServiceImplTest {
         appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
 
         verify(algorithmClient, never()).route(any());
+    }
+
+    // ==================== 线路真实道路轨迹（getLinePolyline） ====================
+    // 硬规则：线路轨迹的每个点都必须来自真实路网。某段取不到道路几何就在那里截断，
+    // 绝不把相邻两站直连补进"道路轨迹"（历史 bug：算法不可用时补两点直线，前端当成真实线路画）。
+
+    private MonitoringMapDataRespVO mapDataWithRouteId(long routeId, MonitoringMapDataRespVO.Point... points) {
+        MonitoringMapDataRespVO.Route route = new MonitoringMapDataRespVO.Route();
+        route.setId(routeId);
+        route.setRouteName("R" + routeId);
+        route.setPoints(List.of(points));
+        MonitoringMapDataRespVO data = new MonitoringMapDataRespVO();
+        data.setRoutes(List.of(route));
+        return data;
+    }
+
+    private AlgorithmRouteRespDTO.PolylinePoint road(double lon, double lat) {
+        return AlgorithmRouteRespDTO.PolylinePoint.builder().longitude(lon).latitude(lat).build();
+    }
+
+    /** 没有任何真实道路来源：返回 null（前端显示"暂无真实路线"），而不是把站点连线交出去 */
+    @Test
+    void linePolyline_withoutRoadSource_returnsNullNotStationLine() {
+        when(monitoringService.getMapData()).thenReturn(mapDataWithRouteId(7L,
+                point(1L, "A站", 104.000, 30.000), point(2L, "B站", 104.100, 30.100)));
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(false).reasonCode("REAL_ROAD_UNAVAILABLE").build());
+
+        assertNull(appBusService.getLinePolyline(7L));
+    }
+
+    /** 断线即截断：B→C 没有道路几何就停在这里，C→D 连请求都不发，C/D 站坐标一个不许出现在轨迹里 */
+    @Test
+    void linePolyline_truncatesAtFirstSegmentWithoutRoad() {
+        when(monitoringService.getMapData()).thenReturn(mapDataWithRouteId(8L,
+                point(1L, "A站", 104.000, 30.000), point(2L, "B站", 104.100, 30.100),
+                point(3L, "C站", 104.200, 30.200), point(4L, "D站", 104.300, 30.300)));
+        when(algorithmClient.route(any())).thenAnswer(invocation -> {
+            AlgorithmRouteReqDTO req = invocation.getArgument(0);
+            boolean firstSegment = Double.compare(req.getDestination().getLatitude(), 30.100) == 0;
+            return firstSegment
+                    ? AlgorithmRouteRespDTO.builder().available(true).provider("amap")
+                            .polyline(List.of(road(104.000, 30.000), road(104.050, 30.060), road(104.100, 30.100)))
+                            .build()
+                    : AlgorithmRouteRespDTO.builder().available(false).reasonCode("REAL_ROAD_UNAVAILABLE").build();
+        });
+
+        List<AppBusLineRespVO.RoadPoint> polyline = appBusService.getLinePolyline(8L);
+
+        assertNotNull(polyline);
+        assertEquals(3, polyline.size());
+        assertEquals(104.050, polyline.get(1).getLongitude(), 1e-9);
+        assertTrue(polyline.stream().noneMatch(p -> p.getLongitude() >= 104.200));
+        verify(algorithmClient, times(2)).route(any());
+    }
+
+    /** 来源白名单：GraphHopper(OSM) 与高德一样是真实路网，必须被接受，不再因为只有"provider != amap"被丢掉 */
+    @Test
+    void linePolyline_acceptsGraphhopperOsmSource() {
+        when(monitoringService.getMapData()).thenReturn(mapDataWithRouteId(9L,
+                point(1L, "A站", 104.000, 30.000), point(2L, "B站", 104.100, 30.100)));
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(true).provider("graphhopper")
+                .polyline(List.of(road(104.000, 30.000), road(104.080, 30.090), road(104.100, 30.100))).build());
+
+        List<AppBusLineRespVO.RoadPoint> polyline = appBusService.getLinePolyline(9L);
+
+        assertEquals(3, polyline.size());
+    }
+
+    /** 白名单外的来源（估算/直线）即使带着几何也不可信：按"没有路线"处理 */
+    @Test
+    void linePolyline_rejectsNonRoadProviderLabel() {
+        when(monitoringService.getMapData()).thenReturn(mapDataWithRouteId(10L,
+                point(1L, "A站", 104.000, 30.000), point(2L, "B站", 104.100, 30.100)));
+        when(algorithmClient.route(any())).thenReturn(AlgorithmRouteRespDTO.builder()
+                .available(true).provider("euclidean")
+                .polyline(List.of(road(104.000, 30.000), road(104.100, 30.100))).build());
+
+        assertNull(appBusService.getLinePolyline(10L));
     }
 
 }

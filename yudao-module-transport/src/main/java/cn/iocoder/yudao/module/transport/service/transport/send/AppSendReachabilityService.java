@@ -8,6 +8,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDist
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmDistanceRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmStationDTO;
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
 import cn.iocoder.yudao.module.transport.enums.order.ReviewReasonCodeEnum;
 import cn.iocoder.yudao.module.transport.enums.order.ServiceModeEnum;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
@@ -117,7 +118,8 @@ public class AppSendReachabilityService {
                 AlgorithmDistancePairDTO pair = dto.getPairs().get(0);
                 if (Boolean.TRUE.equals(pair.getAvailable()) && pair.getDistanceKm() != null) {
                     km = pair.getDistanceKm();
-                    provider = "amap".equals(pair.getProvider()) ? "AMAP_ROAD" : "EUCLIDEAN";
+                    // 来源白名单判定：OSM/GraphHopper 的路网里程不能被打成"直线估算"（污名化也是不真实）
+                    provider = RealRoadProviders.isRealRoad(pair.getProvider()) ? "AMAP_ROAD" : "EUCLIDEAN";
                 }
             }
         } catch (Exception ex) {
