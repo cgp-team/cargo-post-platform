@@ -1,6 +1,8 @@
 package cn.iocoder.yudao.module.transport.service.dispatch;
 
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.route.RouteStationDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
 
 import java.util.List;
@@ -35,6 +37,23 @@ public interface MultiLegService {
      * @param planDriverId  算法分配给该订单的司机编号（可空）
      */
     List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId);
+
+    /**
+     * 规划上下文：站点全表 + 可用于调度的线路站点（静态基础数据）。
+     * 批量派单时由调用方预取一次传入，避免每单两次全表查询。
+     */
+    record PlanningContext(List<StationDO> stations, List<RouteStationDO> routeStations) {
+    }
+
+    /** 预取规划上下文（事务外调用，批量派单时整批复用一次） */
+    PlanningContext loadPlanningContext();
+
+    /**
+     * 同 {@link #planLegs(Long, Long, Long, Long)}，额外接受调用方预取的规划上下文（null 时本单自行加载）。
+     * 纯规划计算在事务外完成，事务（REQUIRES_NEW）内只做段的落库。
+     */
+    List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId,
+                                  PlanningContext context);
 
     /** 只规划不落库（后台"调度结果解释"：候选方案/评分/理由） */
     MultiLegPlanner.PlanResult preview(Long orderId);

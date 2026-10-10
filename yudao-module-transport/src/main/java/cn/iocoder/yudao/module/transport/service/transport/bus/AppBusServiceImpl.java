@@ -13,6 +13,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.integration.algorithm.AlgorithmClient;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteRespDTO;
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
 import cn.iocoder.yudao.module.transport.service.monitoring.MonitoringService;
 import cn.iocoder.yudao.module.transport.service.transport.transit.TransitProvider;
 import cn.iocoder.yudao.module.transport.util.GeoDistanceUtil;
@@ -754,15 +755,19 @@ public class AppBusServiceImpl implements AppBusService {
                             .longitude(next.getLongitude().doubleValue()).build())
                     .build());
             if (route != null && Boolean.TRUE.equals(route.getAvailable()) && route.getDistanceKm() != null) {
-                Integer minutes = route.getDurationSeconds() != null
-                        ? (int) Math.ceil(route.getDurationSeconds() / 60.0) : null;
-                RouteEta fresh = new RouteEta(round2(route.getDistanceKm()), minutes,
-                        "amap".equals(route.getProvider()) ? "AMAP" : "EUCLIDEAN",
-                        System.currentTimeMillis() + ETA_CACHE_TTL_MS);
-                etaCache.put(key, fresh);
-                bus.setDistanceToNextStationKm(fresh.distanceKm());
-                bus.setEtaMinutes(fresh.etaMinutes());
-                bus.setRouteProvider(fresh.provider());
+                // 来源白名单：算法 /route 只给真实路网（高德 / GraphHopper-OSM）或"已在本站"；
+                // 未知来源按不可信处理，不再自动打成 EUCLIDEAN（那是把估算伪装成路网结果的反向错误）
+                String roadLabel = RealRoadProviders.labelOf(route.getProvider());
+                if (roadLabel != null) {
+                    Integer minutes = route.getDurationSeconds() != null
+                            ? (int) Math.ceil(route.getDurationSeconds() / 60.0) : null;
+                    RouteEta fresh = new RouteEta(round2(route.getDistanceKm()), minutes, roadLabel,
+                            System.currentTimeMillis() + ETA_CACHE_TTL_MS);
+                    etaCache.put(key, fresh);
+                    bus.setDistanceToNextStationKm(fresh.distanceKm());
+                    bus.setEtaMinutes(fresh.etaMinutes());
+                    bus.setRouteProvider(fresh.provider());
+                }
             }
             // route 不可用/失败：本次不返回 ETA（bus 保持 null），下次刷新再试
         } catch (Exception ex) {
@@ -789,18 +794,16 @@ public class AppBusServiceImpl implements AppBusService {
     }
 
     /**
-     * 按站点序列逐段取真实道路 polyline，拼接为整条线路轨迹。
-     * 缓存 5 分钟（路网几何稳定）；某段失败/不可用时该段回退为直线（起终点两点），不伪装真实道路。
-     * 返回 null 表示整条线路无法绘制（少于 2 个有效坐标点）。
+     * 读取落库的真实道路几何（"lng,lat;lng,lat;..."）。
+     * 未取到 / 解析失败 / 来源不在真实路网白名单内（例如 ESTIMATED）都返回 null。
      */
-    /** 读取落库的真实道路几何（"lng,lat;lng,lat;..."）；未取到/解析失败返回 null（前端直线暂替） */
     private List<AppBusLineRespVO.RoadPoint> loadStoredPolyline(Long routeId) {
         if (routeMapper == null) {
             return null;
         }
         RouteDO route = routeMapper.selectById(routeId);
         if (route == null || route.getNavigationPolyline() == null || route.getNavigationPolyline().isBlank()
-                || !"AMAP".equals(route.getNavigationSource())) {
+                || !RealRoadProviders.isRealRoad(route.getNavigationSource())) {
             return null;
         }
         List<AppBusLineRespVO.RoadPoint> list = new ArrayList<>();
@@ -818,9 +821,13 @@ public class AppBusServiceImpl implements AppBusService {
         return list.size() >= 2 ? list : null;
     }
 
-    /** 真实道路几何落库：配额恢复后预取一次即长期复用（失败只记日志，不影响本次返回） */
-    private void persistPolyline(Long routeId, List<AppBusLineRespVO.RoadPoint> polyline) {
-        if (routeMapper == null || polyline == null || polyline.size() < 2) {
+    /**
+     * 真实道路几何落库：配额恢复后预取一次即长期复用（失败只记日志，不影响本次返回）。
+     * 来源标签写几何的真实出处（AMAP / OSM_GRAPHHOPPER / …），读取侧凭白名单信任它。
+     */
+    private void persistPolyline(Long routeId, List<AppBusLineRespVO.RoadPoint> polyline, String provider) {
+        String label = RealRoadProviders.labelOf(provider);
+        if (routeMapper == null || polyline == null || polyline.size() < 2 || label == null) {
             return;
         }
         try {
@@ -837,15 +844,21 @@ public class AppBusServiceImpl implements AppBusService {
             RouteDO upd = new RouteDO();
             upd.setId(routeId);
             upd.setNavigationPolyline(sb.toString());
-            upd.setNavigationSource("AMAP");
+            upd.setNavigationSource(label);
             routeMapper.updateById(upd);
         } catch (Exception e) {
             log.warn("[bus-lines] 线路{}轨迹落库失败：{}", routeId, e.getMessage());
         }
     }
 
+    /**
+     * 线路真实道路轨迹：落库几何 → 高德整条 waypoints → 逐段（高德优先，退到算法服务 /route）。
+     * <p>逐段时任何一段拿不到真实道路几何，就在那里停住、只返回已取到的前缀：
+     * 绝不把相邻两站直连补进"道路轨迹"（宁可少画一段，不把直线说成路）。
+     * 截断过的线路只进 5 分钟内存缓存、不落库——半条线路的几何不能当成整条线路的走廊长期复用。</p>
+     * 返回 null 表示整条线路没有任何真实道路几何（前端显示"暂无真实路线"）。
+     */
     private List<AppBusLineRespVO.RoadPoint> fetchRoutePolyline(Long routeId, List<AppBusLineRespVO.Point> points) {
-        // 注：下面是 0/1/2 三级取轨迹策略，真实道路几何取到即落库（见 persistPolyline）。
         if (routeId == null || points == null || points.size() < 2) {
             return null;
         }
@@ -877,9 +890,12 @@ public class AppBusServiceImpl implements AppBusService {
             direct = dedupePolyline(direct);
             routePolylineCache.put(routeId, new RoutePolylineCache(direct,
                     System.currentTimeMillis() + 300_000));
-            persistPolyline(routeId, direct);
+            persistPolyline(routeId, direct, RealRoadProviders.AMAP);
             return direct;
         }
+        // 逐段：每段都要真实路网几何，来源如实累积（同一来源就用它，混了就是 MIXED）
+        Set<String> providers = new LinkedHashSet<>();
+        boolean complete = true;
         for (int i = 0; i < points.size() - 1; i++) {
             AppBusLineRespVO.Point from = points.get(i);
             AppBusLineRespVO.Point to = points.get(i + 1);
@@ -887,16 +903,18 @@ public class AppBusServiceImpl implements AppBusService {
                     || to.getLongitude() == null || to.getLatitude() == null) {
                 continue;
             }
-            // 1) 后端直连高德驾车路网（带 10 分钟缓存）：比算法服务更稳，避免"线路轨迹变直线"
+            // 1) 后端直连高德驾车路网（带 10 分钟缓存）：比算法服务更稳
             List<double[]> road = roadPolylineService == null ? null : roadPolylineService.route(
                     from.getLongitude(), from.getLatitude(), to.getLongitude(), to.getLatitude());
             if (road != null && road.size() >= 2) {
                 for (double[] p : road) {
                     fullPolyline.add(toRoadPoint(p[0], p[1]));
                 }
+                providers.add(RealRoadProviders.AMAP);
                 continue;
             }
-            // 2) 高德不可用：退回算法服务 /route
+            // 2) 高德不可用：退回算法服务 /route（AMAP 与 GraphHopper-OSM 都是真实路网，白名单外的来源不算）
+            String segmentProvider = null;
             try {
                 AlgorithmRouteRespDTO route = algorithmClient.route(AlgorithmRouteReqDTO.builder()
                         .origin(AlgorithmRouteReqDTO.RoutePoint.builder()
@@ -906,23 +924,30 @@ public class AppBusServiceImpl implements AppBusService {
                         .build());
                 if (route != null && Boolean.TRUE.equals(route.getAvailable())
                         && route.getPolyline() != null && !route.getPolyline().isEmpty()) {
-                    for (AlgorithmRouteRespDTO.PolylinePoint p : route.getPolyline()) {
-                        fullPolyline.add(toRoadPoint(p.getLongitude(), p.getLatitude()));
+                    segmentProvider = RealRoadProviders.labelOf(route.getProvider());
+                    if (segmentProvider != null) {
+                        for (AlgorithmRouteRespDTO.PolylinePoint p : route.getPolyline()) {
+                            fullPolyline.add(toRoadPoint(p.getLongitude(), p.getLatitude()));
+                        }
                     }
-                } else {
-                    addFallbackPoint(fullPolyline, from);
-                    addFallbackPoint(fullPolyline, to);
                 }
             } catch (Exception e) {
                 log.debug("[bus-lines] 获取线路{}分段{}->{}道路polyline失败：{}",
                         routeId, from.getStationName(), to.getStationName(), e.getMessage());
-                addFallbackPoint(fullPolyline, from);
-                addFallbackPoint(fullPolyline, to);
             }
+            if (segmentProvider == null) {
+                complete = false;
+                break;
+            }
+            providers.add(segmentProvider);
         }
         fullPolyline = dedupePolyline(fullPolyline);
         if (fullPolyline.isEmpty()) {
             return null;
+        }
+        if (complete) {
+            persistPolyline(routeId, fullPolyline,
+                    providers.size() == 1 ? providers.iterator().next() : RealRoadProviders.MIXED);
         }
         routePolylineCache.put(routeId, new RoutePolylineCache(fullPolyline, System.currentTimeMillis() + 300_000));
         return fullPolyline;
@@ -933,13 +958,6 @@ public class AppBusServiceImpl implements AppBusService {
         rp.setLongitude(longitude);
         rp.setLatitude(latitude);
         return rp;
-    }
-
-    private static void addFallbackPoint(List<AppBusLineRespVO.RoadPoint> list, AppBusLineRespVO.Point point) {
-        if (point.getLongitude() == null || point.getLatitude() == null) {
-            return;
-        }
-        list.add(toRoadPoint(point.getLongitude(), point.getLatitude()));
     }
 
     /** 去掉相邻重复点（分段拼接处会出现重复的起终点） */

@@ -146,9 +146,10 @@ public class DashboardController {
         return new ArrayList<>(byDate.values());
     }
 
-    /** 近 24 小时订单量与金额趋势（按自然小时聚合），无数据的小时补零 */
+    /** 近 24 小时订单量与金额趋势（滚动窗口、按自然小时聚合），无数据的小时补零 */
     private List<Map<String, Object>> buildHourlyTrend() {
-        LocalDateTime start = LocalDate.now().minusDays(1).atStartOfDay(); // 含当前小时共 24 个自然小时
+        // 滚动窗口：当前整点 - 23 小时（含当前小时共 24 桶），而非「昨天 0 点起」只显示昨天
+        LocalDateTime start = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.HOURS).minusHours(23);
         List<Map<String, Object>> rows = transportOrderMapper.selectMaps(new QueryWrapper<TransportOrderDO>()
                 .select("DATE_FORMAT(create_time, '%Y-%m-%d %H:00') AS date", "COUNT(*) AS count",
                         "IFNULL(SUM(total_amount), 0) AS amount")

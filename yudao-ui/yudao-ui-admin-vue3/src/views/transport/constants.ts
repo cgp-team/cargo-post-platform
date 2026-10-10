@@ -72,6 +72,11 @@ export const VEHICLE_STATUS_TAGS: Record<number, TagType> = { 0: 'success', 1: '
 export const VEHICLE_REALTIME_STATUS_LABELS: Record<number, string> = { 0: '空闲', 1: '在途', 2: '故障', 3: '离线' }
 export const VEHICLE_REALTIME_STATUS_TAGS: Record<number, TagType> = { 0: 'success', 1: 'primary', 2: 'danger', 3: 'info' }
 
+// ===== 监控车辆状态（MonitoringVehicleRespVO.status）：0 空闲 1 在途 2 停用 =====
+// 与 VehicleDO.status（0 可用 / 1 停用）语义不同，监控页必须用这套映射
+export const MONITOR_VEHICLE_STATUS_LABELS: Record<number, string> = { 0: '空闲', 1: '在途', 2: '停用' }
+export const MONITOR_VEHICLE_STATUS_TAGS: Record<number, TagType> = { 0: 'success', 1: 'primary', 2: 'danger' }
+
 // ===== 商品订单状态（ProductOrderStatusEnum）：0 待发货 1 已发货 2 已完成 3 已取消 =====
 export const PRODUCT_ORDER_STATUS_LABELS: Record<number, string> = { 0: '待发货', 1: '已发货', 2: '已完成', 3: '已取消' }
 export const PRODUCT_ORDER_STATUS_TAGS: Record<number, TagType> = { 0: 'info', 1: 'warning', 2: 'success', 3: 'danger' }
@@ -105,6 +110,8 @@ export const vehicleStatusLabel = (status?: number | null) => labelOf(VEHICLE_ST
 export const vehicleStatusTag = (status?: number | null) => tagOf(VEHICLE_STATUS_TAGS, status)
 export const vehicleRealtimeStatusLabel = (status?: number | null) => labelOf(VEHICLE_REALTIME_STATUS_LABELS, status)
 export const vehicleRealtimeStatusTag = (status?: number | null) => tagOf(VEHICLE_REALTIME_STATUS_TAGS, status)
+export const monitorVehicleStatusLabel = (status?: number | null) => labelOf(MONITOR_VEHICLE_STATUS_LABELS, status)
+export const monitorVehicleStatusTag = (status?: number | null) => tagOf(MONITOR_VEHICLE_STATUS_TAGS, status)
 export const productOrderStatusLabel = (status?: number | null) => labelOf(PRODUCT_ORDER_STATUS_LABELS, status, '未知')
 export const productOrderStatusTag = (status?: number | null) => tagOf(PRODUCT_ORDER_STATUS_TAGS, status)
 export const shiftStatusLabel = (status?: number | null) => labelOf(SHIFT_STATUS_LABELS, status)

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,8 @@ from typing import Protocol
 import httpx
 
 from .models import RoutePoint, Station
+
+logger = logging.getLogger(__name__)
 
 AMAP_DISTANCE_URL = "https://restapi.amap.com/v3/distance"
 AMAP_DRIVING_URL = "https://restapi.amap.com/v3/direction/driving"
@@ -52,10 +55,11 @@ DistanceMatrix = dict[tuple[str, str], tuple[float, float | None]]
 class RouteResult:
     """单路线结果（Route Preview / 真实道路 polyline 用）。
 
-    - available=True：有距离/时长；provider 标识来源（amap=高德路网 / euclidean=直线估算 fallback）。
-    - available=False：该点对明确不可达（高德无可行车道路），无估算值。
+    - available=True：有距离/时长；provider 标识来源（amap=高德路网）。
+    - available=False：该点对明确不可用（高德无可行车道路 / 路网服务不可达），无估算值。
     - 距离恒为公里（km），不做 degree 换算。
-    - polyline：真实道路坐标点序列（GCJ-02）；euclidean 兜底时仅起终点两点（明确标注，不伪装真实道路）。
+    - polyline：真实道路坐标点序列（GCJ-02）。<b>这条结构体不再承载直线几何</b> ——
+      两点连线会被前端画成一条不存在的路，所以降级路径一律 available=False，由上层换下一个路网来源。
     """
 
     available: bool
@@ -132,8 +136,10 @@ class AmapDistanceProvider:
         """单点对路网路径（含真实道路 polyline），供车辆沿真实道路运行。
 
         高德驾车路径 API 成功 → available=True, provider=amap, polyline=真实道路坐标；
-        明确不可达 → available=False；高德失败/超时/配额 → 直线兜底（provider=euclidean，
-        polyline 仅起终点两点，明确标注不伪装真实道路）。
+        明确不可达 / 失败 / 超时 / 配额 → available=False（provider 仍标 amap，表示"高德这一层没给道路"）。
+
+        这里**不再回落直线**：这条方法的产物带 polyline，起终点两点连线会被司机端画成一条不存在的路。
+        需要直线估算里程请走 get_route / get_matrix（provider=euclidean，不输出几何）。
         缓存：按起终点坐标（RoadSegment 口径），TTL 24h，命中 0 次外部调用。
         """
         with self._lock:
@@ -146,10 +152,9 @@ class AmapDistanceProvider:
                 result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds,
                                      provider="amap", polyline=polyline)
             except AmapUnavailable as exc:
-                if exc.unreachable:
-                    result = RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
-                else:
-                    result = self._euclidean_route_with_polyline(origin, destination)
+                result = RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="amap")
+                logger.debug("高德驾车路径不可用（%.5f,%.5f→%.5f,%.5f）：%s",
+                             origin.longitude, origin.latitude, destination.longitude, destination.latitude, exc)
             self._route_cache[cache_key] = (result, time.time() + CACHE_TTL_SECONDS)
             return result
 
@@ -205,15 +210,6 @@ class AmapDistanceProvider:
             lon, lat = segment.split(",")
             points.append(RoutePoint(longitude=float(lon), latitude=float(lat)))
         return points
-
-    def _euclidean_route_with_polyline(self, origin: Station, destination: Station) -> RouteResult:
-        """直线兜底：Haversine 公里 + 均速秒 + 仅起终点两点的直线 polyline（明确 provider=euclidean）。"""
-        km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
-        seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
-        polyline = [RoutePoint(longitude=origin.longitude, latitude=origin.latitude),
-                    RoutePoint(longitude=destination.longitude, latitude=destination.latitude)]
-        return RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds,
-                           provider="euclidean", polyline=polyline)
 
     @classmethod
     def from_env(cls) -> AmapDistanceProvider | None:

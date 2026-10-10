@@ -84,8 +84,8 @@
           >
             <div class="flex items-center justify-between">
               <span class="text-sm font-500">{{ vehicle.plateNo }}</span>
-              <el-tag :type="vehicleStatusTag(vehicle.status)" size="small">
-                {{ vehicleStatusLabel(vehicle.status) }}
+              <el-tag :type="monitorVehicleStatusTag(vehicle.status)" size="small">
+                {{ monitorVehicleStatusLabel(vehicle.status) }}
               </el-tag>
             </div>
             <div class="text-xs text-gray-500 mt-4px">
@@ -107,7 +107,7 @@
 
 <script setup lang="ts">
 import { loadBaiduMapSdk, gcj02ToBd09, clusterByGrid, shouldCluster, clusterBubbleStyle } from '@/components/Map/src/utils'
-import { vehicleStatusLabel, vehicleStatusTag, shiftStatusLabel, shiftStatusTag } from '../constants'
+import { monitorVehicleStatusLabel, monitorVehicleStatusTag, shiftStatusLabel, shiftStatusTag } from '../constants'
 import {
   getMonitoringMapData,
   getMonitoringVehicles,

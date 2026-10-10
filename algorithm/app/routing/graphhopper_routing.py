@@ -6,13 +6,14 @@ Haversine 不得作为正式结果；GH 不可用 → LOCAL_ROUTING_UNAVAILABLE�
 
 from __future__ import annotations
 
-import json
+import os
+import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Protocol, Sequence
+
+import httpx
 
 from .geometry_cache import route_fingerprint
 from .local_routing import LocalRoutingEngine, RoadGraph, haversine_m
@@ -34,6 +35,91 @@ ROAD_CLASS_CODES = {
 }
 
 DEFAULT_PROFILE = "bus"
+
+DEFAULT_GRAPHHOPPER_URL = "http://127.0.0.1:8080"
+
+
+def default_graphhopper_url() -> str:
+    """统一入口：环境变量 GRAPHHOPPER_URL 优先，默认 http://127.0.0.1:8080。"""
+    return os.environ.get("GRAPHHOPPER_URL", DEFAULT_GRAPHHOPPER_URL)
+
+
+class CircuitBreaker:
+    """进程级熔断器：连续 failure_threshold 次失败 → 冷却窗口内直接拒绝（不发请求）；
+    窗口结束进入半开，放行单个试探请求；试探失败冷却窗口指数翻倍（封顶 max_cooldown_s），
+    成功后完全复位。线程安全（allocate 在线程池中并发调用）。
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 3,
+        cooldown_s: float = 30.0,
+        max_cooldown_s: float = 300.0,
+        clock=time.monotonic,
+    ):
+        self.failure_threshold = failure_threshold
+        self.base_cooldown_s = cooldown_s
+        self.max_cooldown_s = max_cooldown_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._current_cooldown_s = cooldown_s
+        self._open_until = 0.0
+        self._half_open_probe = False
+
+    def allow_request(self) -> bool:
+        with self._lock:
+            if self._open_until <= 0.0:
+                return True  # closed
+            now = self._clock()
+            if now < self._open_until:
+                return False
+            if self._half_open_probe:
+                return False  # 半开只放行一个试探
+            self._half_open_probe = True
+            return True
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._current_cooldown_s = self.base_cooldown_s
+            self._open_until = 0.0
+            self._half_open_probe = False
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._consecutive_failures += 1
+            now = self._clock()
+            if self._half_open_probe:
+                # 半开试探失败：重新打开并指数退避冷却窗口
+                self._half_open_probe = False
+                self._current_cooldown_s = min(self._current_cooldown_s * 2, self.max_cooldown_s)
+                self._open_until = now + self._current_cooldown_s
+            elif self._consecutive_failures >= self.failure_threshold:
+                self._open_until = now + self._current_cooldown_s
+
+    @property
+    def is_open(self) -> bool:
+        with self._lock:
+            return self._open_until > self._clock()
+
+
+# GraphHopper 熔断与连接池进程级复用：allocate/plan 共用一份，避免每请求新建连接。
+_GRAPHHOPPER_BREAKER = CircuitBreaker()
+
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = threading.Lock()
+
+
+def _http_client() -> httpx.Client:
+    global _HTTP_CLIENT
+    with _HTTP_CLIENT_LOCK:
+        if _HTTP_CLIENT is None:
+            _HTTP_CLIENT = httpx.Client(
+                limits=httpx.Limits(max_connections=32, max_keepalive_connections=16)
+            )
+        return _HTTP_CLIENT
 
 
 class LocalRoutingProvider(Protocol):
@@ -61,7 +147,7 @@ class LocalRoutingConfig:
     profile: str = DEFAULT_PROFILE
     # GraphHopper
     graphhopper_enabled: bool = True
-    graphhopper_base_url: str = "http://127.0.0.1:8080"
+    graphhopper_base_url: str = field(default_factory=default_graphhopper_url)
     graphhopper_timeout_ms: int = 3000
     graphhopper_data_dir: str = ""  # osm/graph 工作目录（部署时配置）
     graphhopper_osm_file: str = ""
@@ -79,7 +165,7 @@ class LocalRoutingConfig:
             provider=str(raw.get("provider", "graphhopper")),
             profile=str(raw.get("profile", DEFAULT_PROFILE)),
             graphhopper_enabled=bool(raw.get("graphhopper.enabled", raw.get("graphhopper_enabled", True))),
-            graphhopper_base_url=str(raw.get("graphhopper.base-url", raw.get("graphhopper_base_url", "http://127.0.0.1:8989"))),
+            graphhopper_base_url=str(raw.get("graphhopper.base-url", raw.get("graphhopper_base_url", default_graphhopper_url()))),
             graphhopper_timeout_ms=int(raw.get("graphhopper.timeout-ms", raw.get("graphhopper_timeout_ms", 3000))),
             graphhopper_data_dir=str(raw.get("graphhopper.data-dir", raw.get("graphhopper_data_dir", ""))),
             graphhopper_osm_file=str(raw.get("graphhopper.osm-file", raw.get("graphhopper_osm_file", ""))),
@@ -104,6 +190,7 @@ class GraphHopperRoutingEngine:
     name: str = "graphhopper"
     calls: int = 0
     last_latency_ms: float = 0.0
+    breaker: CircuitBreaker = field(default_factory=lambda: _GRAPHHOPPER_BREAKER)
 
     @property
     def version(self) -> str:
@@ -136,9 +223,22 @@ class GraphHopperRoutingEngine:
                 route_type=route_type,
                 reason_code="LOCAL_ROUTING_UNAVAILABLE",
             )
+        if not self.breaker.allow_request():
+            # 熔断打开/半开已有试探在途：不发请求，直接 UNAVAILABLE 快速失败
+            self.last_latency_ms = (time.perf_counter() - t0) * 1000
+            return uncertain(
+                "LOCAL_ROUTING_UNAVAILABLE:CIRCUIT_OPEN",
+                origin=origin,
+                destination=destination,
+                waypoints=tuple(waypoints),
+                straight_distance_m=straight,
+                provider=self.name,
+                route_type=route_type,
+            )
         try:
             raw = self._http_route(origin, waypoints, destination, profile)
         except Exception as ex:  # noqa: BLE001
+            self.breaker.record_failure()
             self.last_latency_ms = (time.perf_counter() - t0) * 1000
             return uncertain(
                 f"LOCAL_ROUTING_UNAVAILABLE:{type(ex).__name__}",
@@ -149,6 +249,7 @@ class GraphHopperRoutingEngine:
                 provider=self.name,
                 route_type=route_type,
             )
+        self.breaker.record_success()
         self.last_latency_ms = (time.perf_counter() - t0) * 1000
         if not raw or not raw.get("polyline"):
             return uncertain(
@@ -217,8 +318,9 @@ class GraphHopperRoutingEngine:
             f"&details=edge_id&details=distance&details=average_speed&details=road_class"
         )
         timeout_s = max(0.05, self.config.graphhopper_timeout_ms / 1000.0)
-        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        resp = _http_client().get(url, timeout=timeout_s)
+        resp.raise_for_status()
+        body = resp.json()
         paths = body.get("paths") or []
         if not paths:
             return {}

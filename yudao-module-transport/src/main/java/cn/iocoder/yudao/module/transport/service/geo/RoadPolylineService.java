@@ -25,7 +25,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>坐标系：高德与站点表、小程序 wx.getLocation(gcj02) 同为 GCJ-02，直接使用不换算。</p>
  *
  * <p>失败策略：未配置 key / 超时 / 限额 / 解析异常一律返回 {@code null}，
- * <b>由调用方决定是虚线直线兜底还是干脆不画</b>，本服务绝不伪造"真实道路"。</p>
+ * <b>由调用方决定是"不画线"还是换下一个路网来源</b>，本服务绝不伪造"真实道路"，
+ * 也绝不用两点直线顶替。</p>
+ *
+ * <p>里程口径：{@link RoadRoute#distanceMeters()} / {@link RoadRoute#durationSeconds()} 只在
+ * <b>当前这一条轨迹确实来自高德驾车规划</b>时才填高德返回值；走廊切片只按真实折线几何累加
+ * 里程（{@link #lengthKm}，那是真实道路折线自身的长度，不是起终点直线距离），耗时无来源则为 null。</p>
  */
 @Slf4j
 @Service
@@ -46,7 +51,7 @@ public class RoadPolylineService {
      * 实测 120ms 间隔批量取 9 段会触发限流并把部分段退化成直线；放宽到 350ms 串行节流。
      */
     private static final long MIN_INTERVAL_MS = 350L;
-    /** 失败重试次数（限流/网络抖动时再试一次，仍失败才返回 null 让调用方兜底） */
+    /** 失败重试次数（限流/网络抖动时再试一次，仍失败返回 null 让调用方换来源） */
     private static final int FETCH_RETRIES = 1;
     /** 重试前等待（毫秒） */
     private static final long RETRY_WAIT_MS = 1200L;
@@ -65,10 +70,23 @@ public class RoadPolylineService {
     private final Object throttleLock = new Object();
     private long lastCallAt = 0L;
 
-    private record Cached(List<double[]> points, long expireAt) {
+    private record Cached(RoadRoute route, long expireAt) {
     }
 
-    /** key 是否已配置（未配置时所有方法返回 null，调用方走兜底） */
+    /**
+     * 一段真实道路：几何点序列 + 来源给出的道路里程/耗时。
+     *
+     * <p>{@code distanceMeters} / {@code durationSeconds} 为 null 表示<b>来源没给</b>，
+     * 调用方必须原样下发 null，禁止用直线距离或固定均速补齐。</p>
+     */
+    public record RoadRoute(List<double[]> points, Double distanceMeters, Integer durationSeconds) {
+
+        public boolean usable() {
+            return points != null && points.size() >= 2;
+        }
+    }
+
+    /** key 是否已配置（未配置时所有方法返回 null，调用方换下一个路网来源，拿不到就不画线） */
     public boolean available() {
         return amapKey != null && !amapKey.isBlank();
     }
@@ -103,43 +121,132 @@ public class RoadPolylineService {
      */
     public List<double[]> route(double fromLongitude, double fromLatitude,
                                 double toLongitude, double toLatitude) {
+        RoadRoute route = routeWithMetrics(fromLongitude, fromLatitude, toLongitude, toLatitude);
+        return route == null ? null : route.points();
+    }
+
+    /**
+     * 取两点之间的真实道路轨迹<b>及其道路里程/耗时</b>。
+     *
+     * <p>司机导航需要"还剩多少米/几分钟"，而这两个值高德本来就返回了（此前被丢弃，
+     * 导致只能拿 Haversine 直线距离冒充）。这里把它们一并带回。</p>
+     *
+     * @return 不可用/失败返回 {@code null}；里程/耗时缺失时对应字段为 {@code null}（<b>不补估算值</b>）
+     */
+    public RoadRoute routeWithMetrics(double fromLongitude, double fromLatitude,
+                                      double toLongitude, double toLatitude) {
         if (!available() || !valid(fromLongitude, fromLatitude) || !valid(toLongitude, toLatitude)) {
             return null;
         }
         if (samePoint(fromLongitude, fromLatitude, toLongitude, toLatitude)) {
-            return List.of(new double[]{fromLongitude, fromLatitude}, new double[]{toLongitude, toLatitude});
+            return new RoadRoute(List.of(new double[]{fromLongitude, fromLatitude},
+                    new double[]{toLongitude, toLatitude}), 0.0, null);
         }
         String cacheKey = round5(fromLongitude) + "," + round5(fromLatitude)
                 + "->" + round5(toLongitude) + "," + round5(toLatitude);
-        Cached cached = cache.get(cacheKey);
         long now = System.currentTimeMillis();
+        Cached cached = cache.get(cacheKey);
         if (cached != null && cached.expireAt() > now) {
-            return cached.points();
+            return cached.route();
         }
-        List<double[]> points = fetch(fromLongitude, fromLatitude, toLongitude, toLatitude);
-        for (int attempt = 0; (points == null || points.size() < 2) && attempt < FETCH_RETRIES; attempt++) {
+        RoadRoute route = fetch(fromLongitude, fromLatitude, toLongitude, toLatitude, null);
+        for (int attempt = 0; (route == null || !route.usable()) && attempt < FETCH_RETRIES; attempt++) {
             try {
                 Thread.sleep(RETRY_WAIT_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
-            points = fetch(fromLongitude, fromLatitude, toLongitude, toLatitude);
+            route = fetch(fromLongitude, fromLatitude, toLongitude, toLatitude, null);
         }
-        if (points != null && points.size() >= 2) {
+        if (route != null && route.usable()) {
             if (cache.size() > CACHE_MAX_ENTRIES) {
                 cache.entrySet().removeIf(e -> e.getValue().expireAt() <= now);
             }
-            cache.put(cacheKey, new Cached(points, now + CACHE_TTL_MS));
-            return points;
+            cache.put(cacheKey, new Cached(route, now + CACHE_TTL_MS));
+            return route;
         }
         return null;
     }
 
-    /** 两点真实道路轨迹；失败返回 null */
-    private List<double[]> fetch(double fromLongitude, double fromLatitude,
-                                 double toLongitude, double toLatitude) {
-        return fetch(fromLongitude, fromLatitude, toLongitude, toLatitude, null);
+    /** 真实道路轨迹请求（可带途经点）；失败返回 null */
+    private RoadRoute fetch(double fromLongitude, double fromLatitude,
+                            double toLongitude, double toLatitude, String waypoints) {
+        throttle();
+        try {
+            String url = DRIVING_URL
+                    + "?origin=" + fromLongitude + "," + fromLatitude
+                    + "&destination=" + toLongitude + "," + toLatitude
+                    + (waypoints == null || waypoints.isBlank() ? "" : "&waypoints=" + waypoints)
+                    + "&extensions=all&strategy=0&key=" + amapKey;
+            String body = restTemplate.getForObject(url, String.class);
+            if (body == null || body.isBlank()) {
+                return null;
+            }
+            JsonNode root = OBJECT_MAPPER.readTree(body);
+            if (!"1".equals(root.path("status").asText())) {
+                log.warn("[road-polyline] 高德路径规划失败：status={} info={}",
+                        root.path("status").asText(), root.path("info").asText());
+                return null;
+            }
+            JsonNode path = root.path("route").path("paths").path(0);
+            if (path.isMissingNode()) {
+                log.warn("[road-polyline] 高德返回无 paths：origin=({},{}) destination=({},{})",
+                        fromLongitude, fromLatitude, toLongitude, toLatitude);
+                return null;
+            }
+            List<double[]> points = new ArrayList<>();
+            appendPoint(points, fromLongitude, fromLatitude);
+            for (JsonNode step : path.path("steps")) {
+                for (String segment : step.path("polyline").asText("").split(";")) {
+                    int comma = segment.indexOf(',');
+                    if (comma <= 0) {
+                        continue;
+                    }
+                    try {
+                        appendPoint(points, Double.parseDouble(segment.substring(0, comma).trim()),
+                                Double.parseDouble(segment.substring(comma + 1).trim()));
+                    } catch (NumberFormatException ex) {
+                        log.warn("[road-polyline] 单个顶点解析失败，跳过：{}", ex.getMessage());
+                    }
+                }
+            }
+            appendPoint(points, toLongitude, toLatitude);
+            if (points.size() < 2) {
+                log.warn("[road-polyline] 高德返回 steps[].polyline 为空，无真实道路几何：origin=({},{}) destination=({},{})",
+                        fromLongitude, fromLatitude, toLongitude, toLatitude);
+                return null;
+            }
+            // distance/duration 是高德按路网算出来的驾驶里程与耗时；缺字段就返回 null，不换算、不估算
+            JsonNode distanceNode = path.path("distance");
+            JsonNode durationNode = path.path("duration");
+            Double distanceMeters = distanceNode.isNumber() || distanceNode.isTextual() && !distanceNode.asText().isBlank()
+                    ? parseDouble(distanceNode.asText()) : null;
+            Integer durationSeconds = durationNode.isNumber() || durationNode.isTextual() && !durationNode.asText().isBlank()
+                    ? parseInt(durationNode.asText()) : null;
+            return new RoadRoute(points, distanceMeters, durationSeconds);
+        } catch (Exception ex) {
+            log.warn("[road-polyline] 高德路径规划异常：{}", ex.toString());
+            return null;
+        }
+    }
+
+    private static Double parseDouble(String text) {
+        try {
+            double value = Double.parseDouble(text.trim());
+            return Double.isNaN(value) || value < 0 ? null : value;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static Integer parseInt(String text) {
+        try {
+            double value = Double.parseDouble(text.trim());
+            return Double.isNaN(value) || value < 0 || value > Integer.MAX_VALUE ? null : (int) value;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     /**
@@ -201,9 +308,15 @@ public class RoadPolylineService {
      * <p>用途：公交线路 / 调度方案有几十个站，逐段请求既慢（小程序 10s 超时）又费配额；
      * 按 18 个点一组切分，整条线路通常 1~2 次请求即可拿全。</p>
      *
-     * @return {@code [lng,lat]} 点序列；任一组失败返回 {@code null}（调用方兜底）
+     * @return {@code [lng,lat]} 点序列；任一组失败返回 {@code null}（调用方换下一个路网来源或不画）
      */
     public List<double[]> routeThrough(List<double[]> stops) {
+        RoadRoute route = routeThroughWithMetrics(stops);
+        return route == null ? null : route.points();
+    }
+
+    /** 多点串联真实道路轨迹 + 高德返回的道路里程/耗时（各分组都有值才累加，否则为 null） */
+    public RoadRoute routeThroughWithMetrics(List<double[]> stops) {
         if (!available() || stops == null || stops.size() < 2) {
             return null;
         }
@@ -218,9 +331,13 @@ public class RoadPolylineService {
         long now = System.currentTimeMillis();
         Cached cached = cache.get(cacheKey);
         if (cached != null && cached.expireAt() > now) {
-            return cached.points();
+            return cached.route();
         }
         List<double[]> merged = new ArrayList<>();
+        double distanceSum = 0;
+        int durationSum = 0;
+        boolean withDistance = true;
+        boolean withDuration = true;
         int index = 0;
         while (index < stops.size() - 1) {
             int last = Math.min(index + MAX_WAYPOINTS + 1, stops.size() - 1);
@@ -231,71 +348,35 @@ public class RoadPolylineService {
                 }
                 waypoints.append(stops.get(i)[0]).append(',').append(stops.get(i)[1]);
             }
-            List<double[]> part = fetch(stops.get(index)[0], stops.get(index)[1],
+            RoadRoute part = fetch(stops.get(index)[0], stops.get(index)[1],
                     stops.get(last)[0], stops.get(last)[1],
                     waypoints.length() == 0 ? null : waypoints.toString());
-            if (part == null || part.size() < 2) {
+            if (part == null || !part.usable()) {
                 return null;
             }
-            part.forEach(p -> appendPoint(merged, p[0], p[1]));
+            if (part.distanceMeters() == null) {
+                withDistance = false;
+            } else {
+                distanceSum += part.distanceMeters();
+            }
+            if (part.durationSeconds() == null) {
+                withDuration = false;
+            } else {
+                durationSum += part.durationSeconds();
+            }
+            part.points().forEach(p -> appendPoint(merged, p[0], p[1]));
             index = last;
         }
         if (merged.size() < 2) {
             return null;
         }
+        RoadRoute mergedRoute = new RoadRoute(merged, withDistance ? distanceSum : null,
+                withDuration ? durationSum : null);
         if (cache.size() > CACHE_MAX_ENTRIES) {
             cache.entrySet().removeIf(e -> e.getValue().expireAt() <= now);
         }
-        cache.put(cacheKey, new Cached(merged, now + CACHE_TTL_MS));
-        return merged;
-    }
-
-    /** 真实道路轨迹请求（可带途经点）；失败返回 null */
-    private List<double[]> fetch(double fromLongitude, double fromLatitude,
-                                 double toLongitude, double toLatitude, String waypoints) {
-        throttle();
-        try {
-            String url = DRIVING_URL
-                    + "?origin=" + fromLongitude + "," + fromLatitude
-                    + "&destination=" + toLongitude + "," + toLatitude
-                    + (waypoints == null || waypoints.isBlank() ? "" : "&waypoints=" + waypoints)
-                    + "&extensions=all&strategy=0&key=" + amapKey;
-            String body = restTemplate.getForObject(url, String.class);
-            if (body == null || body.isBlank()) {
-                return null;
-            }
-            JsonNode root = OBJECT_MAPPER.readTree(body);
-            if (!"1".equals(root.path("status").asText())) {
-                log.debug("[road-polyline] 高德路径规划失败：status={} info={}",
-                        root.path("status").asText(), root.path("info").asText());
-                return null;
-            }
-            JsonNode paths = root.path("route").path("paths");
-            if (!paths.isArray() || paths.isEmpty()) {
-                return null;
-            }
-            List<double[]> points = new ArrayList<>();
-            appendPoint(points, fromLongitude, fromLatitude);
-            for (JsonNode step : paths.get(0).path("steps")) {
-                for (String segment : step.path("polyline").asText("").split(";")) {
-                    int comma = segment.indexOf(',');
-                    if (comma <= 0) {
-                        continue;
-                    }
-                    try {
-                        appendPoint(points, Double.parseDouble(segment.substring(0, comma).trim()),
-                                Double.parseDouble(segment.substring(comma + 1).trim()));
-                    } catch (NumberFormatException ignored) {
-                        // 单点解析失败不影响整条轨迹
-                    }
-                }
-            }
-            appendPoint(points, toLongitude, toLatitude);
-            return points.size() >= 2 ? points : null;
-        } catch (Exception ex) {
-            log.debug("[road-polyline] 高德路径规划异常：{}", ex.getMessage());
-            return null;
-        }
+        cache.put(cacheKey, new Cached(mergedRoute, now + CACHE_TTL_MS));
+        return mergedRoute;
     }
 
     /** 串行节流：个人 key QPS 低，连续分段请求之间留最小间隔 */

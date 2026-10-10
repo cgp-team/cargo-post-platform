@@ -1,14 +1,19 @@
 package cn.iocoder.yudao.module.transport.service.bigscreen;
 
+import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -64,6 +69,13 @@ public class DistrictGeometryService {
     private volatile List<DistrictEntry> entries;
     private volatile Map<String, Object> rawGeo;
     private volatile List<String> names;
+
+    /** 站点坐标来源（站点是小表且归属基本不变，「站点ID→区县」映射做成本地缓存） */
+    @Resource
+    private StationMapper stationMapper;
+
+    /** 站点ID → 所属区县名 的不可变快照缓存（不在任何区县内的站点不出现在 map 中）；null = 待构建 */
+    private volatile Map<Long, String> stationDistrictCache;
 
     @PostConstruct
     public void warmUp() {
@@ -172,5 +184,42 @@ public class DistrictGeometryService {
             load();
         }
         return rawGeo;
+    }
+
+    /**
+     * 站点ID → 所属区县名 映射（GCJ-02，不在任何区县内的站点不出现）。
+     * 懒构建一次后复用（站点是小表、归属基本不变），避免大屏每次请求对全部站点做射线法；
+     * 站点新增/坐标变更后由 {@link #invalidateStationDistrictCache()} 失效重建。
+     */
+    public Map<Long, String> stationDistrictMap() {
+        Map<Long, String> cached = stationDistrictCache;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            if (stationDistrictCache != null) {
+                return stationDistrictCache;
+            }
+            Map<Long, String> built = new HashMap<>();
+            if (stationMapper != null) {
+                for (StationDO s : stationMapper.selectList(null)) {
+                    if (s.getId() == null || s.getLongitude() == null || s.getLatitude() == null) {
+                        continue;
+                    }
+                    String district = findDistrict(s.getLongitude().doubleValue(), s.getLatitude().doubleValue());
+                    if (district != null) {
+                        built.put(s.getId(), district);
+                    }
+                }
+            }
+            stationDistrictCache = Collections.unmodifiableMap(built);
+            log.info("[DistrictGeometryService] 站点→区县映射缓存构建完成: {} 个站点", built.size());
+            return stationDistrictCache;
+        }
+    }
+
+    /** 站点新增/坐标变更后调用：站点→区县映射缓存失效，下次访问时重建 */
+    public void invalidateStationDistrictCache() {
+        stationDistrictCache = null;
     }
 }

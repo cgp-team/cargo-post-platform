@@ -22,6 +22,7 @@ import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum
 import cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum;
 import cn.iocoder.yudao.module.transport.service.notification.UserNotificationService;
 import cn.iocoder.yudao.module.transport.service.order.OrderEventService;
+import cn.iocoder.yudao.module.transport.util.TransactionAfterCommit;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -133,17 +134,30 @@ public class HandoverServiceImpl implements HandoverService {
         updateOrderStatus(orderId, TransportOrderStatusEnum.TRANSFERRING);
         orderEventService.record(orderId, TransportOrderEventTypeEnum.HANDOVER_REQUIRED,
                 "前序司机已到达换乘站，等待接收司机接货");
-        // 通知后序司机提前前往接驳（需求 §59/§83）
-        if (handover.getToDriverId() != null) {
-            userNotificationService.sendToDriver(handover.getToDriverId(),
-                    TransportOrderEventTypeEnum.HANDOVER_REQUIRED, NotificationLevelEnum.ACTION_REQUIRED, true,
-                    "联运接驳提醒",
-                    "前序司机已到达换乘站，请前往接货并确认接收",
-                    orderId, legFrom.getPlanId(), handover.getLegToId());
-        }
-        userNotificationService.sendToOrderUser(orderId, TransportOrderEventTypeEnum.HANDOVER_REQUIRED,
-                NotificationLevelEnum.INFO, false, "货物正在换乘交接",
-                "您的货物已到达换乘站，正在进行司机交接");
+        // 通知走事务提交后投递（BE-13 同款 TransactionAfterCommit）；单条失败只记日志，不影响主流程与其他通知
+        final Long notifyOrderId = orderId;
+        final Long notifyPlanId = legFrom.getPlanId();
+        final TransportHandoverDO notifyHandover = handover;
+        TransactionAfterCommit.run(() -> {
+            // 通知后序司机提前前往接驳（需求 §59/§83）
+            if (notifyHandover.getToDriverId() != null) {
+                try {
+                    userNotificationService.sendToDriver(notifyHandover.getToDriverId(),
+                            TransportOrderEventTypeEnum.HANDOVER_REQUIRED, NotificationLevelEnum.ACTION_REQUIRED, true,
+                            "联运接驳提醒", "前序司机已到达换乘站，请前往接货并确认接收",
+                            notifyOrderId, notifyPlanId, notifyHandover.getLegToId());
+                } catch (Exception ex) {
+                    log.warn("[markSourceArrived] 接驳司机通知发送失败（不影响主流程）: {}", ex.getMessage());
+                }
+            }
+            try {
+                userNotificationService.sendToOrderUser(notifyOrderId, TransportOrderEventTypeEnum.HANDOVER_REQUIRED,
+                        NotificationLevelEnum.INFO, false, "货物正在换乘交接",
+                        "您的货物已到达换乘站，正在进行司机交接");
+            } catch (Exception ex) {
+                log.warn("[markSourceArrived] 用户换乘通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+        });
         return handover.getId();
     }
 
@@ -209,6 +223,11 @@ public class HandoverServiceImpl implements HandoverService {
                 && !Objects.equals(toDriverId, handover.getFromDriverId())) {
             throw exception(HANDOVER_NOT_ASSIGNED);
         }
+        // 通知文案所需的司机/车牌/站点名在 CAS 状态推进前一次性预取（提交后回调里不再查库）
+        final Long effectiveToDriverId = handover.getToDriverId() != null ? handover.getToDriverId() : toDriverId;
+        final String fromLabel = partyLabel(handover.getFromDriverId(), handover.getFromVehicleId());
+        final String toLabel = partyLabel(effectiveToDriverId, handover.getToVehicleId());
+        final String stationLabel = stationName(handover.getStationId());
         LocalDateTime now = LocalDateTime.now();
         TransportHandoverDO update = new TransportHandoverDO();
         update.setId(handoverId);
@@ -242,15 +261,30 @@ public class HandoverServiceImpl implements HandoverService {
                 "换乘站货物交接已确认完成");
         // P2-K：换乘完成给用户发「已由 A（车牌A）在 XX 站交给 B（车牌B），继续派送」，
         // 带上真实司机/车牌/站点名，替代原来含糊的「下一辆运输车辆」。
-        userNotificationService.sendToOrderUser(handover.getOrderId(),
-                TransportOrderEventTypeEnum.HANDOVER_CONFIRMED, NotificationLevelEnum.SUCCESS, false,
-                "换乘完成", buildHandoverContent(handover));
-        if (handover.getToDriverId() != null) {
-            userNotificationService.sendToDriver(handover.getToDriverId(),
-                    TransportOrderEventTypeEnum.LEG_STARTED, NotificationLevelEnum.INFO, false,
-                    "交接完成，开始运输", "货物已接收，请按本段路线继续运输",
-                    handover.getOrderId(), handover.getPlanId(), handover.getLegToId());
-        }
+        // 通知走事务提交后投递；单条失败只记日志，不影响主流程与其他通知
+        final String content = buildHandoverContent(fromLabel, toLabel, stationLabel);
+        final Long notifyOrderId = handover.getOrderId();
+        final Long notifyPlanId = handover.getPlanId();
+        final Long notifyLegToId = handover.getLegToId();
+        TransactionAfterCommit.run(() -> {
+            try {
+                userNotificationService.sendToOrderUser(notifyOrderId,
+                        TransportOrderEventTypeEnum.HANDOVER_CONFIRMED, NotificationLevelEnum.SUCCESS, false,
+                        "换乘完成", content);
+            } catch (Exception ex) {
+                log.warn("[confirmHandover] 用户换乘完成通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+            if (effectiveToDriverId != null) {
+                try {
+                    userNotificationService.sendToDriver(effectiveToDriverId,
+                            TransportOrderEventTypeEnum.LEG_STARTED, NotificationLevelEnum.INFO, false,
+                            "交接完成，开始运输", "货物已接收，请按本段路线继续运输",
+                            notifyOrderId, notifyPlanId, notifyLegToId);
+                } catch (Exception ex) {
+                    log.warn("[confirmHandover] 接收司机通知发送失败（不影响主流程）: {}", ex.getMessage());
+                }
+            }
+        });
     }
 
     @Override
@@ -269,12 +303,24 @@ public class HandoverServiceImpl implements HandoverService {
         updateOrderStatus(handover.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
         orderEventService.record(handover.getOrderId(), TransportOrderEventTypeEnum.HANDOVER_DISPUTED,
                 "交接存在异常：" + (remark != null ? remark : "件数不符/货物破损"));
-        userNotificationService.sendToOrderUser(handover.getOrderId(),
-                TransportOrderEventTypeEnum.HANDOVER_DISPUTED, NotificationLevelEnum.WARNING, true,
-                "交接异常提醒", "货物交接存在异常，工作人员正在处理");
-        userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.HANDOVER_DISPUTED,
-                NotificationLevelEnum.WARNING, "交接异常",
-                "订单 " + handover.getOrderId() + " 交接异常：" + remark, handover.getOrderId(), handoverId);
+        // 通知走事务提交后投递；单条失败只记日志，不影响主流程与其他通知
+        final Long notifyOrderId = handover.getOrderId();
+        TransactionAfterCommit.run(() -> {
+            try {
+                userNotificationService.sendToOrderUser(notifyOrderId,
+                        TransportOrderEventTypeEnum.HANDOVER_DISPUTED, NotificationLevelEnum.WARNING, true,
+                        "交接异常提醒", "货物交接存在异常，工作人员正在处理");
+            } catch (Exception ex) {
+                log.warn("[disputeHandover] 用户异常通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+            try {
+                userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.HANDOVER_DISPUTED,
+                        NotificationLevelEnum.WARNING, "交接异常",
+                        "订单 " + notifyOrderId + " 交接异常：" + remark, notifyOrderId, handoverId);
+            } catch (Exception ex) {
+                log.warn("[disputeHandover] 管理端异常通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+        });
     }
 
     @Override
@@ -298,12 +344,24 @@ public class HandoverServiceImpl implements HandoverService {
         updateOrderStatus(handover.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
         orderEventService.record(handover.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
                 "换乘交接超时：" + (remark != null ? remark : "前序司机长时间未到达"));
-        userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
-                NotificationLevelEnum.EXCEPTION, "换乘交接超时",
-                "订单 " + handover.getOrderId() + " 换乘交接超时，需人工介入", handover.getOrderId(), handoverId);
-        userNotificationService.sendToOrderUser(handover.getOrderId(),
-                TransportOrderEventTypeEnum.ORDER_EXCEPTION, NotificationLevelEnum.WARNING, false,
-                "运输异常提醒", "您的货物换乘交接出现延迟，工作人员正在处理");
+        // 通知走事务提交后投递；单条失败只记日志，不影响主流程与其他通知
+        final Long notifyOrderId = handover.getOrderId();
+        TransactionAfterCommit.run(() -> {
+            try {
+                userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
+                        NotificationLevelEnum.EXCEPTION, "换乘交接超时",
+                        "订单 " + notifyOrderId + " 换乘交接超时，需人工介入", notifyOrderId, handoverId);
+            } catch (Exception ex) {
+                log.warn("[timeoutHandover] 管理端超时通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+            try {
+                userNotificationService.sendToOrderUser(notifyOrderId,
+                        TransportOrderEventTypeEnum.ORDER_EXCEPTION, NotificationLevelEnum.WARNING, false,
+                        "运输异常提醒", "您的货物换乘交接出现延迟，工作人员正在处理");
+            } catch (Exception ex) {
+                log.warn("[timeoutHandover] 用户超时通知发送失败（不影响主流程）: {}", ex.getMessage());
+            }
+        });
     }
 
     @Override
@@ -353,11 +411,11 @@ public class HandoverServiceImpl implements HandoverService {
 
     // ==================== 内部 ====================
 
-    /** P2-K：换乘完成通知文案——「已由 A（车牌A）在 XX 站交给 B（车牌B），继续派送」 */
-    private String buildHandoverContent(TransportHandoverDO handover) {
-        String from = partyLabel(handover.getFromDriverId(), handover.getFromVehicleId());
-        String to = partyLabel(handover.getToDriverId(), handover.getToVehicleId());
-        String station = stationName(handover.getStationId());
+    /**
+     * P2-K：换乘完成通知文案——「已由 A（车牌A）在 XX 站交给 B（车牌B），继续派送」。
+     * 文案要素（司机/车牌/站点名）由调用方在 CAS 状态推进前一次性预取传入，本方法不查库。
+     */
+    private String buildHandoverContent(String from, String to, String station) {
         StringBuilder sb = new StringBuilder("您的货物");
         if (from != null) {
             sb.append("已由 ").append(from);

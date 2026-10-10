@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,6 +34,7 @@ from .models import (
     RouteResponse,
     Station,
 )
+from .routing.coordinate import to_gcj02_polyline, to_wgs84
 from .solver import solve
 from .dispatch_opt.runtime import DispatchAllocatePayload, allocate_dispatch
 
@@ -55,6 +57,11 @@ IDEMPOTENCY_TTL_SECONDS = 24 * 3600
 # 契约 10 秒计算超时（docs/api/algorithm-api.yaml）：超时后转异步轮询 /api/v1/result/{requestId}
 SOLVE_TIMEOUT_SECONDS = 10.0
 
+# /api/v1/dispatch/allocate：同步端点超时保护（无轮询通道，超时直接返回明确错误）；
+# 候选评估预算略小于端点超时，给序列化/兜底留余量
+ALLOCATE_TIMEOUT_SECONDS = 15.0
+ALLOCATE_EVAL_BUDGET_SECONDS = 12.0
+
 # 进程内任务记录上限：防长时间运行 jobs 字典内存单调增长（超出后按创建时间淘汰最旧）
 MAX_JOBS = 1000
 
@@ -75,6 +82,58 @@ jobs: dict[str, JobRecord] = {}
 
 # 高德路网距离：配置 AMAP_KEY 即启用（进程内站点级缓存随实例存活）；未配置走欧氏直线
 amap_provider = AmapDistanceProvider.from_env()
+
+# tier-2 本机路网：GraphHopper + 重庆 OSM（WGS-84）。坐标只经 coordinate 边界换算，禁止手写偏移。
+GH_PROFILE = os.environ.get("GRAPHHOPPER_PROFILE", "bus")
+_graphhopper_engine = None
+
+
+def _graphhopper():
+    """按环境变量惰性建 GraphHopper 引擎；未配置 GRAPHHOPPER_URL 时返回 None。"""
+    global _graphhopper_engine
+    if _graphhopper_engine is not None:
+        return _graphhopper_engine
+    base = os.environ.get("GRAPHHOPPER_URL", "").strip()
+    if not base:
+        return None
+    from .routing.graphhopper_routing import GraphHopperRoutingEngine, LocalRoutingConfig
+
+    cfg = LocalRoutingConfig(
+        graphhopper_base_url=base,
+        graphhopper_timeout_ms=int(os.environ.get("GRAPHHOPPER_TIMEOUT_MS", "4000")),
+        graph_version=os.environ.get("GRAPH_VERSION", "osm-chongqing"),
+    )
+    _graphhopper_engine = GraphHopperRoutingEngine(cfg)
+    return _graphhopper_engine
+
+
+def real_road_route(origin: Station, destination: Station) -> RouteResult:
+    """真实道路路线链：高德路网 → 本机 GraphHopper(OSM) → available=false。
+
+    这里不产生直线/Euclidean 几何：司机导航与实时公交拿到的 polyline 要么是真实道路，
+    要么明确不可用 —— 宁可没有路线，不允许假路线。
+    （直线估算仍可用于 `/distance` 的报价预估，那条链路不输出 polyline。）
+    """
+    # 起终点同一个点：0 公里是事实而不是编造的路网，但它没有"道路几何"可画（polyline 留空）
+    if origin.longitude == destination.longitude and origin.latitude == destination.latitude:
+        return RouteResult(available=True, distanceKm=0.0, durationSeconds=0.0, provider="same_point")
+    if amap_provider is not None:
+        result = amap_provider.get_route_with_polyline(origin, destination)
+        if result.available and result.provider == "amap" and result.polyline:
+            return result
+    engine = _graphhopper()
+    if engine is not None:
+        origin_wgs = to_wgs84((origin.latitude, origin.longitude))
+        destination_wgs = to_wgs84((destination.latitude, destination.longitude))
+        geometry = engine.route(origin_wgs, destination_wgs, profile=GH_PROFILE)
+        if geometry.available and geometry.polyline:
+            points = [
+                RoutePoint(longitude=lon, latitude=lat)
+                for lat, lon in to_gcj02_polyline(geometry.polyline)
+            ]
+            return RouteResult(available=True, distanceKm=round(geometry.distance_m / 1000.0, 3),
+                               durationSeconds=geometry.duration_s, provider="graphhopper", polyline=points)
+    return RouteResult(available=False, distanceKm=None, durationSeconds=None, provider="unavailable")
 
 
 @app.exception_handler(HTTPException)
@@ -356,39 +415,50 @@ def get_distance(request: DistanceRequest):
     },
 )
 def get_route(request: RouteRequest):
-    """坐标 → 坐标单路线查询（实时公交 ETA：车辆位置 → 下一站）。
+    """坐标 → 坐标单路线查询（实时公交 ETA / 司机导航：车辆位置 → 下一站）。
 
-    复用 AmapDistanceProvider.get_route（与派单/寄货同一套高德路网实现，不重复实现 HTTP）。
-    未配置 AMAP_KEY / 高德失败 → euclidean 直线估算（provider 明确标注）；明确不可达 → available=false。
+    来源链：高德驾车路网 → 本机 GraphHopper(OSM, WGS-84 换算回 GCJ-02) → available=false。
+    不再输出 euclidean：这条接口带 polyline，直线两点会被前端画成一条不存在的路。
     """
     origin = Station(stationId="origin", longitude=request.origin.longitude, latitude=request.origin.latitude)
     destination = Station(stationId="destination",
                           longitude=request.destination.longitude, latitude=request.destination.latitude)
-    if amap_provider is not None:
-        # 含真实道路 polyline（Phase 6 RoadSegment）；失败/超时/未配 key 均回退直线（provider 明确标注）
-        result = amap_provider.get_route_with_polyline(origin, destination)
-    else:
-        km = haversine_km(origin.longitude, origin.latitude, destination.longitude, destination.latitude)
-        seconds = round(km / EUCLIDEAN_AVG_SPEED_KMH * 3600)
-        result = RouteResult(available=True, distanceKm=round(km, 2), durationSeconds=seconds, provider="euclidean",
-                             polyline=[RoutePoint(longitude=origin.longitude, latitude=origin.latitude),
-                                       RoutePoint(longitude=destination.longitude, latitude=destination.latitude)])
+    result = real_road_route(origin, destination)
     if not result.available:
-        return RouteResponse(available=False, provider="amap", reasonCode="ROUTE_UNAVAILABLE")
+        # 明确不可用：provider 不再谎报 amap，前端据 reasonCode 显示"暂无真实路线"
+        return RouteResponse(available=False, provider="unavailable", reasonCode="REAL_ROAD_UNAVAILABLE")
     return RouteResponse(available=True, distanceKm=result.distanceKm,
                          durationSeconds=result.durationSeconds, provider=result.provider,
                          polyline=result.polyline)
 
 
 @app.post("/api/v1/dispatch/allocate", response_model=None)
-def dispatch_allocate(payload: DispatchAllocatePayload) -> dict:
+async def dispatch_allocate(payload: DispatchAllocatePayload) -> dict:
     """新订单动态调度唯一主入口：Candidate → Reachability → TripLock → MarginalCost
     → Passenger/SLA → Economic Admission → Compare → DispatchPlan → Decision Trace.
 
     正式路由成本由 RouteCostProvider 给出；拿不到正式真实道路时显式返回 UNKNOWN，
     不会用直线距离冒充正式成本。
     """
-    return allocate_dispatch(payload)
+    try:
+        # 参照 /api/v1/plan：线程池求解 + wait_for 超时保护；
+        # 候选评估侧另有 ALLOCATE_EVAL_BUDGET_SECONDS 预算，耗尽即降级
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                allocate_dispatch, payload, time_budget_s=ALLOCATE_EVAL_BUDGET_SECONDS
+            ),
+            timeout=ALLOCATE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("动态调度超时 orderId=%s", payload.order.orderId)
+        return error_response(
+            408, "ALLOCATE_TIMEOUT",
+            f"动态调度求解超时（{ALLOCATE_TIMEOUT_SECONDS:.0f}s），请重试或转人工调度",
+            payload.order.orderId,
+        )
+    except Exception as exc:
+        logger.exception("动态调度异常 orderId=%s", payload.order.orderId)
+        return error_response(500, "ALGORITHM_INTERNAL_ERROR", f"动态调度失败：{exc}", payload.order.orderId)
 
 
 @app.get(

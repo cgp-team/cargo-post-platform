@@ -48,6 +48,7 @@ import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 
+import cn.iocoder.yudao.module.transport.service.geo.RealRoadProviders;
 import cn.iocoder.yudao.module.transport.service.geo.RouteCorridorService;
 
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
@@ -191,15 +192,23 @@ public class MultiLegServiceImpl implements MultiLegService {
 
     @Override
 
-    // REQUIRES_NEW：调用方 DispatchServiceImpl.createSmartPlan 会吞掉段规划异常（多段是增强能力，
-
-    // 不该让整单调度失败）。若参与外层事务，异常会把共享事务标记 rollback-only，导致外层提交时
-
-    // 抛 UnexpectedRollbackException；独立事务可保证"段规划失败只回滚自己，不影响已生成的直达方案"。
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-
     public List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId) {
+
+        return planLegs(orderId, planId, planVehicleId, planDriverId, null);
+
+    }
+
+
+
+    @Override
+
+    // 事务瘦身：读取 + 纯规划计算（站点/线路站点全表按批预取、MultiLegPlanner.plan、车辆分配与冲突避让）
+
+    // 都在事务外；只有「作废旧方案未执行段 + insert 本方案段 + 事件」进 REQUIRES_NEW 事务（persistPlannedLegs）。
+
+    public List<TransportLegDO> planLegs(Long orderId, Long planId, Long planVehicleId, Long planDriverId,
+
+                                         PlanningContext context) {
 
         TransportOrderDO order = orderMapper.selectById(orderId);
 
@@ -225,10 +234,10 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        // 本方案还没有该订单的段：先作废该订单在「其它方案」下尚未开始执行的段，
-        // 避免同时存在两套有效段（旧段会被查询/司机端误用）。货物已在途（段已开始执行）时不重复拆段。
+        // 规划前的只读预检：货物已在「其它方案」下开始执行（在途）时直接跳过，不空跑规划。
+        // 真正的作废与并发守卫由落库事务内的 voidStaleLegsOfOtherPlans 再执行一次（以事务内读为准）。
 
-        if (planId != null && !voidStaleLegsOfOtherPlans(orderId, planId)) {
+        if (planId != null && hasExecutingLegsOfOtherPlans(orderId, planId)) {
 
             return List.of();
 
@@ -244,9 +253,13 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
+        // 规划上下文（站点全表 + 可用于调度的线路站点）：调用方按批预取传入；未传时本单自行加载一次
+
+        PlanningContext ctx = context != null ? context : loadPlanningContext();
+
         MultiLegPlanner.PlanResult result = multiLegPlanner.plan(order, pickup, delivery,
 
-                stationMapper.selectList(), routeStationsForPlanning());
+                ctx.stations(), ctx.routeStations());
 
 
 
@@ -312,6 +325,72 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
+        // ===== 事务内（REQUIRES_NEW）：只作废旧方案未执行段 + insert 本方案段 + 事件 =====
+
+        try {
+
+            return (self != null ? self : this).persistPlannedLegs(orderId, planId, legs, result);
+
+        } catch (org.springframework.dao.DuplicateKeyException dup) {
+
+            // V027 唯一键兜底（uk_leg_plan_order_seq）：并发重复拆段撞键，本次落库事务已回滚，
+
+            // 重查复用并发事务已写入的段（幂等维度仍是「方案」）
+
+            log.info("[planLegs] 订单 {} 方案 {} 并发重复规划，命中唯一键，重查复用已落库的段", orderId, planId);
+
+            List<TransportLegDO> concurrent = planId != null
+
+                    ? legMapper.selectListByPlanIdAndOrderId(planId, orderId)
+
+                    : legMapper.selectListByOrderId(orderId);
+
+            if (!concurrent.isEmpty()) {
+
+                return concurrent;
+
+            }
+
+            throw dup;
+
+        }
+
+
+
+    }
+
+
+
+    /**
+
+     * REQUIRES_NEW 落库段（由 planLegs 经自代理调用）。
+
+     * 调用方 DispatchServiceImpl.createSmartPlan 会吞掉段规划异常（多段是增强能力，不该让整单调度失败）：
+
+     * 若参与外层事务，异常会把共享事务标记 rollback-only，导致外层提交时抛 UnexpectedRollbackException；
+
+     * 独立事务可保证"段落库失败只回滚自己，不影响已生成的直达方案"。
+
+     * 事务内只做「作废旧方案未执行段 + insert 本方案段 + 事件」，纯规划计算已在事务外完成。
+
+     */
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+
+    public List<TransportLegDO> persistPlannedLegs(Long orderId, Long planId, List<TransportLegDO> legs,
+
+                                                   MultiLegPlanner.PlanResult result) {
+
+        // 本方案还没有该订单的段：先作废该订单在「其它方案」下尚未开始执行的段，
+
+        // 避免同时存在两套有效段（旧段会被查询/司机端误用）。货物已在途（段已开始执行）时不重复拆段。
+
+        if (planId != null && !voidStaleLegsOfOtherPlans(orderId, planId)) {
+
+            return List.of();
+
+        }
+
         for (TransportLegDO leg : legs) {
 
             legMapper.insert(leg);
@@ -334,8 +413,37 @@ public class MultiLegServiceImpl implements MultiLegService {
         // BE-14：提交后补全真实道路并回写段记录
         enrichLegsAfterCommit(legs);
 
-
         return legs;
+
+    }
+
+
+
+    @Override
+
+    public PlanningContext loadPlanningContext() {
+
+        // 规划所需的两张全表（站点 + 可用于调度的线路站点）：按批预取一次，供同批多单复用
+
+        return new PlanningContext(stationMapper.selectList(), routeStationsForPlanning());
+
+    }
+
+
+
+    /** 规划前只读预检：该订单在「其它方案」下是否已有开始执行的段（在途货物不为新方案重复拆段） */
+
+    private boolean hasExecutingLegsOfOtherPlans(Long orderId, Long planId) {
+
+        return legMapper.selectListByOrderId(orderId).stream()
+
+                .anyMatch(l -> !Objects.equals(l.getPlanId(), planId)
+
+                        && !Objects.equals(l.getStatus(), TransportLegStatusEnum.COMPLETED.getStatus())
+
+                        && !Objects.equals(l.getStatus(), TransportLegStatusEnum.EXCEPTION.getStatus())
+
+                        && l.getStatus() != null && l.getStatus() > TransportLegStatusEnum.DRIVER_ACCEPTED.getStatus());
 
     }
 
@@ -546,7 +654,11 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         .collect(java.util.stream.Collectors.joining(";")));
 
-                leg.setNavigationSource("amap".equalsIgnoreCase(route.getProvider()) ? "AMAP" : "ESTIMATED");
+                // 来源如实记录：AMAP / OSM_GRAPHHOPPER 都是真实路网（界面按白名单渲染），
+                // 只有白名单外的来源才退回 ESTIMATED（宁可少画，不把估算说成路网）
+                String roadLabel = RealRoadProviders.labelOf(route.getProvider());
+
+                leg.setNavigationSource(roadLabel != null ? roadLabel : "ESTIMATED");
 
                 if (route.getDistanceKm() != null) {
 
@@ -774,6 +886,22 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                 ? List.of() : driverVehicleMapper.selectActiveBindings();
 
+        // 冲突候选一次批量预取（本段窗口 × 候选车辆/司机集合），循环内判定走内存，不再每绑定 2 次 SQL
+
+        LegConflictService.ConflictSnapshot conflictSnapshot = legConflictService == null ? null
+
+                : legConflictService.preloadConflicts(
+
+                        bindings.stream().map(DriverVehicleDO::getVehicleId).filter(Objects::nonNull)
+
+                                .collect(java.util.stream.Collectors.toSet()),
+
+                        bindings.stream().map(DriverVehicleDO::getDriverId).filter(Objects::nonNull)
+
+                                .collect(java.util.stream.Collectors.toSet()),
+
+                        leg.getEstimatedDeparture(), leg.getEstimatedArrival());
+
         DriverVehicleDO chosen = null;
 
         for (DriverVehicleDO binding : bindings) {
@@ -790,11 +918,13 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             boolean conflict = legConflictService != null && (legConflictService.vehicleConflicts(
 
-                    binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), List.of(), legId)
+                    binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), List.of(), legId,
+
+                    conflictSnapshot)
 
                     || legConflictService.driverConflicts(binding.getDriverId(), leg.getEstimatedDeparture(),
 
-                    leg.getEstimatedArrival(), List.of(), legId));
+                    leg.getEstimatedArrival(), List.of(), legId, conflictSnapshot));
 
             if (!conflict) {
 
@@ -1241,6 +1371,12 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
+        // 冲突候选一次批量预取（全部候选车辆/司机 × 本订单各段时间窗的超集），
+
+        // pickBinding 循环内的车辆/司机时段判定全部走内存过滤（修复每绑定 2 次 SQL 的查询爆炸）
+
+        LegConflictService.ConflictSnapshot conflictSnapshot = preloadConflictSnapshot(bindings, legs);
+
         List<TransportLegDO> assigned = new ArrayList<>();
 
         for (int i = 0; i < legs.size(); i++) {
@@ -1297,11 +1433,15 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                             .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
 
-                    DriverVehicleDO scoped = pickBinding(bindings, leg, assigned, inScopeUsed, true, true, true);
+                    DriverVehicleDO scoped = pickBinding(bindings, leg, assigned, inScopeUsed, true, true, true,
+
+                            conflictSnapshot);
 
                     if (scoped == null) {
 
-                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, true);
+                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, true,
+
+                                conflictSnapshot);
 
                     }
 
@@ -1311,7 +1451,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                         // 也不让车脱离基本线路（例如自建线 R104 覆盖 小龙坎→重邮，渝A 车并不覆盖）。
 
-                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, false);
+                        scoped = pickBinding(bindings, leg, assigned, inScopeUsed, false, true, false,
+
+                                conflictSnapshot);
 
                     }
 
@@ -1361,11 +1503,11 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                     .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
 
-            DriverVehicleDO chosen = pickBinding(bindings, leg, assigned, usedVehicles, true);
+            DriverVehicleDO chosen = pickBinding(bindings, leg, assigned, usedVehicles, true, conflictSnapshot);
 
             if (chosen == null) {
 
-                chosen = pickBinding(bindings, leg, assigned, usedVehicles, false);
+                chosen = pickBinding(bindings, leg, assigned, usedVehicles, false, conflictSnapshot);
 
             }
 
@@ -1393,13 +1535,53 @@ public class MultiLegServiceImpl implements MultiLegService {
 
 
 
+    /** 汇总候选绑定的车辆/司机集合与各段「最早出发 ~ 最晚到达」时间窗，做一次冲突候选批量预取（循环外一次） */
+
+    private LegConflictService.ConflictSnapshot preloadConflictSnapshot(List<DriverVehicleDO> bindings,
+
+                                                                        List<TransportLegDO> legs) {
+
+        if (legConflictService == null) {
+
+            return null;
+
+        }
+
+        java.util.Set<Long> vehicleIds = bindings.stream().map(DriverVehicleDO::getVehicleId)
+
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+
+        java.util.Set<Long> driverIds = bindings.stream().map(DriverVehicleDO::getDriverId)
+
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+
+        LocalDateTime windowStart = legs == null ? null : legs.stream().map(TransportLegDO::getEstimatedDeparture)
+
+                .filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(null);
+
+        LocalDateTime windowEnd = legs == null ? null : legs.stream().map(TransportLegDO::getEstimatedArrival)
+
+                .filter(Objects::nonNull).max(LocalDateTime::compareTo).orElse(null);
+
+        // 任一端缺失（段尚未排定预计时间）：不带时间窗预取，与逐次查询的「无时间条件」口径一致
+
+        LocalDateTime start = windowStart != null && windowEnd != null ? windowStart : null;
+
+        LocalDateTime end = windowStart != null && windowEnd != null ? windowEnd : null;
+
+        return legConflictService.preloadConflicts(vehicleIds, driverIds, start, end);
+
+    }
+
+
+
     /** 选一个可用绑定；strictUnused=true 时跳过本方案已用车辆（保证相邻段不同车） */
 
     private DriverVehicleDO pickBinding(List<DriverVehicleDO> bindings, TransportLegDO leg,
 
                                         List<TransportLegDO> assigned, java.util.Set<Long> usedVehicles,
 
-                                        boolean strictUnused) {
+                                        boolean strictUnused, LegConflictService.ConflictSnapshot conflictSnapshot) {
 
         // 分工优先级（业务约定）：
         //   1) 同体系 + 运营线路覆盖本段起终点（自建段用自建车、真实段用渝A车，且车不越界）
@@ -1408,7 +1590,9 @@ public class MultiLegServiceImpl implements MultiLegService {
         //      347 区间车，车就会离开自己的线路 9km）
         //   3) 同体系（体系不能混：CQUPT 车不跑真实线路、渝A 车不跑自建线路）
         //   4) 全量兜底（保证任何情况下都有人可派，不因新规则卡死）
-        DriverVehicleDO inScope = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, true);
+        DriverVehicleDO inScope = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, true,
+
+                conflictSnapshot);
 
         if (inScope != null) {
 
@@ -1416,7 +1600,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        DriverVehicleDO inScopeAnySystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false);
+        DriverVehicleDO inScopeAnySystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false,
+
+                conflictSnapshot);
 
         if (inScopeAnySystem != null) {
 
@@ -1424,7 +1610,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        DriverVehicleDO sameSystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, true);
+        DriverVehicleDO sameSystem = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, true,
+
+                conflictSnapshot);
 
         if (sameSystem != null) {
 
@@ -1432,7 +1620,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        DriverVehicleDO scopedOnly = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false);
+        DriverVehicleDO scopedOnly = pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, true, false,
+
+                conflictSnapshot);
 
         if (scopedOnly != null) {
 
@@ -1440,7 +1630,7 @@ public class MultiLegServiceImpl implements MultiLegService {
 
         }
 
-        return pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, false);
+        return pickBinding(bindings, leg, assigned, usedVehicles, strictUnused, false, false, conflictSnapshot);
 
     }
 
@@ -1450,7 +1640,9 @@ public class MultiLegServiceImpl implements MultiLegService {
 
                                         List<TransportLegDO> assigned, java.util.Set<Long> usedVehicles,
 
-                                        boolean strictUnused, boolean requireInScope, boolean requireSameSystem) {
+                                        boolean strictUnused, boolean requireInScope, boolean requireSameSystem,
+
+                                        LegConflictService.ConflictSnapshot conflictSnapshot) {
 
         boolean legSelfBuilt = legIsSelfBuilt(leg);
 
@@ -1481,11 +1673,13 @@ public class MultiLegServiceImpl implements MultiLegService {
 
             boolean conflict = legConflictService != null && (legConflictService.vehicleConflicts(
 
-                    binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), assigned, null)
+                    binding.getVehicleId(), leg.getEstimatedDeparture(), leg.getEstimatedArrival(), assigned, null,
+
+                    conflictSnapshot)
 
                     || legConflictService.driverConflicts(binding.getDriverId(), leg.getEstimatedDeparture(),
 
-                    leg.getEstimatedArrival(), assigned, null));
+                    leg.getEstimatedArrival(), assigned, null, conflictSnapshot));
 
             if (!conflict) {
 
