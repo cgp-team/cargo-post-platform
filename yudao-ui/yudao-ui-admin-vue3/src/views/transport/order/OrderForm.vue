@@ -152,7 +152,7 @@ const validateTimeWindow = (_rule: any, value: any, callback: any) => {
   callback()
 }
 
-const formRules = reactive({
+const baseRules = {
   orderType: [{ required: true, message: '请选择订单类型', trigger: 'change' }],
   pickupStationId: [{ required: true, message: '请选择取货站点', trigger: 'change' }],
   deliveryStationId: [
@@ -169,6 +169,24 @@ const formRules = reactive({
   cargoVolumeM3: [{ type: 'number', min: 0, message: '体积需为不小于 0 的数字', trigger: 'blur' }],
   postalItemCount: [{ type: 'number', min: 1, message: '件数至少为 1', trigger: 'blur' }],
   postalWeightKg: [{ type: 'number', min: 0, message: '重量需为不小于 0 的数字', trigger: 'blur' }],
+}
+
+// 子表必填规则按订单类型动态挂载：隐藏的子表字段不参与必填校验
+const formRules = computed(() => {
+  const rules: Record<string, any[]> = { ...baseRules }
+  if (formData.value.orderType === 1) {
+    rules.contactName = [{ required: true, message: '请输入联系人', trigger: 'blur' }]
+    rules.contactMobile = [
+      { required: true, message: '请输入联系电话', trigger: 'blur' },
+      { pattern: MOBILE_PATTERN, message: '请输入正确的 11 位手机号', trigger: 'blur' }
+    ]
+  } else if (formData.value.orderType === 2) {
+    rules.cargoCategory = [{ required: true, message: '请输入货物类别', trigger: 'blur' }]
+  } else if (formData.value.orderType === 3) {
+    rules.receiverName = [{ required: true, message: '请输入收件人姓名', trigger: 'blur' }]
+    rules.receiverAddress = [{ required: true, message: '请输入收件地址', trigger: 'blur' }]
+  }
+  return rules
 })
 
 const resetForm = () => {
@@ -183,11 +201,31 @@ const resetForm = () => {
   formRef.value?.resetFields()
 }
 
-const onOrderTypeChange = () => {
-  // Clear sub-form data when order type changes
+// 切换订单类型时清空其它类型的子表字段，避免残留数据被一并提交
+const onOrderTypeChange = (type: number) => {
+  if (type === 1) {
+    Object.assign(formData.value, {
+      cargoCategory: '', freshFlag: false, cargoItemCount: null, cargoWeightKg: null, cargoVolumeM3: null,
+      mailNo: '', carrierCode: '', postalItemCount: null, postalWeightKg: null,
+      receiverName: '', receiverMobile: '', receiverAddress: ''
+    })
+  } else {
+    Object.assign(formData.value, { passengerCount: null, contactName: '', contactMobile: '' })
+    if (type === 2) {
+      Object.assign(formData.value, {
+        mailNo: '', carrierCode: '', postalItemCount: null, postalWeightKg: null,
+        receiverName: '', receiverMobile: '', receiverAddress: ''
+      })
+    } else if (type === 3) {
+      Object.assign(formData.value, {
+        cargoCategory: '', freshFlag: false, cargoItemCount: null, cargoWeightKg: null, cargoVolumeM3: null
+      })
+    }
+  }
+  formRef.value?.clearValidate()
 }
 
-const open = (type: string, id?: number) => {
+const open = async (type: string, id?: number) => {
   dialogVisible.value = true
   dialogTitle.value = type === 'create' ? '新增订单' : '编辑订单'
   formType.value = type
@@ -195,7 +233,12 @@ const open = (type: string, id?: number) => {
   loadStationList()
   if (id) {
     formLoading.value = true
-    OrderApi.getOrder(id).then((data) => { formData.value = { ...formData.value, ...data }; formLoading.value = false })
+    try {
+      const data = await OrderApi.getOrder(id)
+      formData.value = { ...formData.value, ...data }
+    } finally {
+      formLoading.value = false
+    }
   }
 }
 
@@ -206,7 +249,7 @@ const loadStationList = async () => {
 defineExpose({ open })
 
 const submitForm = async () => {
-  const valid = await formRef.value?.validate()
+  const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   formLoading.value = true
   try {

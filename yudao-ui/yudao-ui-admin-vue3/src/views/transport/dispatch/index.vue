@@ -719,7 +719,7 @@ const openManual = () => {
   manualVisible.value = true
 }
 const submitManual = async () => {
-  const valid = await manualFormRef.value?.validate()
+  const valid = await manualFormRef.value?.validate().catch(() => false)
   if (!valid) return
   // 二次确认：派单一经生成就会占用车辆并推进订单到「已分配」，撤销要逐单回池
   try {
@@ -966,7 +966,7 @@ const openReview = (row: DispatchApi.DispatchPlanVO) => {
   reviewVisible.value = true
 }
 const submitReview = async () => {
-  const valid = await reviewFormRef.value?.validate()
+  const valid = await reviewFormRef.value?.validate().catch(() => false)
   if (!valid) return
   reviewLoading.value = true
   try {
@@ -1013,7 +1013,7 @@ const openCheck = async (row: DispatchApi.DispatchPlanVO) => {
   }
 }
 const submitCheck = async () => {
-  const valid = await checkFormRef.value?.validate()
+  const valid = await checkFormRef.value?.validate().catch(() => false)
   if (!valid) return
   checkLoading.value = true
   try {
