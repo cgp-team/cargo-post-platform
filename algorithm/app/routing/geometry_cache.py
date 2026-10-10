@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import time
 from dataclasses import dataclass
@@ -49,7 +50,7 @@ class CacheEntry:
 
 
 class GeometryCache:
-    def __init__(self, *, ttl_s: float = 300.0, failure_ttl_s: float = 30.0, max_size: int = 2048):
+    def __init__(self, *, ttl_s: float = 3600.0, failure_ttl_s: float = 30.0, max_size: int = 2048):
         self.ttl_s = ttl_s
         self.failure_ttl_s = failure_ttl_s
         self.max_size = max_size
@@ -68,8 +69,8 @@ class GeometryCache:
             self.misses += 1
             return None
         self.hits += 1
-        entry.result.cache_hit = True
-        return entry.result
+        # 返回副本：调用方拿到的 cache_hit=True 不污染缓存内共享对象
+        return dataclasses.replace(entry.result, cache_hit=True)
 
     def put(self, key: str, result: RouteGeometryResult, *, now: float | None = None, force: bool = False) -> None:
         now = time.time() if now is None else now

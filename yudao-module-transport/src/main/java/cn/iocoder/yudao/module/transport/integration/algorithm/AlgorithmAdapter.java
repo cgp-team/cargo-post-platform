@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -76,7 +77,40 @@ public class AlgorithmAdapter {
                 .requestJson(writeJson(request))
                 .status(AlgorithmRequestStatusEnum.PROCESSING.getStatus())
                 .build();
-        algorithmRequestMapper.insert(record);
+        try {
+            algorithmRequestMapper.insert(record);
+        } catch (DuplicateKeyException dup) {
+            // V027 唯一键兜底：并发同快照请求撞 uk_algorithm_request_snapshot —— 重查走复用路径
+            AlgorithmRequestDO concurrent = algorithmRequestMapper.selectRecentBySnapshotHash(snapshotHash,
+                    LocalDateTime.now().minus(properties.getIdempotencyWindow()));
+            if (concurrent != null && concurrent.getResponseJson() != null) {
+                log.info("[plan][快照 {} 撞唯一键后命中幂等记录 requestId={}]", snapshotHash, concurrent.getRequestId());
+                AlgorithmPlanRespDTO cached = readJson(concurrent.getResponseJson(), AlgorithmPlanRespDTO.class);
+                cached.setCached(true);
+                return cached;
+            }
+            if (concurrent != null && AlgorithmRequestStatusEnum.PROCESSING.getStatus().equals(concurrent.getStatus())) {
+                log.info("[plan][快照 {} 撞唯一键后命中进行中记录 requestId={}，复用等待同一算法任务]",
+                        snapshotHash, concurrent.getRequestId());
+                request.setRequestId(concurrent.getRequestId());
+                return executeAndComplete(request, concurrent);
+            }
+            // 幂等窗口外的历史记录（或 FAILED 记录）占用唯一键：原地重置该行复用，不再新增行
+            AlgorithmRequestDO stale = algorithmRequestMapper.selectLatestBySnapshotHash(snapshotHash);
+            if (stale == null) {
+                throw dup;
+            }
+            stale.setRequestId(record.getRequestId());
+            stale.setRequestJson(record.getRequestJson());
+            stale.setStatus(AlgorithmRequestStatusEnum.PROCESSING.getStatus());
+            stale.setResponseJson(null);
+            stale.setErrorCode(null);
+            stale.setErrorMessage(null);
+            stale.setAlgorithmVersion(null);
+            stale.setParameterVersion(null);
+            algorithmRequestMapper.updateById(stale);
+            record = stale;
+        }
         return executeAndComplete(request, record);
     }
 

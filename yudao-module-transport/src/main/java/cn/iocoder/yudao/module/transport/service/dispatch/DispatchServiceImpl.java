@@ -966,13 +966,16 @@ public class DispatchServiceImpl implements DispatchService {
                     + " 单，已自动交多段联运（MultiLeg）拆段接力，不整批失败");
         }
 
+        // 多段规划上下文（站点/线路站点两张全表）按批预取一次，整批订单共用，避免每单两次全表查询
+        MultiLegService.PlanningContext multilegContext = pooledIds.isEmpty() || multiLegService == null
+                ? null : multiLegService.loadPlanningContext();
         for (Long orderId : pooledIds) {
             try {
                 Long[] plannedVehicle = orderVehicleMap.get(orderId);
                 boolean relay = plannedVehicle == null;
                 allLegs.addAll(multiLegService.planLegs(orderId, plan.getId(),
                         plannedVehicle != null ? plannedVehicle[0] : null,
-                        plannedVehicle != null ? plannedVehicle[1] : null));
+                        plannedVehicle != null ? plannedVehicle[1] : null, multilegContext));
                 MultiLegPlanner.PlanResult preview = multiLegService.preview(orderId);
                 if (!reasons.contains(preview.reason())) {
                     reasons.add((relay ? "[多段接力] " : "") + preview.reason());
@@ -1172,31 +1175,11 @@ public class DispatchServiceImpl implements DispatchService {
 
     private Set<Long> busyVehicleIds() {
 
-        List<DispatchPlanDO> activePlans = dispatchPlanMapper.selectList(new LambdaQueryWrapperX<DispatchPlanDO>()
-
-                .in(DispatchPlanDO::getStatus, DispatchPlanStatusEnum.PENDING.getStatus(),
-
-                        DispatchPlanStatusEnum.ISSUED.getStatus(), DispatchPlanStatusEnum.RUNNING.getStatus()));
-
-        Set<Long> planIds = activePlans.stream().map(DispatchPlanDO::getId)
-
-                .filter(Objects::nonNull).collect(Collectors.toSet());
-
-        if (planIds.isEmpty()) {
-
-            return Set.of();
-
-        }
-
-        return dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
-
-                        .in(DispatchPlanItemDO::getPlanId, planIds)).stream()
-
-                .map(DispatchPlanItemDO::getVehicleId)
-
-                .filter(Objects::nonNull)
-
-                .collect(Collectors.toSet());
+        // 一条 SQL（DISTINCT vehicle_id + 在途方案子查询）替代「先查方案再查明细」两次往返与明细全量载入
+        return new HashSet<>(dispatchPlanItemMapper.selectBusyVehicleIds(List.of(
+                DispatchPlanStatusEnum.PENDING.getStatus(),
+                DispatchPlanStatusEnum.ISSUED.getStatus(),
+                DispatchPlanStatusEnum.RUNNING.getStatus())));
 
     }
 

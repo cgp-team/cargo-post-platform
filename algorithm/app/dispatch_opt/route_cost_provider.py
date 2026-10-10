@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, Sequence
@@ -353,18 +354,30 @@ class MapEngineRouteCostProvider:
 
 
 class CachedRealRouteProvider:
-    """只读缓存 provider：命中 formal 缓存即返回 `CACHED_REAL`，否则委托底层 provider。"""
+    """只读缓存 provider：命中 formal 缓存即返回 `CACHED_REAL`，否则委托底层 provider。
 
-    def __init__(self, base: RouteCostProvider | None = None):
+    缓存为 LRU（OrderedDict 实现，上限 max_entries 条），键含坐标序列 + route_type +
+    graph_version（可获取时），防止跨图版本/跨 route_type 误命中与内存无界增长。
+    """
+
+    def __init__(self, base: RouteCostProvider | None = None, *, max_entries: int = 10000):
         self.base = base or MapEngineRouteCostProvider()
-        self._cache: dict[tuple, RouteCost] = {}
+        self.max_entries = max_entries
+        self._cache: OrderedDict[tuple, RouteCost] = OrderedDict()
 
     def is_formal(self) -> bool:
         return True
 
-    @staticmethod
-    def _key(pts: Sequence[Point]) -> tuple:
-        return tuple((round(p[0], 5), round(p[1], 5)) for p in pts)
+    def _graph_version(self) -> str:
+        engine = getattr(self.base, "engine", None)
+        return str(getattr(engine, "graph_version", "") or "")
+
+    def _key(self, pts: Sequence[Point], route_type: RouteType) -> tuple:
+        return (
+            self._graph_version(),
+            str(route_type),
+            tuple((round(p[0], 5), round(p[1], 5)) for p in pts),
+        )
 
     def route(
         self,
@@ -374,9 +387,10 @@ class CachedRealRouteProvider:
         waypoints: Sequence[Point] = (),
         route_type: RouteType = RouteType.FLEXIBLE_GAP,
     ) -> RouteCost:
-        key = ("route", self._key([origin, *waypoints, destination]))
+        key = ("route", self._key([origin, *waypoints, destination], route_type))
         hit = self._cache.get(key)
         if hit is not None:
+            self._cache.move_to_end(key)
             return RouteCost(
                 status=RouteCostStatus.CACHED_REAL,
                 distance_m=hit.distance_m,
@@ -390,6 +404,9 @@ class CachedRealRouteProvider:
         res = self.base.route(origin, destination, waypoints=waypoints, route_type=route_type)
         if res.is_formal:
             self._cache[key] = res
+            self._cache.move_to_end(key)
+            while len(self._cache) > self.max_entries:
+                self._cache.popitem(last=False)
         return res
 
     def route_gap(self, gap_from, gap_to, *, pickup=None, delivery=None, extra=()) -> GapRoutePair:
@@ -401,12 +418,17 @@ class CachedRealRouteProvider:
         )
 
     def route_insert(self, insert_from, insert_to, insert_points) -> RouteCost:
-        return self.route(insert_from, insert_to, waypoints=insert_points)
+        return self.route(
+            insert_from, insert_to, waypoints=insert_points, route_type=RouteType.CARGO_DETOUR
+        )
 
     def route_candidate(self, waypoints) -> RouteCost:
         if len(waypoints) < 2:
             return RouteCost(status=RouteCostStatus.UNAVAILABLE, reason_code="NEED_AT_LEAST_TWO_POINTS")
-        return self.route(waypoints[0], waypoints[-1], waypoints=waypoints[1:-1])
+        return self.route(
+            waypoints[0], waypoints[-1],
+            waypoints=waypoints[1:-1], route_type=RouteType.POSITION_TO_SERVICE,
+        )
 
 
 # 进程级单例：GraphHopper 连接与 formal 路网缓存跨请求复用。
@@ -437,9 +459,13 @@ def build_default_map_engine() -> MapRoutingEngine:
     import os
 
     from app.routing.engine import MapRoutingEngine
-    from app.routing.graphhopper_routing import GraphHopperRoutingEngine, LocalRoutingConfig
+    from app.routing.graphhopper_routing import (
+        GraphHopperRoutingEngine,
+        LocalRoutingConfig,
+        default_graphhopper_url,
+    )
 
-    base = os.environ.get("GRAPHHOPPER_URL", "http://127.0.0.1:8080")
+    base = default_graphhopper_url()
     cfg = LocalRoutingConfig(
         graphhopper_base_url=base,
         graphhopper_timeout_ms=4000,

@@ -263,14 +263,13 @@ public class MonitoringServiceImpl implements MonitoringService {
     @Override
     public List<MonitoringShiftRespVO> getShiftExecution() {
         LocalTime now = LocalTime.now();
-        Map<Long, RouteDO> routeMap = routeMapper.selectList().stream()
-                .collect(Collectors.toMap(RouteDO::getId, Function.identity()));
-        Map<Long, DriverDO> driverMap = driverMapper.selectList().stream()
-                .collect(Collectors.toMap(DriverDO::getId, Function.identity()));
-        Map<Long, VehicleDO> vehicleMap = vehicleMapper.selectList().stream()
-                .collect(Collectors.toMap(VehicleDO::getId, Function.identity()));
-        Map<Long, StationDO> stationMap = stationMapper.selectList().stream()
-                .collect(Collectors.toMap(StationDO::getId, Function.identity()));
+        // 线路/司机/车辆/站点四张映射表：进程内 TTL 缓存（基础数据，45s 内复用不可变快照），
+        // 大屏/监控高频轮询下不再每次 4 次全表查询
+        BaseMapsSnapshot baseMaps = baseMapsSnapshot();
+        Map<Long, RouteDO> routeMap = baseMaps.routeMap();
+        Map<Long, DriverDO> driverMap = baseMaps.driverMap();
+        Map<Long, VehicleDO> vehicleMap = baseMaps.vehicleMap();
+        Map<Long, StationDO> stationMap = baseMaps.stationMap();
         List<ShiftDO> shifts = listEnabledShifts();
         // 当天真实执行记录：有记录时以司机端落库状态为准（与司机端三态一致），否则时钟推导兜底
         Map<Long, ShiftExecutionDO> executionMap = shifts.isEmpty() ? Map.of()
@@ -308,6 +307,44 @@ public class MonitoringServiceImpl implements MonitoringService {
 
     /** 单次查询返回的轨迹点上限（与 app 溯源一致，防大包） */
     private static final int TRACK_POINT_LIMIT = 2000;
+
+    /** 基础映射表缓存 TTL（45s：大屏 60s 刷新周期内至多重建一次） */
+    private static final long BASE_MAPS_TTL_MS = 45_000L;
+
+    /** 线路/司机/车辆/站点四张映射表的缓存快照（volatile 发布 + synchronized 重建，不引新依赖） */
+    private volatile BaseMapsSnapshot baseMapsSnapshot;
+
+    /** 不可变基础数据快照（构建后只读，调用方不得修改） */
+    private record BaseMapsSnapshot(Map<Long, RouteDO> routeMap, Map<Long, DriverDO> driverMap,
+                                    Map<Long, VehicleDO> vehicleMap, Map<Long, StationDO> stationMap,
+                                    long loadedAtMillis) {
+    }
+
+    private BaseMapsSnapshot baseMapsSnapshot() {
+        BaseMapsSnapshot cached = baseMapsSnapshot;
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.loadedAtMillis() < BASE_MAPS_TTL_MS) {
+            return cached;
+        }
+        synchronized (this) {
+            cached = baseMapsSnapshot;
+            if (cached != null && now - cached.loadedAtMillis() < BASE_MAPS_TTL_MS) {
+                return cached;
+            }
+            BaseMapsSnapshot fresh = new BaseMapsSnapshot(
+                    Collections.unmodifiableMap(routeMapper.selectList().stream()
+                            .collect(Collectors.toMap(RouteDO::getId, Function.identity()))),
+                    Collections.unmodifiableMap(driverMapper.selectList().stream()
+                            .collect(Collectors.toMap(DriverDO::getId, Function.identity()))),
+                    Collections.unmodifiableMap(vehicleMapper.selectList().stream()
+                            .collect(Collectors.toMap(VehicleDO::getId, Function.identity()))),
+                    Collections.unmodifiableMap(stationMapper.selectList().stream()
+                            .collect(Collectors.toMap(StationDO::getId, Function.identity()))),
+                    System.currentTimeMillis());
+            baseMapsSnapshot = fresh;
+            return fresh;
+        }
+    }
 
     @Override
     public MonitoringTrackRespVO getVehicleTrack(Long vehicleId, LocalDate date) {

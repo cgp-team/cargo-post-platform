@@ -320,7 +320,8 @@ const moveTo = (index: number) => {
   if (!map || !moveMarker) return
   const p = points.value[index]
   if (!p || p.longitude == null || p.latitude == null) return
-  moveMarker.setPosition(new window.BMapGL.Point(p.longitude, p.latitude))
+  const bd = gcj02ToBd09(p.longitude, p.latitude) // WEB-01：与 drawTrack 同口径，原始坐标为 GCJ-02
+  moveMarker.setPosition(new window.BMapGL.Point(bd.lng, bd.lat))
 }
 
 onMounted(initMap)

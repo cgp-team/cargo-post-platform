@@ -23,18 +23,26 @@ curl "http://127.0.0.1:8989/route?point=29.50,106.50&point=29.52,106.50&profile=
 
 ## 3. 配置接入
 
+Python 侧统一从环境变量 `GRAPHHOPPER_URL` 读取 GraphHopper 地址，
+默认值统一为 `http://127.0.0.1:8080`（`LocalRoutingConfig` 与
+`build_default_map_engine` 一致）；显式配置映射时 `graphhopper.base-url` 仍优先。
+
 ```yaml
 local-routing:
   enabled: true
   provider: graphhopper
   profile: bus
 graphhopper:
-  base-url: http://127.0.0.1:8989
+  base-url: http://127.0.0.1:8080
   osm-file: /data/chongqing-latest.osm.pbf
   graph-dir: /data/graph-cache
   timeout-ms: 3000
 graph_version: osm-cq-v1
 ```
+
+GraphHopper 以独立 java 进程部署（非 compose 容器）；algorithm 容器通过
+`GRAPHHOPPER_URL` 环境变量指向它（容器内 127.0.0.1 不可达时用
+host.docker.internal 或内网地址）。
 
 Python：`LocalRoutingConfig.from_mapping` → `LocalRoutingProviderFactory().create()`
 
