@@ -484,7 +484,7 @@ class DispatchServiceImplTest {
             plan.setId(100L);
             return 1;
         }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
-        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any())).thenReturn(List.of(
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any(), any())).thenReturn(List.of(
                 TransportLegDO.builder().orderId(1L).planId(100L).legSequence(1)
                         .fromStationId(11L).toStationId(12L).distanceKm(new BigDecimal("5.0"))
                         .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0))

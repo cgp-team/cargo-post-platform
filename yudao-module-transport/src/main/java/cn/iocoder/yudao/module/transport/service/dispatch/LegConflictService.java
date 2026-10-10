@@ -35,6 +35,55 @@ public interface LegConflictService {
                             Collection<TransportLegDO> pending, Long excludeLegId);
 
     /**
+     * 冲突检测候选快照：一次批量预取（vehicle_id IN … OR driver_id IN … + 时间窗重叠 +
+     * 未完结订单过滤）后在内存中反复判定，供"循环内逐个绑定试派"场景复用，
+     * 避免每次判定 1 次 leg 查询 + 1 次订单批量查询。
+     *
+     * <p>调用方保证：预取时间窗覆盖后续所有判定的窗口（判定只做窗口的内存子集过滤）；
+     * snapshot 为 null 时退回逐次查询（行为与旧版一致）。</p>
+     */
+    final class ConflictSnapshot {
+        private final List<TransportLegDO> storedLegs;
+
+        public ConflictSnapshot(List<TransportLegDO> storedLegs) {
+            this.storedLegs = List.copyOf(storedLegs);
+        }
+
+        /** 库中未完结订单的未完结段（预取窗口内的超集，判定侧再按资源/窗口内存过滤） */
+        public List<TransportLegDO> storedLegs() {
+            return storedLegs;
+        }
+    }
+
+    /** 批量预取候选段：按资源集合（车辆/司机）+ 时间窗重叠一次查出，空资源集合返回空快照 */
+    ConflictSnapshot preloadConflicts(Collection<Long> vehicleIds, Collection<Long> driverIds,
+                                      LocalDateTime start, LocalDateTime end);
+
+    /** 同 {@link #findVehicleConflicts(Long, LocalDateTime, LocalDateTime, Collection, Long)}，复用预取快照 */
+    List<TransportLegDO> findVehicleConflicts(Long vehicleId, LocalDateTime start, LocalDateTime end,
+                                              Collection<TransportLegDO> pending, Long excludeLegId,
+                                              ConflictSnapshot snapshot);
+
+    /** 同 {@link #findDriverConflicts(Long, LocalDateTime, LocalDateTime, Collection, Long)}，复用预取快照 */
+    List<TransportLegDO> findDriverConflicts(Long driverId, LocalDateTime start, LocalDateTime end,
+                                             Collection<TransportLegDO> pending, Long excludeLegId,
+                                             ConflictSnapshot snapshot);
+
+    /** 同 {@link #vehicleConflicts(Long, LocalDateTime, LocalDateTime, Collection, Long)}，复用预取快照 */
+    default boolean vehicleConflicts(Long vehicleId, LocalDateTime start, LocalDateTime end,
+                                     Collection<TransportLegDO> pending, Long excludeLegId,
+                                     ConflictSnapshot snapshot) {
+        return !findVehicleConflicts(vehicleId, start, end, pending, excludeLegId, snapshot).isEmpty();
+    }
+
+    /** 同 {@link #driverConflicts(Long, LocalDateTime, LocalDateTime, Collection, Long)}，复用预取快照 */
+    default boolean driverConflicts(Long driverId, LocalDateTime start, LocalDateTime end,
+                                    Collection<TransportLegDO> pending, Long excludeLegId,
+                                    ConflictSnapshot snapshot) {
+        return !findDriverConflicts(driverId, start, end, pending, excludeLegId, snapshot).isEmpty();
+    }
+
+    /**
      * 校验车辆+司机在该时段均无冲突，冲突则抛业务异常（手工派单/立即分配前调用）。
      */
     void assertNoConflict(Long vehicleId, Long driverId, LocalDateTime start, LocalDateTime end,

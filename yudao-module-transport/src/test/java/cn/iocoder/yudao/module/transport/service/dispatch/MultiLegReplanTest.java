@@ -69,8 +69,8 @@ class MultiLegReplanTest {
         when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of(
                 DriverVehicleDO.builder().driverId(1L).vehicleId(1L).status(1).build(),
                 DriverVehicleDO.builder().driverId(2L).vehicleId(2L).status(1).build()));
-        when(legConflictService.vehicleConflicts(any(), any(), any(), any(), any())).thenReturn(false);
-        when(legConflictService.driverConflicts(any(), any(), any(), any(), any())).thenReturn(false);
+        when(legConflictService.vehicleConflicts(any(), any(), any(), any(), any(), any())).thenReturn(false);
+        when(legConflictService.driverConflicts(any(), any(), any(), any(), any(), any())).thenReturn(false);
 
         service.replanLeg(11L, "车辆故障");
 
@@ -89,8 +89,8 @@ class MultiLegReplanTest {
         when(legMapper.selectById(11L)).thenReturn(brokenLeg());
         when(driverVehicleMapper.selectActiveBindings()).thenReturn(List.of(
                 DriverVehicleDO.builder().driverId(1L).vehicleId(1L).status(1).build()));
-        lenient().when(legConflictService.vehicleConflicts(any(), any(), any(), any(), any())).thenReturn(false);
-        lenient().when(legConflictService.driverConflicts(any(), any(), any(), any(), any())).thenReturn(false);
+        lenient().when(legConflictService.vehicleConflicts(any(), any(), any(), any(), any(), any())).thenReturn(false);
+        lenient().when(legConflictService.driverConflicts(any(), any(), any(), any(), any(), any())).thenReturn(false);
 
         assertThrows(ServiceException.class, () -> service.replanLeg(11L, "无车"));
 
