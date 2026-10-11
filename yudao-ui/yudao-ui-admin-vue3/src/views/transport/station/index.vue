@@ -35,7 +35,6 @@
         <el-table-column label="站点编码" prop="stationCode" align="center" />
         <el-table-column label="站点名称" prop="stationName" align="center" />
         <el-table-column label="站点级别" prop="stationLevel" align="center" />
-        <el-table-column label="来源" prop="sourceType" align="center" width="100" />
         <el-table-column label="类型" prop="stationType" align="center" width="110">
           <template #default="scope">{{ typeText(scope.row.stationType) }}</template>
         </el-table-column>

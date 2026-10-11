@@ -24,7 +24,6 @@
         <el-table-column label="起点站点ID" prop="startStationId" align="center" />
         <el-table-column label="终点站点ID" prop="endStationId" align="center" />
         <el-table-column label="里程(km)" prop="distanceKm" align="center" />
-        <el-table-column label="来源" prop="sourceType" align="center" width="100" />
         <el-table-column label="服务类型" prop="serviceType" align="center" width="110">
           <template #default="scope">{{ serviceText(scope.row.serviceType) }}</template>
         </el-table-column>
