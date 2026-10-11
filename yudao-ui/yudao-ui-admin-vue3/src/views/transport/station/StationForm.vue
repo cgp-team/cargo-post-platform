@@ -34,9 +34,8 @@
       </el-form-item>
       <el-form-item label="数据来源" prop="sourceType">
         <el-select v-model="formData.sourceType" placeholder="请选择" style="width:100%">
-          <el-option label="项目自建站" value="PROJECT" />
-          <el-option label="现实公交站" value="REAL" />
-          <el-option label="模拟站" value="SIMULATION" />
+          <el-option label="客货邮驿站" value="PROJECT" />
+          <el-option label="公交站点" value="REAL" />
         </el-select>
       </el-form-item>
       <el-form-item label="站点类型" prop="stationType">
