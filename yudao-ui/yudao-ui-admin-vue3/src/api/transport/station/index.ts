@@ -8,6 +8,11 @@ export interface StationVO {
   longitude?: number
   latitude?: number
   address?: string
+  /** 揽收点属性（V033 起才有列）：空串 = 没填，界面要念“没填”而不是“无联系人” */
+  contactName?: string
+  contactMobile?: string
+  businessHours?: string
+  ecommerceFlag?: boolean
   status?: number // 0=启用 1=停用
   sourceType?: string // REAL / PROJECT / SIMULATION
   stationType?: string // BUS_STOP / CARGO_STATION / MIXED

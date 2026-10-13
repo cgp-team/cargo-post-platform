@@ -28,6 +28,12 @@ public class StationDO extends TenantBaseDO {
     private BigDecimal latitude;
 
     private String address;
+    /** 揽收点联系人；空串 = 没填（界面要念"没填"，不许显示成"无联系人"这种像已核对过的话） */
+    private String contactName;
+    /** 揽收点联系电话 */
+    private String contactMobile;
+    /** 营业时间，自由文本（如 08:00-18:00）；空 = 未公布，不拿默认值冒充 24 小时 */
+    private String businessHours;
 
     /** 站点状态：0=启用 1=停用（与车辆状态口径一致；默认 0） */
     private Integer status;
@@ -43,6 +49,8 @@ public class StationDO extends TenantBaseDO {
     private Boolean vehicleAccess;
     /** 是否可用于调度（作场站/换乘站；null 视为可用） */
     private Boolean dispatchEnabled;
+    /** 是否电商站点。`stationType` 只有 BUS_STOP/CARGO_STATION/MIXED，表达不了《标记说明》九点的"电商站点"这一类 */
+    private Boolean ecommerceFlag;
     /** 排序（列表展示） */
     private Integer sort;
     /** 备注 */
