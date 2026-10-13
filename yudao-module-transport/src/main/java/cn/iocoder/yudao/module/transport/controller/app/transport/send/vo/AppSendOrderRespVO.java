@@ -82,6 +82,10 @@ public class AppSendOrderRespVO {
     private BigDecimal originalLongitude;
     @Schema(description = "下单时间")
     private LocalDateTime createTime;
+    @Schema(description = "最早取货时间（客户申报的取货下限；创建请求 AppSendOrderCreateReqVO:76 那个键的回读）。"
+            + "此前只有写入侧（TransportOrderServiceImpl:149 落库、DispatchServiceImpl:3513 作为 readyTime 下发算法），"
+            + "用户端查不回来自己填了什么 ⇒ 补成可读。null = 没填，后端按不设下限处理")
+    private LocalDateTime earliestPickupTime;
 
     // ========== 到达预估（仅 track 详情填充，未分配时全为 null） ==========
     @Schema(description = "承运车牌号")
