@@ -927,6 +927,26 @@ public class DriverAppServiceImpl implements DriverAppService {
      * 到站后按任务段（经停顺序）推进明细状态：当前站 ARRIVED、更早经停 COMPLETED、其后 PENDING。
      * 状态以后端为最终来源，前端不做布尔替代。
      */
+    /**
+     * 落明细的实际服务时刻（V029，任务 #34）。
+     * 司机按下"装车完成/妥投"就是事件本身 —— 这是本模块唯一能拿到"实际"二字的时刻；
+     * 到站上报只给到达时刻，离站/上一站的完成时刻没有现场证据，故不补（宁缺毋假）。
+     * 已在库里有实际到达时刻的不覆盖：CAS 已保证只有合法的那一次点击会走到这里。
+     */
+    private void stampItemServiceActual(DispatchPlanItemDO item) {
+        if (item == null || item.getId() == null) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        DispatchPlanItemDO upd = new DispatchPlanItemDO();
+        upd.setId(item.getId());
+        if (item.getActualArrivalTime() == null) {
+            upd.setActualArrivalTime(now);
+        }
+        upd.setActualFinishTime(now);
+        dispatchPlanItemMapper.updateById(upd);
+    }
+
     private void syncTaskItemStatusOnArrive(Long driverId, Long stationId) {
         List<DispatchPlanItemDO> items = dispatchPlanItemMapper.selectList(new LambdaQueryWrapperX<DispatchPlanItemDO>()
                 .eq(DispatchPlanItemDO::getDriverId, driverId)
@@ -964,6 +984,13 @@ public class DriverAppServiceImpl implements DriverAppService {
                 DispatchPlanItemDO upd = new DispatchPlanItemDO();
                 upd.setId(item.getId());
                 upd.setStatus(newStatus);
+                // 到站上报是"此刻真的到了"这一事件唯一的现场证据 ⇒ 顺手落实际到达时刻。
+                // 只写本站（ARRIVED），不给更早的经停补"离站时刻"：那些站的真实离站时间
+                // 落在"上一站到站"与"现在"之间，写 now() 等于把没测到的东西写成测到了。
+                if (TaskItemStatusEnum.ARRIVED.getStatus().equals(newStatus)
+                        && item.getActualArrivalTime() == null) {
+                    upd.setActualArrivalTime(LocalDateTime.now());
+                }
                 dispatchPlanItemMapper.updateById(upd);
             }
         }
@@ -1076,6 +1103,8 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
+        // 真实执行回流：这一件货实际是什么时候上的车（V029）
+        stampItemServiceActual(planItem);
         // 已装件数 +1（BE-06：容量条件下推到同一条 UPDATE 原子判定，并发不超载；SQL 原子自增，防连点丢更新）
         if (execution != null && execution.getId() != null) {
             if (capacity >= 0) {
@@ -1112,6 +1141,8 @@ public class DriverAppServiceImpl implements DriverAppService {
         if (affected == 0) {
             throw exception(DRIVER_ORDER_STATUS_ILLEGAL);
         }
+        // 真实执行回流：妥投时刻 = 这条派送明细的实际完成时刻（V029，与承诺时效对账的现场证据）
+        stampItemServiceActual(planItem);
         // 已装件数 -1（地板 0，SQL 原子自减）：执行记录口径同装车（明细没写班次时按司机实际发车记录兜底）
         ShiftExecutionDO execution = resolveActiveExecution(driver.getId(), planItem);
         if (execution != null && execution.getId() != null) {
@@ -1421,7 +1452,7 @@ public class DriverAppServiceImpl implements DriverAppService {
     public void handoverConfirm(AppDriverHandoverConfirmReqVO reqVO) {
         DriverDO driver = requireCurrentDriver(reqVO.getDriverId());
         // 归属校验在 service 内完成：接收/交出司机可确认；接收司机未分配时可认领
-        handoverService.confirmHandover(reqVO.getHandoverId(), driver.getId(), reqVO.getPhotoUrl());
+        handoverService.confirmHandover(reqVO.getHandoverId(), driver.getId(), reqVO.getPhotoUrl(), reqVO.getSignUrl());
     }
 
     @Override

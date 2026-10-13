@@ -35,6 +35,8 @@ public class TransportHandoverDO extends TenantBaseDO {
     /** 交接体积(m³) */
     private BigDecimal cargoVolumeM3;
     private String photoUrl;
+    /** 签收/交接手写签名图片地址；空串 = 没签名（界面念"没签名"，不留空白格） */
+    private String signUrl;
     private Integer status;
     private LocalDateTime handoverTime;
     private LocalDateTime confirmTime;

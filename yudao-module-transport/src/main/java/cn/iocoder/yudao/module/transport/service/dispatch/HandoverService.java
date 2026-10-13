@@ -27,7 +27,12 @@ public interface HandoverService {
     void startHandover(Long handoverId, Long driverId);
 
     /** 接收司机确认交接（核验件数/拍照），推进 legFrom=已交接、legTo=已分配/运输中、订单=部分完成/完成 */
-    void confirmHandover(Long handoverId, Long toDriverId, String photoUrl);
+    void confirmHandover(Long handoverId, Long toDriverId, String photoUrl, String signUrl);
+
+    /** 旧三参形状保留：签收签名是可选凭证，既有调用与用例不必一起改 */
+    default void confirmHandover(Long handoverId, Long toDriverId, String photoUrl) {
+        confirmHandover(handoverId, toDriverId, photoUrl, null);
+    }
 
     /** 标记交接争议（件数不符/破损），订单记异常事件，需人工介入 */
     void disputeHandover(Long handoverId, String remark);

@@ -38,6 +38,17 @@
         </el-table-column>
         <el-table-column label="交接时间" prop="handoverTime" align="center" width="170" />
         <el-table-column label="确认时间" prop="confirmTime" align="center" width="170" />
+        <el-table-column label="凭证" align="center" width="150">
+          <template #default="scope">
+            <!-- 照片是"货与舱的核验凭证"，签名是"谁认了这笔交接"：两件事，分开显示，也不共用一个缩略图位 -->
+            <el-image v-if="scope.row.photoUrl" :src="scope.row.photoUrl" :preview-src-list="[scope.row.photoUrl]"
+                      preview-teleported fit="cover" style="width:40px;height:40px;margin-right:6px;border-radius:4px" />
+            <span v-else class="text-gray-400">没拍照</span>
+            <el-image v-if="scope.row.signUrl" :src="scope.row.signUrl" :preview-src-list="[scope.row.signUrl]"
+                      preview-teleported fit="contain" style="width:52px;height:40px;border-radius:4px;background:#f5f5f5" />
+            <span v-else class="text-gray-400">没签名</span>
+          </template>
+        </el-table-column>
         <el-table-column label="备注" prop="remark" align="center" show-overflow-tooltip />
         <el-table-column label="操作" align="center" width="140" fixed="right">
           <template #default="scope">

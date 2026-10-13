@@ -49,6 +49,9 @@ public class HandoverRespVO {
     @Schema(description = "交接重量(kg)")
     private BigDecimal weightKg;
 
+    @Schema(description = "交接拍照凭证（签收手写签名）")
+    private String signUrl;
+
     @Schema(description = "交接照片URL")
     private String photoUrl;
 
