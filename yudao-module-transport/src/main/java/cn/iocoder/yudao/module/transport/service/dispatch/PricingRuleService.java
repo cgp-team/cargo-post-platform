@@ -4,6 +4,7 @@ import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.PricingRuleDO;
 import cn.iocoder.yudao.module.transport.dal.mysql.dispatch.PricingRuleMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
@@ -45,4 +46,26 @@ public class PricingRuleService {
                 .stopServiceMinutes(DEFAULT_STOP_SERVICE_MINUTES)
                 .build();
     }
+
+    /**
+     * 读取**配置行本身**：没有配置行时返回 null（不兜底）。
+     * 与 getRule() 的差别就是给后台用的那一格旗标：库里没配 ≠ 库里配成了默认值。
+     */
+    public PricingRuleDO getConfiguredRule() {
+        return pricingRuleMapper.selectFirst();
+    }
+
+    /** 保存单行配置：有行则改、无行则插（selectFirst 按 id 升序取首条生效，所以只维护一行） */
+    @Transactional(rollbackFor = Exception.class)
+    public void saveRule(cn.iocoder.yudao.module.transport.controller.admin.pricing.vo.PricingRuleSaveReqVO reqVO) {
+        PricingRuleDO existing = pricingRuleMapper.selectFirst();
+        PricingRuleDO row = cn.iocoder.yudao.framework.common.util.object.BeanUtils.toBean(reqVO, PricingRuleDO.class);
+        if (existing == null) {
+            pricingRuleMapper.insert(row);
+            return;
+        }
+        row.setId(existing.getId());
+        pricingRuleMapper.updateById(row);
+    }
+
 }
