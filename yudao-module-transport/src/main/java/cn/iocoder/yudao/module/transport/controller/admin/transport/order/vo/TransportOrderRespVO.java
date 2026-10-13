@@ -76,4 +76,17 @@ public class TransportOrderRespVO extends TransportOrderBaseVO {
     private String pickupCode;
     @Schema(description = "取件状态：0待取件 1已取件")
     private Integer pickupStatus;
+    @Schema(description = "承运商编码（邮快件子表；编辑弹窗要能回读，否则表单会把「没回读」当成「用户清空了」再 PUT 回来）")
+    private String carrierCode;
+    @Schema(description = "邮快件件数（子表 itemCount）")
+    private Integer postalItemCount;
+    @Schema(description = "邮快件重量(kg)")
+    private BigDecimal postalWeightKg;
+    // --- 客运信息（来自客运子表；此前整块不回读 ⇒ 后台编辑客运单时子表被跳过，联系人一改就被空串抹掉） ---
+    @Schema(description = "乘客人数")
+    private Integer passengerCount;
+    @Schema(description = "联系人")
+    private String contactName;
+    @Schema(description = "联系电话")
+    private String contactMobile;
 }
