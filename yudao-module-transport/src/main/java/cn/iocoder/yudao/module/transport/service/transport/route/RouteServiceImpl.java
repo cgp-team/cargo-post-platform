@@ -81,11 +81,18 @@ public class RouteServiceImpl implements RouteService {
     @Transactional(rollbackFor = Exception.class)
     public void saveRouteStations(RouteStationSaveReqVO reqVO) {
         RouteDO route = validateExists(reqVO.getRouteId());
+        List<RouteStationSaveReqVO.Item> items = reqVO.getStations();
+        // 顺序很要紧：**先判空再删**。旧写法是先 delete 再判 `items == null || isEmpty` 直接 return，
+        // 于是一个不带 stations 的 {routeId} 请求会清空这条线路的全部经停站点、什么都不写回，
+        // 还因为方法正常返回而报成功——唯一的防线在前端 RouteForm.vue 的 `if (!stations.length)`，
+        // 而后端自己的规矩是"二次校验、不信任前端"（见 TransportOrderServiceImpl 的同名注释）。
+        if (items == null) {
+            return; // 报文没带 stations = 这次不动站序
+        }
         routeStationMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<RouteStationDO>()
                 .eq(RouteStationDO::getRouteId, reqVO.getRouteId()));
-        List<RouteStationSaveReqVO.Item> items = reqVO.getStations();
-        if (items == null || items.isEmpty()) {
-            return;
+        if (items.isEmpty()) {
+            return; // 显式空数组才是 @Schema 说的"清空站序"
         }
         Map<Long, StationDO> stationMap = stationMapper.selectBatchIds(
                         items.stream().map(RouteStationSaveReqVO.Item::getStationId)

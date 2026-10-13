@@ -21,7 +21,8 @@ public class RouteStationSaveReqVO {
     @NotNull(message = "线路编号不能为空")
     private Long routeId;
 
-    @Schema(description = "按顺序排列的站点（可为空=清空站序）")
+    @Schema(description = "按顺序排列的站点：**不传（null）= 这次不动站序**；传空数组 [] = 清空站序。"
+            + "（旧描述只写\"可为空=清空站序\"，与\"没带这个键\"同形，导致一个不带 stations 的请求会静默清空整条线路的经停站点）")
     @Valid
     private List<Item> stations;
 
