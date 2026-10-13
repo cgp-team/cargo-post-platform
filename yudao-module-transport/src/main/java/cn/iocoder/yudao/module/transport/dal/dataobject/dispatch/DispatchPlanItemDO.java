@@ -29,6 +29,15 @@ public class DispatchPlanItemDO extends TenantBaseDO {
     private Integer visitSequence;
     private Integer actionType;
     private LocalDateTime estimatedArrivalTime;
+    /**
+     * 实际上报时刻（V029）。语义随 action_type 走，不统一成"到站"：
+     * PICKUP=司机完成装车（pickupConfirm）、DELIVERY=司机完成妥投（deliver）、
+     * 其余经停=司机到站上报（arrive）。
+     * 没上报就是 NULL —— 拿 estimated 或当前时刻冒充实际值，等于把迟到方案洗成准时方案。
+     */
+    private LocalDateTime actualArrivalTime;
+    /** 明细完成时刻（状态推进到已完成/失败时落地；未完成为 NULL） */
+    private LocalDateTime actualFinishTime;
     /** 分段路网行驶秒数（到达本站的上一站→本站；高德真实时长或直线÷均速估算，估算层回写） */
     private Integer segmentDurationSeconds;
     /** 分段里程(km)（高德路网公里或 Haversine 直线公里，估算层回写） */
