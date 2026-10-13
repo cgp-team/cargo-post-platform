@@ -1,10 +1,10 @@
 <template>
   <ContentWrap>
     <el-alert v-if="loadError" type="error" :closable="false" show-icon :title="`计价规则没读到：${loadError}`"
-              description="下面这张表是空的，不是"运价为 0"。这一格只说明这次请求没成功，别按空表判断业务。" />
+              description="下面这张表是空的，不是「运价为 0」。这一格只说明这次请求没成功，别按空表判断业务。" />
     <el-alert v-else-if="loaded && !form.configured" type="warning" :closable="false" show-icon
               title="库里还没有计价规则配置行，下面显示的是服务侧兜底默认值"
-              description="算法侧的收入/成本估算与 ETA 现在就是按这几个默认数走的（契约 Q13：定价只在业务后端）。保存后会新增一行使其生效；不保存不代表"没有定价"。" />
+              description="算法侧的收入/成本估算与 ETA 现在就是按这几个默认数走的（契约 Q13：定价只在业务后端）。保存后会新增一行使其生效；不保存不代表「没有定价」。" />
     <el-alert v-else-if="loaded" type="success" :closable="false" show-icon
               title="下面显示的是库里已配置的规则" />
 
