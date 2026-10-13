@@ -1,0 +1,156 @@
+name: DB migrate (guarded, manual-only)
+
+# ⚠ 这条流水线**只能由人手动触发**：没有 push、没有 schedule、没有 pull_request。
+#   原因：`.github/workflows/deploy-dev.yml` 里那条 `Run database migration` 是每次 push master
+#   无条件重放的，把"往生产库加东西"挂在 push 上，等于"任何一次合并都可能改共享库"。
+#   本文件把同一件事收成一个显式动作，并且**默认只做只读探测**：
+#     mode=check  → 一个字都不写，只报告"这台库现在有没有这些列/表"
+#     mode=apply  → 必须另外把 confirm 填成 APPLY 才会执行，且只跑幂等的两支脚本
+#
+# 只允许跑幂等脚本（重复执行不会报错、也不会二次伤害）：
+#   sql/incremental/V028__wallet_tables.sql   —— 三段 CREATE TABLE IF NOT EXISTS
+#   sql/incremental/V030__execution_writeback_guarded.sql —— 逐列 information_schema 守卫 + 末尾 3/3 自检
+# ⛔ 刻意**不跑** V029：它是裸 `ALTER TABLE ADD COLUMN`，第二次执行必然
+#   ERROR 1060 Duplicate column name（本机 2026-10-12 实测）。V030 就是它的可重复形态。
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = 只探测不改库（默认）；apply = 真的执行迁移"
+        required: true
+        default: check
+        type: choice
+        options:
+          - check
+          - apply
+      confirm:
+        description: "mode=apply 时必须原样填 APPLY，否则直接终止"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# 同一时刻只跑一条，排队不取消：两条并发往同一个库写会互相咬
+concurrency:
+  group: db-migrate-guarded
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /opt/cargo-post
+
+jobs:
+  migrate:
+    # 与 deploy-dev.yml 同一台 self-hosted runner（构建与部署同机），因此这里连的就是那台机器上的 compose 网络
+    runs-on: [self-hosted, cargo-post]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 守卫：默认只探测；apply 必须显式确认
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = "check" ]; then
+            echo "mode=check ⇒ 本次只读探测，不会执行任何写操作"
+            exit 0
+          fi
+          if [ "${MODE}" != "apply" ]; then
+            echo "::error::mode 只认 check / apply，收到的是 ${MODE}"
+            exit 1
+          fi
+          if [ "${CONFIRM}" != "APPLY" ]; then
+            echo "::error::apply 需要 confirm 原样填 APPLY（当前为空或不匹配），已终止：不写任何库"
+            exit 1
+          fi
+          echo "mode=apply 且确认字面匹配 ⇒ 本次会执行幂等迁移脚本"
+
+      - name: 探测当前库状态（只读，两种 mode 都跑）
+        env:
+          ENV_FILE: ${{ vars.ENV_FILE || '/opt/cargo-post-platform/.env' }}
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f "${ENV_FILE}" ]; then
+            echo "::error::${ENV_FILE} 不存在：不知道要连哪台库，宁可失败也不猜"
+            exit 1
+          fi
+          set -a; source "${ENV_FILE}"; set +a
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          # 先把"要写到哪"打在日志上（只打库名与主机，不打密码）：
+          # 手动作业最容易出的事故不是脚本错，而是人在错误的库上跑了正确的脚本
+          echo "[目标库] $( "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e 'SELECT CONCAT(VERSION(), "  host=", @@hostname, "  db=", DATABASE())' )"
+
+          echo "--- 执行回流三列（V029/V030 的目标）当前是否存在 ---"
+          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3','缺失（当前 ' , COUNT(*), '/3）'), '  ← actual_arrival_time / actual_finish_time / unassigned_orders')
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time'))
+                OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'));"
+
+          echo "--- 钱包三表（V028 的目标）当前是否存在 ---"
+          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3','缺失（当前 ' , COUNT(*), '/3）'), '  ← transport_wallet_account / transport_wallet_transaction / transport_pay_order')
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order');"
+
+      - name: 执行幂等迁移（仅 mode=apply）
+        if: ${{ github.event.inputs.mode == 'apply' }}
+        env:
+          ENV_FILE: ${{ vars.ENV_FILE || '/opt/cargo-post-platform/.env' }}
+        run: |
+          set -Eeuo pipefail
+          set -a; source "${ENV_FILE}"; set +a
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          # 失败自动诊断（沿用 deploy-dev.yml 的做法）：保留原始 exit code，不打印密码
+          trap 'rc=$?; echo; echo "===== [失败诊断] exit ${rc} =====";
+            "${COMPOSE[@]}" ps mysql 2>&1 || true;
+            "${COMPOSE[@]}" logs --tail 100 mysql 2>&1 | tail -100 || true;
+            echo "===== 诊断结束 ====="; exit ${rc};' ERR
+
+          for f in sql/incremental/V028__wallet_tables.sql sql/incremental/V030__execution_writeback_guarded.sql; do
+            # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
+            # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
+            echo "Applying ${f} ..."
+            "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+            echo "${f} done."
+          done
+
+      - name: 落地核对（仅 mode=apply）：数不出就必须红
+        if: ${{ github.event.inputs.mode == 'apply' }}
+        env:
+          ENV_FILE: ${{ vars.ENV_FILE || '/opt/cargo-post-platform/.env' }}
+        run: |
+          set -Eeuo pipefail
+          set -a; source "${ENV_FILE}"; set +a
+          COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+
+          COLS=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time'))
+                OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'));")
+          TABLES=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT COUNT(*) FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order');")
+          # 注释乱码检查：V030 的 COMMENT 里有「司机完成装车」这段中文，latin1 误读时它会变成乱码而不是报错
+          BAD_COMMENT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item'
+              AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%';")
+
+          echo "[核对] 执行回流列 ${COLS}/3，钱包表 ${TABLES}/3，注释异常 ${BAD_COMMENT}"
+          [ "${COLS}" = "3" ] || { echo "::error::执行回流列没数满 3/3（现 ${COLS}）：迁移没落到这张表，别当已完成"; exit 1; }
+          [ "${TABLES}" = "3" ] || { echo "::error::钱包三表没数满 3/3（现 ${TABLES}）"; exit 1; }
+          [ "${BAD_COMMENT}" = "0" ] || { echo "::error::列注释里没有原样中文（${BAD_COMMENT} 条异常）——字符集不对，中文注释已损坏"; exit 1; }
+          echo "OK: 三列三表齐、注释按 utf8mb4 原样入库"

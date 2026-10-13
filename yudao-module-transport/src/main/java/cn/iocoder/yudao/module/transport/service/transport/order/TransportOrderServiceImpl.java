@@ -535,8 +535,13 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         CargoOrderDO upd = new CargoOrderDO();
         upd.setId(exist.getId());
         upd.setCargoCategory(reqVO.getCargoCategory());
-        upd.setFreshFlag(reqVO.getFreshFlag() != null && reqVO.getFreshFlag());
-        upd.setItemCount(reqVO.getCargoItemCount() != null ? reqVO.getCargoItemCount() : 1);
+        // 同 updatePostalOrder：更新侧一律"没带就不改"，不写默认值。
+        // 旧写法把 `freshFlag == null` 判成 false（会把生鲜单悄悄降级成非生鲜，而生鲜是承运审核走人工的开关），
+        // 把 `cargoItemCount == null` 兜成 1（件数被改写）。
+        if (reqVO.getFreshFlag() != null) {
+            upd.setFreshFlag(reqVO.getFreshFlag());
+        }
+        upd.setItemCount(reqVO.getCargoItemCount());
         upd.setWeightKg(reqVO.getCargoWeightKg());
         upd.setVolumeM3(reqVO.getCargoVolumeM3());
         upd.setGoodsName(reqVO.getGoodsName());
@@ -560,7 +565,9 @@ public class TransportOrderServiceImpl implements TransportOrderService {
         upd.setId(exist.getId());
         upd.setMailNo(reqVO.getMailNo());
         upd.setCarrierCode(reqVO.getCarrierCode());
-        upd.setItemCount(reqVO.getPostalItemCount() != null ? reqVO.getPostalItemCount() : 1);
+        // 更新时**不许**兜默认值：`postalItemCount == null` 原样传 null（MyBatis 忽略 null 字段 = 不改），
+        // 旧写法在这里写 `!= null ? : 1`，等于"报文没带件数"就把库里的件数改成 1（创建时才该有默认值）
+        upd.setItemCount(reqVO.getPostalItemCount());
         upd.setWeightKg(reqVO.getPostalWeightKg());
         upd.setReceiverName(reqVO.getReceiverName());
         upd.setReceiverMobile(reqVO.getReceiverMobile());

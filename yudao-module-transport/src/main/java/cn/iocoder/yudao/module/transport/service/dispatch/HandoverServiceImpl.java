@@ -204,7 +204,7 @@ public class HandoverServiceImpl implements HandoverService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void confirmHandover(Long handoverId, Long toDriverId, String photoUrl) {
+    public void confirmHandover(Long handoverId, Long toDriverId, String photoUrl, String signUrl) {
         TransportHandoverDO handover = get(handoverId);
         Integer status = handover.getStatus();
         if (Objects.equals(status, TransportHandoverStatusEnum.COMPLETED.getStatus())) {
@@ -237,6 +237,10 @@ public class HandoverServiceImpl implements HandoverService {
         update.setConfirmedBy(toDriverId);
         if (handover.getToDriverId() == null && toDriverId != null) {
             update.setToDriverId(toDriverId); // 认领：把接收司机补上
+        }
+        if (signUrl != null && !signUrl.isBlank()) {
+            // 与 photoUrl 同一条纪律：没带就不写；空串不许当"已确认无签名"存进去
+            update.setSignUrl(signUrl);
         }
         if (photoUrl != null && !photoUrl.isBlank()) {
             update.setPhotoUrl(photoUrl);

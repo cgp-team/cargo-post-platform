@@ -283,3 +283,17 @@ justauth:
     type: REDIS
     prefix: 'social_auth_state:' # 缓存前缀，目前只对 Redis 缓存生效，默认 JUSTAUTH::STATE::
     timeout: 24h # 超时时长，目前只对 Redis 缓存生效，默认 3 分钟
+  # ========== 支付配置 ==========
+  pay:
+    # 支付宝（在开放平台创建应用后获取）
+    alipay-app-id: ''          # 应用 APPID
+    alipay-private-key: ''     # RSA2 应用私钥
+    alipay-public-key: ''      # 支付宝公钥
+    alipay-notify-url: 'https://api.qwer2333.com/api/app-api/transport/pay/alipay/notify'
+    # 微信支付（在商户平台获取）
+    wechat-app-id: ''          # 公众号/小程序 AppID
+    wechat-mch-id: ''          # 商户号
+    wechat-api-v3-key: ''      # API v3 密钥
+    wechat-serial-number: ''   # 商户证书序列号
+    wechat-private-key: ''     # 商户私钥（apiclient_key.pem 内容）
+    wechat-notify-url: 'https://api.qwer2333.com/api/app-api/transport/pay/wechat/notify'

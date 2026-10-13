@@ -5,9 +5,11 @@ import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.order.PassengerOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.station.StationDO;
+import cn.iocoder.yudao.module.transport.dal.mysql.order.PassengerOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.order.PostalOrderMapper;
 import cn.iocoder.yudao.module.transport.dal.mysql.station.StationMapper;
 import cn.iocoder.yudao.module.transport.service.transport.order.TransportOrderService;
@@ -35,6 +37,7 @@ import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 public class TransportOrderController {
     @Resource private TransportOrderService orderService;
     @Resource private PostalOrderMapper postalOrderMapper;
+    @Resource private PassengerOrderMapper passengerOrderMapper;
     @Resource private StationMapper stationMapper;
 
     @PostMapping("/create")
@@ -101,7 +104,17 @@ public class TransportOrderController {
         // 站点名：取货站 / 送达站 / 交接服务站（后台列表不显示裸 ID）
         vo.setPickupStationName(stationName(order.getPickupStationId(), stationMap));
         vo.setDeliveryStationName(stationName(order.getDeliveryStationId(), stationMap));
-        if (Objects.equals(order.getOrderType(), 3)) {
+        if (Objects.equals(order.getOrderType(), 1)) {
+            // 客运：人数/联系人/联系电话此前**整块不回读**——后台编辑时表单把这三项当空值 PUT 回来，
+            // 而 updatePassengerOrder 的守卫是 `passengerCount == null` 才跳过，
+            // 于是"只改人数"这一操作会把联系人与电话抹成空串（子表字段必须能回读，见 D-090）
+            PassengerOrderDO passenger = passengerOrderMapper.selectOne(PassengerOrderDO::getOrderId, order.getId());
+            if (passenger != null) {
+                vo.setPassengerCount(passenger.getPassengerCount());
+                vo.setContactName(passenger.getContactName());
+                vo.setContactMobile(passenger.getContactMobile());
+            }
+        } else if (Objects.equals(order.getOrderType(), 3)) {
             // 邮快件：快递单号/取件码/核销状态/收件人
             PostalOrderDO postal = postalOrderMapper.selectOne(PostalOrderDO::getOrderId, order.getId());
             if (postal != null) {
@@ -111,6 +124,11 @@ public class TransportOrderController {
                 vo.setReceiverName(postal.getReceiverName());
                 vo.setReceiverMobile(postal.getReceiverMobile());
                 vo.setReceiverAddress(postal.getReceiverAddress());
+                // 这三项以前不在 RespVO 里 ⇒ 编辑一单邮快件就把承运商清空、件数被 updatePostalOrder 的
+                // `!= null ? : 1` 默认值改写成 1、重量原样保留（MyBatis 忽略 null）——回读补齐后 PUT 回去才是原值
+                vo.setCarrierCode(postal.getCarrierCode());
+                vo.setPostalItemCount(postal.getItemCount());
+                vo.setPostalWeightKg(postal.getWeightKg());
             }
         } else {
             CargoOrderDO cargo = orderService.getCargoOrder(order.getId());

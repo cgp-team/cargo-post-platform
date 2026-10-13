@@ -61,6 +61,19 @@
       <el-form-item label="排序" prop="sort">
         <el-input-number v-model="formData.sort" :min="0" style="width:100%" />
       </el-form-item>
+      <el-form-item label="联系人" prop="contactName">
+        <el-input v-model="formData.contactName" placeholder="揽收点联系人；留空=没填" />
+      </el-form-item>
+      <el-form-item label="联系电话" prop="contactMobile">
+        <el-input v-model="formData.contactMobile" placeholder="揽收点联系电话" />
+      </el-form-item>
+      <el-form-item label="营业时间" prop="businessHours">
+        <el-input v-model="formData.businessHours" placeholder="如 08:00-18:00；留空=未公布（不冒充 24 小时）" />
+      </el-form-item>
+      <el-form-item label="电商站点" prop="ecommerceFlag">
+        <el-switch v-model="formData.ecommerceFlag" />
+        <span class="ml-8px text-12px text-gray-500">站点类型只有 公交站/货运站/混合，表达不了"电商站点"，所以单独一个标记</span>
+      </el-form-item>
       <el-form-item label="备注" prop="remark">
         <el-input v-model="formData.remark" type="textarea" :rows="2" placeholder="如：校园禁行区，车辆不可进入" />
       </el-form-item>
@@ -164,6 +177,10 @@ const formData = ref<StationApi.StationVO>({
   longitude: undefined,
   latitude: undefined,
   address: '',
+  contactName: '',
+  contactMobile: '',
+  businessHours: '',
+  ecommerceFlag: false,
   status: 0,
   sourceType: 'PROJECT',
   stationType: 'CARGO_STATION',
@@ -202,6 +219,10 @@ const resetForm = () => {
     longitude: undefined,
     latitude: undefined,
     address: '',
+  contactName: '',
+  contactMobile: '',
+  businessHours: '',
+  ecommerceFlag: false,
     status: 0,
     sourceType: 'PROJECT',
     stationType: 'CARGO_STATION',

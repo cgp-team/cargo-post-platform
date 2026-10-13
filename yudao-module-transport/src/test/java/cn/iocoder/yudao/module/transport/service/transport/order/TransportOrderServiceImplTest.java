@@ -4,6 +4,7 @@ import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.OrderAuditReqVO;
+import cn.iocoder.yudao.module.transport.controller.admin.transport.order.vo.TransportOrderUpdateReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.send.vo.AppSendOrderCreateReqVO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.CargoOrderDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -373,6 +374,70 @@ class TransportOrderServiceImplTest {
         ArgumentCaptor<TransportOrderDO> captor = ArgumentCaptor.forClass(TransportOrderDO.class);
         verify(orderMapper).updateById(captor.capture());
         assertNull(captor.getValue().getStatus(), "update 传入的 status 必须被忽略（置 null 不落库）");
+    }
+
+    /**
+     * D-090：后台编辑一单邮快件时，报文里没带件数/承运商（管理端表单当时根本没有回读这两项），
+     * 旧写法会把库里的件数**改写成 1**（`postalItemCount != null ? : 1` 这个默认值只该出现在创建路径）。
+     * 这条用例在修之前是红的：captor.getValue().getItemCount() == 1。
+     */
+    @Test
+    void update_postal_order_without_item_count_keeps_stored_count() {
+        when(orderMapper.selectById(1L)).thenReturn(
+                TransportOrderDO.builder().id(1L).orderType(3).status(1).build());
+        PostalOrderDO exist = new PostalOrderDO();
+        exist.setId(77L);
+        exist.setOrderId(1L);
+        exist.setMailNo("SF123");
+        exist.setCarrierCode("SF");
+        exist.setItemCount(5);
+        exist.setWeightKg(new BigDecimal("3.2"));
+        when(postalOrderMapper.selectOne(any(SFunction.class), eq(1L))).thenReturn(exist);
+
+        TransportOrderUpdateReqVO reqVO = new TransportOrderUpdateReqVO();
+        reqVO.setId(1L);
+        reqVO.setOrderType(3);
+        reqVO.setMailNo("SF123");        // 守卫看的是 mailNo 非 null，所以这一支会真的走到 updateById
+        // 刻意不设 carrierCode / postalItemCount / postalWeightKg：等价于"报文没带"
+
+        orderService.update(reqVO);
+
+        ArgumentCaptor<PostalOrderDO> captor = ArgumentCaptor.forClass(PostalOrderDO.class);
+        verify(postalOrderMapper).updateById(captor.capture());
+        PostalOrderDO upd = captor.getValue();
+        assertNull(upd.getItemCount(), "报文没带件数 ⇒ 不许写 1，null 才会被 MyBatis 当成不改（库里保持 5）");
+        assertNull(upd.getCarrierCode(), "报文没带承运商 ⇒ 不许落任何值，旧写法在这里会写空串把 SF 抹掉");
+        assertNull(upd.getWeightKg(), "报文没带重量 ⇒ 不改");
+    }
+
+    /**
+     * D-090 同族：货运更新里 `freshFlag == null` 被旧写法判成 false ⇒ 一张生鲜单（承运审核走人工的开关）
+     * 会因为"报文没带这个键"被静默降级；`cargoItemCount == null` 同样被兜成 1。
+     */
+    @Test
+    void update_cargo_order_without_fresh_flag_does_not_downgrade_it() {
+        when(orderMapper.selectById(2L)).thenReturn(
+                TransportOrderDO.builder().id(2L).orderType(2).status(1).build());
+        CargoOrderDO exist = new CargoOrderDO();
+        exist.setId(88L);
+        exist.setOrderId(2L);
+        exist.setFreshFlag(true);
+        exist.setItemCount(3);
+        when(cargoOrderMapper.selectOne(any(SFunction.class), eq(2L))).thenReturn(exist);
+
+        TransportOrderUpdateReqVO reqVO = new TransportOrderUpdateReqVO();
+        reqVO.setId(2L);
+        reqVO.setOrderType(2);
+        reqVO.setCargoCategory("生鲜果蔬");   // 守卫：cargoCategory 非 null 才会走到 updateById
+        // 刻意不设 freshFlag / cargoItemCount
+
+        orderService.update(reqVO);
+
+        ArgumentCaptor<CargoOrderDO> captor = ArgumentCaptor.forClass(CargoOrderDO.class);
+        verify(cargoOrderMapper).updateById(captor.capture());
+        CargoOrderDO upd = captor.getValue();
+        assertNull(upd.getFreshFlag(), "报文没带生鲜旗标 ⇒ 不许写 false 把生鲜单降级（null = 不改）");
+        assertNull(upd.getItemCount(), "报文没带件数 ⇒ 不许兜成 1");
     }
 
 }

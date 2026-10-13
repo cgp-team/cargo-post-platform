@@ -59,6 +59,20 @@ class CargoHandoverTest {
                 .fromDriverId(1L).toDriverId(2L).status(status).build());
     }
 
+    /** 交接确认走通到底所需的全部桩（照片/签名那条用例也要用同一套，避免两份桩慢慢漂） */
+    private void stubConfirmPath() {
+        when(orderMapper.selectById(100L)).thenReturn(TransportOrderDO.builder()
+                .id(100L).status(TransportOrderStatusEnum.TRANSFERRING.getStatus()).build());
+        when(handoverMapper.update(any(TransportHandoverDO.class), any())).thenReturn(1);
+        when(legMapper.selectById(2L)).thenReturn(TransportLegDO.builder()
+                .id(2L).orderId(100L).planId(55L).legSequence(2).driverId(2L).vehicleId(22L)
+                .status(TransportLegStatusEnum.ASSIGNED.getStatus()).build());
+        when(legMapper.selectListByOrderId(100L)).thenReturn(List.of(
+                TransportLegDO.builder().id(1L).orderId(100L).legSequence(1).build(),
+                TransportLegDO.builder().id(2L).orderId(100L).legSequence(2).build()));
+    }
+
+
     @Test
     void cannot_confirm_before_source_arrived() {
         stubHandover(TransportHandoverStatusEnum.WAITING.getStatus());
@@ -90,26 +104,40 @@ class CargoHandoverTest {
     void confirm_advances_leg1_completed_and_leg2_in_transit_atomically() {
         stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
         // BE-21：状态机守卫需要读取当前订单状态（交接确认前订单处于换乘中）
-        when(orderMapper.selectById(100L)).thenReturn(TransportOrderDO.builder()
-                .id(100L).status(TransportOrderStatusEnum.TRANSFERRING.getStatus()).build());
-        when(handoverMapper.update(any(TransportHandoverDO.class), any())).thenReturn(1);
-        when(legMapper.selectById(2L)).thenReturn(TransportLegDO.builder()
-                .id(2L).orderId(100L).planId(55L).legSequence(2).driverId(2L).vehicleId(22L)
-                .status(TransportLegStatusEnum.ASSIGNED.getStatus()).build());
-        when(legMapper.selectListByOrderId(100L)).thenReturn(List.of(
-                TransportLegDO.builder().id(1L).orderId(100L).legSequence(1).build(),
-                TransportLegDO.builder().id(2L).orderId(100L).legSequence(2).build()));
+        stubConfirmPath();
 
-        service.confirmHandover(9L, 2L, "photo.jpg");
+        service.confirmHandover(9L, 2L, "photo.jpg", "sign-7.png");
 
         verify(handoverMapper).update(argThat((TransportHandoverDO h) ->
                 TransportHandoverStatusEnum.COMPLETED.getStatus().equals(h.getStatus())
-                        && h.getHandoverCompletedAt() != null && h.getConfirmedBy() == 2L), any());
+                        && h.getHandoverCompletedAt() != null && h.getConfirmedBy() == 2L
+                        // 凭证是两件事：照片=货与舱的核验，签名=谁认了这笔交接，都要落下
+                        && "photo.jpg".equals(h.getPhotoUrl()) && "sign-7.png".equals(h.getSignUrl())), any());
         verify(multiLegService).forceLegStatus(eq(1L), eq(TransportLegStatusEnum.COMPLETED), anyString());
         verify(multiLegService).forceLegStatus(eq(2L), eq(TransportLegStatusEnum.IN_TRANSIT), anyString());
         // 最后一段接货 → 订单进入运输中（不得直接置完成）
         verify(orderMapper).update(argThat((TransportOrderDO o) ->
                 TransportOrderStatusEnum.IN_TRANSIT.getStatus().equals(o.getStatus())), any());
+    }
+
+    @Test
+    void confirm_without_sign_url_leaves_column_untouched_not_empty_string() {
+        // 空串会被后台念成"核对过，这人确实没签"——那是我们编出来的结论，不是后端给的事实。
+        stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
+        stubConfirmPath();
+        service.confirmHandover(9L, 2L, "photo.jpg", null);
+        verify(handoverMapper).update(argThat((TransportHandoverDO h) ->
+                h.getSignUrl() == null && "photo.jpg".equals(h.getPhotoUrl())), any());
+    }
+
+    @Test
+    void three_arg_overload_delegates_with_null_sign() {
+        // 旧的三参形状还在（default 委托），既有调用点不必一起改；但它不许悄悄塞一个空签名进去。
+        stubHandover(TransportHandoverStatusEnum.SOURCE_ARRIVED.getStatus());
+        stubConfirmPath();
+        service.confirmHandover(9L, 2L, "photo.jpg");
+        verify(handoverMapper).update(argThat((TransportHandoverDO h) ->
+                h.getSignUrl() == null), any());
     }
 
     @Test
