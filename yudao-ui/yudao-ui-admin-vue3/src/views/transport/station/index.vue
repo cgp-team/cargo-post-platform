@@ -61,6 +61,27 @@
           </template>
         </el-table-column>
         <el-table-column label="站点地址" prop="address" align="center" />
+        <!-- 揽收点属性（V033 起才有列）。⚠ 空值一律念"没填/未公布"，不显示成空白格——
+             空白格在后台语境里会被读成"这一项已核对过、确实没有"。 -->
+        <el-table-column label="联系人" align="center" width="150">
+          <template #default="scope">
+            <span v-if="scope.row.contactName">{{ scope.row.contactName }}</span>
+            <span v-else class="text-gray-400">没填</span>
+            <span v-if="scope.row.contactMobile" class="text-gray-500"> · {{ scope.row.contactMobile }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="营业时间" align="center" width="140">
+          <template #default="scope">
+            <span v-if="scope.row.businessHours">{{ scope.row.businessHours }}</span>
+            <span v-else class="text-gray-400">未公布</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="电商站点" align="center" width="90">
+          <template #default="scope">
+            <el-tag v-if="scope.row.ecommerceFlag" size="small" type="warning">电商</el-tag>
+            <span v-else class="text-gray-400">否</span>
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" prop="createTime" align="center" width="180" />
         <el-table-column label="操作" align="center" width="150">
           <template #default="scope">
