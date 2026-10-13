@@ -240,6 +240,27 @@
         <span v-else class="text-gray-500">无</span>
       </el-descriptions-item>
     </el-descriptions>
+
+    <!-- 事件时间线：读 /transport/order-event/list-by-order（权限复用 transport:order:query）。
+         ⚠ 三格必须分开念：读到 N 条 / 后端确实说没有 / 这一格没读到（失败原因照实显示）。 -->
+    <div class="mt-16px">
+      <div class="mb-8px font-bold">事件时间线</div>
+      <el-alert v-if="eventsError" type="warning" :closable="false" show-icon
+                :title="`事件流没读到：${eventsError}`"
+                description="这不代表该订单没有事件；下面的订单状态仍是后端回的状态。" />
+      <el-timeline v-else-if="events.length">
+        <el-timeline-item
+          v-for="ev in events"
+          :key="ev.id"
+          :timestamp="eventTimeText(ev.eventTime)"
+          placement="top">
+          <span class="font-bold">{{ ev.eventTypeName || ev.eventType || '后端没给类型名' }}</span>
+          <span v-if="ev.operator" class="text-gray-500"> · {{ ev.operator }}</span>
+          <div v-if="ev.detail" class="text-gray-600">{{ ev.detail }}</div>
+        </el-timeline-item>
+      </el-timeline>
+      <span v-else class="text-gray-500">后端说这单没有事件记录（接口正常返回空列表，不是读取失败）</span>
+    </div>
     <template #footer>
       <el-button @click="detailVisible = false">关 闭</el-button>
     </template>
@@ -248,7 +269,9 @@
 
 <script setup lang="ts">
 import * as OrderApi from '@/api/transport/order'
+import * as OrderEventApi from '@/api/transport/orderEvent'
 import * as StationApi from '@/api/transport/station'
+import dayjs from 'dayjs'
 import {
   orderTypeLabel,
   orderTypeTag,
@@ -348,10 +371,31 @@ const submitAudit = async (pass: boolean) => {
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<OrderApi.OrderVO>({})
+/** 事件流三格：events（读到的）/ eventsError（没读到的原因）/ 两者都空 = 后端确实说没有 */
+const events = ref<OrderEventApi.OrderEventVO[]>([])
+const eventsError = ref('')
+const eventsLoading = ref(false)
+const eventTimeText = (v?: number) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '后端没给时间')
+
+const loadEvents = async (orderId: number) => {
+  events.value = []
+  eventsError.value = ''
+  eventsLoading.value = true
+  try {
+    events.value = (await OrderEventApi.getOrderEvents(orderId)) || []
+  } catch (e: any) {
+    // 失败不许塌成"没有事件"：那一格念错，运营就会以为这单没动过
+    eventsError.value = e?.msg || e?.message || '未知原因（后端没给出原因）'
+  } finally {
+    eventsLoading.value = false
+  }
+}
+
 const openDetail = async (row: OrderApi.OrderVO) => {
   detail.value = row // 先用列表数据渲染，避免白屏
   detailVisible.value = true
   detailLoading.value = true
+  loadEvents(row.id!)
   try {
     detail.value = await OrderApi.getOrder(row.id!)
   } finally {
