@@ -58,10 +58,14 @@ class HacoConfig:
     ls_max_moves: int = 50       # 局部搜索最大移动次数
 
     # 时间预算（秒）
+    # 口径的唯一权威说明在 docs/algorithm-integration.md「时限与终止口径」，此处只写取值：
+    # haco_time_limit = 本臂搜索的上限；overall_time_limit = 请求级墙钟保险丝（由 app/solver.solve 兑现，
+    # 约束可中断的搜索，不可中断的固定开销以 OVERALL_FUSE_TRIPPED 报出，不藏）。
     haco_time_limit: float = 4.0
     overall_time_limit: float = 5.0
 
     # 确定性评估次数预算（None=只看时间）。CI/批量回归设有限值可消除抖动。
+    # ⚠ 计数才是「终止的正常依据」；墙钟只是保险丝 —— 见上面那份口径。
     max_evaluations: int | None = None
 
     # deterministic greedy seed 的独立时间预算（秒）。

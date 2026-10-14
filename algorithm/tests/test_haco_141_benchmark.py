@@ -89,6 +89,9 @@ def _run_and_record(req, label):
         "vehicle_count": len(result.vehicle_plans) if result.status == "feasible" else 0,
         "distance": result.total_distance if result.status == "feasible" else 0,
         "runtime_ms": round(elapsed, 1),
+        # 计数口径的读者：搜索真正跑完了几代。ITERATION_COUNT 以前只活在 warning 字符串里，
+        # 没有任何断言在读 ⇒ 「终止以评估计数为准」这句契约没人验证；这一格把它变成可红的判据。
+        "iterations": len(getattr(result, "iteration_stats", ()) or ()),
         "expected_tasks": expected_tasks,
         "planned_tasks": planned_tasks,
         "task_completeness": planned_tasks == expected_tasks,
@@ -150,6 +153,17 @@ def _assert_run_is_honest(r, overall_time_limit: float):
         f'{r["label"]} runtime_ms={r["runtime_ms"]} 没在 {ceiling:.0f}ms'
         f'（声明 {overall_time_limit}s × {HANG_GUARD_FACTOR}）内停下来 ⇒ 这是不终止，不是慢'
     )
+    # 计数口径必须有人读：标着 haco 版本的可行解，如果一代完整迭代都没跑完，
+    # 交付的其实是贪心种子 —— 那是阶段配额要治的病，不许被 status=feasible 盖过去。
+    # HYBRID 选了 baseline 时版本不是 haco，那一臂本来就 0 代，所以按版本限定而不是按模式。
+    if r["status"] == "feasible" and str(r.get("algorithm_version", "")).startswith("haco"):
+        assert r.get("iterations") is not None, (
+            f'{r["label"]} 记录里没有 iterations 字段 ⇒ 台账是旧版，先重跑再看判据（不许读成 0）'
+        )
+        assert r["iterations"] >= 1, (
+            f'{r["label"]} feasible 但 0 代完整迭代（runtime_ms={r["runtime_ms"]}）'
+            f' ⇒ 交付的是贪心种子，不是搜索出来的解；要么预算被上游吃光，要么配额退化'
+        )
 
 
 # S1: 5 passenger + 3 delivery, 2 vehicles
