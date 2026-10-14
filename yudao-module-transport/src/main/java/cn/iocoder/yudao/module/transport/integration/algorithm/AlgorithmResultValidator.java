@@ -11,8 +11,10 @@ import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.ALGORIT
 
 /**
  * 算法结果合法性校验（适配层责任第 5 条）：
- * 车辆、站点、订单均属于原快照；容量与时序不越界；所有订单只出现一次；
- * PASS 经停合法；Skeleton 顺序正确；配对货运（shipment）完整覆盖。
+ * 车辆、站点、订单均属于原快照；容量与时序不越界；被服务的订单只出现一次；
+ * PASS 经停合法；Skeleton 顺序正确；配对货运（shipment）揽派成对覆盖。
+ * 算法可以只交部分解（本趟带不下的货运单进 unassignedOrderIds，业务侧转多段联运），
+ * 但"未分配"必须是真未分配且不得是乘客单，否则视为非法结果。
  * 校验不通过一律抛 {@link cn.iocoder.yudao.framework.common.exception.ServiceException}，不落库。
  */
 public final class AlgorithmResultValidator {
@@ -55,7 +57,21 @@ public final class AlgorithmResultValidator {
     public static final String REASON_INFEASIBLE_FALLBACK = "INFEASIBLE";
 
     private static void validateFeasible(AlgorithmPlanReqDTO request, AlgorithmPlanRespDTO response) {
-        if (CollectionUtils.isEmpty(response.getVehiclePlans()) && !CollectionUtils.isEmpty(request.getOrders())) {
+        // 部分解语义：算法把"这一趟带不下"的货运单号写进 unassignedOrderIds，交 MultiLeg 拆段接力。
+        // 这些单号从覆盖率判据中扣除，但扣除是有条件的 —— 不能让它变成算法藏漏派的口子：
+        // 未分配号必须在快照内（下面这段）；乘客单不可舍弃；声明未分配的单不得同时出现在方案里（requireNotPlanned）。
+        Set<String> shed = new HashSet<>(nullSafe(response.getUnassignedOrderIds()));
+        Set<String> snapshotIds = new HashSet<>();
+        request.getOrders().forEach(order -> snapshotIds.add(order.getOrderId()));
+        nullSafe(request.getShipments()).forEach(shipment -> snapshotIds.add(shipment.getShipmentId()));
+        for (String shedId : shed) {
+            if (!snapshotIds.contains(shedId)) {
+                throw exception(ALGORITHM_RESULT_INVALID, "未分配单 " + shedId + " 不属于本次请求快照");
+            }
+        }
+
+        if (CollectionUtils.isEmpty(response.getVehiclePlans()) && !CollectionUtils.isEmpty(request.getOrders())
+                && !isEverythingShed(shed, request)) {
             throw exception(ALGORITHM_RESULT_INVALID, "feasible 结果缺少车辆方案");
         }
 
@@ -85,20 +101,34 @@ public final class AlgorithmResultValidator {
             }
         }
 
-        // 所有订单必须被覆盖且只出现一次；客运订单为 BOARD+ALIGHT 两站
+        // 被服务的订单必须各就各位；客运订单为 BOARD+ALIGHT 两站。
+        // 进了未分配名单的单：乘客直接判非法，货运单要求"真的一个经停都没有"（requireNotPlanned）。
         for (AlgorithmOrderDTO order : request.getOrders()) {
-            int expected = AlgorithmOrderDTO.TYPE_PASSENGER.equals(order.getOrderType()) ? 2 : 1;
+            boolean passenger = AlgorithmOrderDTO.TYPE_PASSENGER.equals(order.getOrderType());
+            int expected = passenger ? 2 : 1;
             int actual = orderStopCount.getOrDefault(order.getOrderId(), 0);
+            if (shed.contains(order.getOrderId())) {
+                if (passenger) {
+                    throw exception(ALGORITHM_RESULT_INVALID,
+                            "客运订单 " + order.getOrderId() + " 被声明为未分配（乘客不可舍弃，须由本班次或加班次承载）");
+                }
+                requireNotPlanned(order.getOrderId(), actual);
+                continue;
+            }
             if (actual != expected) {
                 throw exception(ALGORITHM_RESULT_INVALID,
                         "订单 " + order.getOrderId() + " 出现 " + actual + " 次，期望 " + expected + " 次");
             }
         }
 
-        // 所有 shipment 必须被完整覆盖：PICKUP + DELIVERY 各一次
+        // 配对货运（shipment）要么揽派成对各一次，要么整单未分配，不允许只落一半
         for (AlgorithmShipmentDTO shipment : nullSafe(request.getShipments())) {
             int pickups = shipmentPickupCount.getOrDefault(shipment.getShipmentId(), 0);
             int deliveries = shipmentDeliveryCount.getOrDefault(shipment.getShipmentId(), 0);
+            if (shed.contains(shipment.getShipmentId())) {
+                requireNotPlanned(shipment.getShipmentId(), pickups + deliveries);
+                continue;
+            }
             if (pickups != 1 || deliveries != 1) {
                 throw exception(ALGORITHM_RESULT_INVALID,
                         "shipment " + shipment.getShipmentId() + " 覆盖不完整：PICKUP=" + pickups + " DELIVERY=" + deliveries);
@@ -210,7 +240,7 @@ public final class AlgorithmResultValidator {
                 }
                 case AlgorithmRouteStopDTO.ACTION_DELIVER -> {
                     if (order != null) {
-                        requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_DELIVERY, plan);
+                        requireCargoStop(vehicle, order, stop, AlgorithmOrderDTO.TYPE_DELIVERY, plan);
                         cargo -= itemCountOf(stop, orderMap);
                     } else {
                         // Shipment DELIVERY
@@ -219,7 +249,8 @@ public final class AlgorithmResultValidator {
                         if (shipment == null) {
                             throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单/shipment " + sid);
                         }
-                        if (!Objects.equals(shipment.getDeliveryStationId(), stop.getStationId())) {
+                        if (!Objects.equals(shipment.getDeliveryStationId(), stop.getStationId())
+                                && !isStationHandover(vehicle, stop)) {
                             throw exception(ALGORITHM_RESULT_INVALID,
                                     "shipment " + sid + " DELIVERY 站点不匹配：期望 " + shipment.getDeliveryStationId());
                         }
@@ -229,7 +260,7 @@ public final class AlgorithmResultValidator {
                 }
                 case AlgorithmRouteStopDTO.ACTION_PICKUP -> {
                     if (order != null) {
-                        requireCargoStop(order, stop, AlgorithmOrderDTO.TYPE_PICKUP, plan);
+                        requireCargoStop(vehicle, order, stop, AlgorithmOrderDTO.TYPE_PICKUP, plan);
                         cargo += itemCountOf(stop, orderMap);
                     } else {
                         // Shipment PICKUP
@@ -238,7 +269,8 @@ public final class AlgorithmResultValidator {
                         if (shipment == null) {
                             throw exception(ALGORITHM_RESULT_INVALID, "经停点引用了快照外的订单/shipment " + sid);
                         }
-                        if (!Objects.equals(shipment.getPickupStationId(), stop.getStationId())) {
+                        if (!Objects.equals(shipment.getPickupStationId(), stop.getStationId())
+                                && !isStationHandover(vehicle, stop)) {
                             throw exception(ALGORITHM_RESULT_INVALID,
                                     "shipment " + sid + " PICKUP 站点不匹配：期望 " + shipment.getPickupStationId());
                         }
@@ -300,12 +332,34 @@ public final class AlgorithmResultValidator {
         }
     }
 
-    private static void requireCargoStop(AlgorithmOrderDTO order, AlgorithmRouteStopDTO stop,
-                                         String expectedType, AlgorithmVehiclePlanDTO plan) {
+    private static void requireCargoStop(AlgorithmVehicleDTO vehicle, AlgorithmOrderDTO order,
+                                         AlgorithmRouteStopDTO stop, String expectedType,
+                                         AlgorithmVehiclePlanDTO plan) {
         if (!expectedType.equals(order.getOrderType()) || !Objects.equals(order.getStationId(), stop.getStationId())) {
+            // 例外：就近站交接。"车停在骨架站、客户到站取送"是既定的第②级处置
+            // （绕行超阈值 / 公交根本进不去 / 点位就在站旁），停靠站与订单原始点位**本来就该不同**。
+            // 按原始点位一刀切拒绝，等于把所有交接方案都判成非法路单。
+            if (expectedType.equals(order.getOrderType()) && isStationHandover(vehicle, stop)) {
+                return;
+            }
             throw exception(ALGORITHM_RESULT_INVALID,
                     "车辆 " + plan.getVehicleId() + " 中订单 " + order.getOrderId() + " 的作业站点或动作与快照不符");
         }
+    }
+
+    /**
+     * 就近站交接的合法形状（与度量台 `benchmarks/lab/check.py` 同一口径，不另立标准）：
+     * 方案自己声明了 {@code serviceMode=NEAREST_STATION}、服务点就是车真正停靠的那一站，
+     * 并且该停靠点在本车的公交骨架上（无骨架的车没有"每站必停"约束，交接点由算法按最近可达站选）。
+     * 只有标签没有落点、或落点不在骨架上的"假交接"在这里一样会被拒。
+     */
+    private static boolean isStationHandover(AlgorithmVehicleDTO vehicle, AlgorithmRouteStopDTO stop) {
+        if (!"NEAREST_STATION".equals(stop.getServiceMode())
+                || !Objects.equals(stop.getServicePoint(), stop.getStationId())) {
+            return false;
+        }
+        List<String> skeleton = vehicle == null ? null : vehicle.getSkeleton();
+        return CollectionUtils.isEmpty(skeleton) || skeleton.contains(stop.getStationId());
     }
 
     private static String orderTypeOf(AlgorithmRouteStopDTO stop, Map<String, AlgorithmOrderDTO> orderMap) {
@@ -319,6 +373,32 @@ public final class AlgorithmResultValidator {
             return 0;
         }
         return order.getItemCount() != null ? order.getItemCount() : 1;
+    }
+
+    /** 声明为未分配的单必须真的没进方案：出现任何经停就是"既算已派又报未分配"，口径自相矛盾。 */
+    private static void requireNotPlanned(String businessId, int stopCount) {
+        if (stopCount != 0) {
+            throw exception(ALGORITHM_RESULT_INVALID,
+                    "单号 " + businessId + " 已声明为未分配，却仍有 " + stopCount + " 个经停点");
+        }
+    }
+
+    /** 空方案仅在"整批都转多段联运"时才合法 */
+    private static boolean isEverythingShed(Set<String> shed, AlgorithmPlanReqDTO request) {
+        if (shed.isEmpty()) {
+            return false;
+        }
+        for (AlgorithmOrderDTO order : request.getOrders()) {
+            if (!shed.contains(order.getOrderId())) {
+                return false;
+            }
+        }
+        for (AlgorithmShipmentDTO shipment : nullSafe(request.getShipments())) {
+            if (!shed.contains(shipment.getShipmentId())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static <T> List<T> nullSafe(List<T> list) {

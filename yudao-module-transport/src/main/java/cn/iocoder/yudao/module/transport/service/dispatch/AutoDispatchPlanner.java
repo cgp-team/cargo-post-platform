@@ -123,11 +123,18 @@ public class AutoDispatchPlanner {
                 .toList();
     }
 
-    /** 算法默认超参（与 docs/algorithm/haco-cps-design.md 一致）；调用方传入的同名键优先 */
+    /**
+     * 算法默认超参：与算法服务自身的默认值逐项一致（algorithm/app/models.py AlgorithmConfig）。
+     *
+     * <p>原先这里写 30/100（照 early design doc 抄的），而算法实测 sweet spot 是 24 蚁 × 8 代，
+     * ACO 更深反而让目标变差（收尾精修由 ALNS 负责，见 docs/algorithm/haco-cps-lab-iteration-2026-10.md）。
+     * 两边不一致会让生产跑的口径与离线 A/B 的口径不是同一套，指标不可比 —— 所以这里必须跟默认值，
+     * 而不是"看起来更用力"。调用方传入的同名键仍可覆盖（高级设置）。</p>
+     */
     public static Map<String, Object> defaultAlgorithmConfig() {
         Map<String, Object> config = new LinkedHashMap<>();
-        config.put("ant_count", 30);
-        config.put("max_iterations", 100);
+        config.put("ant_count", 24);
+        config.put("max_iterations", 8);
         config.put("alpha", 1.0);
         config.put("beta", 3.0);
         config.put("rho", 0.1);

@@ -139,8 +139,10 @@ yudao:
   demo: false # 开启演示模式
   tencent-lbs-key: ${TENCENT_LBS_KEY:TVDBZ-TDILD-4ON4B-PFDZA-RNLKH-VVF6E} # QQ 地图的密钥（yudao 演示值，生产须覆盖）
   sms-code: # 非生产环境固定验证码（测试可用性；生产 application.yaml 保持随机区间不动）
-    begin-code: 8888
-    end-code: 8888
+    # 位数与生产一致（6 位）：固定值本身可以背，但"dev 4 位 / 生产 6 位"会让上层
+    # （App 输入框上限、文案、测试脚本）按位数写死两套，真机上就是"写着 6 位却发 4 位"。
+    begin-code: 888888
+    end-code: 888888
 
 justauth:
   enabled: true

@@ -56,7 +56,19 @@ public class DispatchPlanDO extends TenantBaseDO {
     private LocalDateTime estimatedStartTime;
     /** 预计到达时间（方案内最晚段到达） */
     private LocalDateTime estimatedArrivalTime;
-    /** 实际开始/到达时间 */
+    /**
+     * 实际开始/到达时间（V029 之前是死列：全仓零写入、零读取）。
+     * 现由 `DispatchPlanReconcileJob` 从明细的实际上报时刻回填 —— 只在该方案**确有**明细实际时刻时才写，
+     * 一条都没有就留 NULL（不拿计划值或作业运行时刻冒充实际执行）。
+     */
     private LocalDateTime actualStartTime;
     private LocalDateTime actualArrivalTime;
+    /**
+     * 本批未派发的货运单与原因码（V029），JSON 数组：
+     * <pre>[{"orderId":12,"reasonCode":"CAPACITY_OVERFLOW"}]</pre>
+     * 算法侧是 `unassignedOrderIds` + warnings 原因码；此前只用来判空和拼一句解释文案，
+     * 事后查不到"这批为什么少带两单"，也无法回流成度量台的题（#33 语料缺口）。
+     * 乘客单受业务底线保护永不舍弃，因此永不出现在这里。NULL = 本批没有未派单。
+     */
+    private String unassignedOrders;
 }

@@ -309,6 +309,15 @@ class DriverAppServiceImplTest {
                 .collect(Collectors.toMap(DispatchPlanItemDO::getId, DispatchPlanItemDO::getStatus));
         assertEquals(TaskItemStatusEnum.COMPLETED.getStatus(), statusById.get(1L));
         assertEquals(TaskItemStatusEnum.ARRIVED.getStatus(), statusById.get(2L));
+
+        // V029（任务 #34）：到站上报是"此刻真的到了"唯一的现场证据 ⇒ 当前站必须落实际到达时刻。
+        // 更早那站只推进状态，**不得**顺手写实际时刻：它真正的离站时间落在"上一站到站"与"现在"之间，
+        // 写 now() 等于把没测到的东西写成测到了 —— 那正是要避免的假数据形状。
+        Map<Long, DispatchPlanItemDO> updById = captor.getAllValues().stream()
+                .collect(Collectors.toMap(DispatchPlanItemDO::getId, u -> u));
+        assertNotNull(updById.get(2L).getActualArrivalTime(), "到站必须落实际到达时刻");
+        assertNull(updById.get(1L).getActualArrivalTime(),
+                "更早经停的完成/离站时刻没有现场证据，不得用 now 冒充");
     }
 
     @Test
@@ -732,6 +741,69 @@ class DriverAppServiceImplTest {
         verify(transportOrderMapper).update(orderCaptor.capture(), any());
         assertEquals(TransportOrderStatusEnum.COMPLETED.getStatus(), orderCaptor.getValue().getStatus());
         verify(shiftExecutionMapper).decrementLoadedCount(50L);
+    }
+
+    @Test
+    void pickupConfirm_stamps_actual_loading_time_on_the_item() {
+        // V029（任务 #34）：装车完成时刻是"这件货到底上没上车"唯一的现场证据。
+        // 明细此前只被推进状态、一列实际时刻都没有 ⇒ #32 刚送进算法的逐单时效无法与现实对账，
+        // 迟到率、每站实际停留、绕行代价校准全都没有真值可对。
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.POOLED.getStatus()).build());
+        // 与 stubAssignedPlanItem 的差别只有 id：没有 id 的明细写不进库（helper 会跳过）
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanItemDO.builder().id(77L).planId(100L).driverId(DRIVER_ID).shiftId(10L)
+                        .orderId(1000L).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build()));
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(0));
+        when(vehicleMapper.selectById(7L)).thenReturn(VehicleDO.builder().id(7L).cargoCapacity(4).build());
+        when(shiftExecutionMapper.incrementLoadedCountWithinCapacity(50L, 4)).thenReturn(1);
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        reqVO.setDriverPhotoUrl("http://example.com/photo.jpg");
+        driverAppService.pickupConfirm(reqVO);
+
+        ArgumentCaptor<DispatchPlanItemDO> captor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper).updateById(captor.capture());
+        DispatchPlanItemDO upd = captor.getValue();
+        assertEquals(77L, upd.getId());
+        assertNotNull(upd.getActualArrivalTime(), "装车完成必须落实际时刻");
+        assertNotNull(upd.getActualFinishTime(), "装车即该明细的服务完成");
+        assertNull(upd.getStatus(), "只补时刻，不得顺手改状态（状态另有推进口径）");
+    }
+
+    @Test
+    void deliver_stamps_actual_delivery_time_on_the_item() {
+        // 妥投时刻 = 这条派送明细的实际完成时刻，也是与 latest_delivery_time 对账的那一行。
+        loginMember();
+        stubLoginDriver();
+        when(transportOrderMapper.selectById(1000L)).thenReturn(TransportOrderDO.builder()
+                .id(1000L).orderType(2).status(TransportOrderStatusEnum.DEPARTED.getStatus()).build());
+        when(dispatchPlanItemMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanItemDO.builder().id(88L).planId(100L).driverId(DRIVER_ID).shiftId(10L)
+                        .orderId(1000L).build()));
+        when(dispatchPlanMapper.selectList(any())).thenReturn(List.of(
+                DispatchPlanDO.builder().id(100L).status(2).build()));
+        when(transportOrderMapper.update(any(), any())).thenReturn(1);
+        when(shiftExecutionMapper.selectByShiftAndDriverAndDate(10L, DRIVER_ID, LocalDate.now()))
+                .thenReturn(todayExecution(2));
+
+        AppDriverOrderActionReqVO reqVO = new AppDriverOrderActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setOrderId(1000L);
+        driverAppService.deliver(reqVO);
+
+        ArgumentCaptor<DispatchPlanItemDO> captor = ArgumentCaptor.forClass(DispatchPlanItemDO.class);
+        verify(dispatchPlanItemMapper).updateById(captor.capture());
+        assertEquals(88L, captor.getValue().getId());
+        assertNotNull(captor.getValue().getActualFinishTime(), "妥投必须落实际完成时刻");
     }
 
     @Test
