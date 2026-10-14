@@ -75,7 +75,7 @@ class TestEventsBasedMetrics:
         sm = _station_map()
         g = RouteGenome(0, 1, "D", skeleton=["S1", "S2", "S3"])
         p = _passenger("P1", "S1", "S3")
-        s = _shipment("T1", "S1", "S2", size=1)
+        s = _shipment("T1", "S4", "S2", size=1)   # 离线揽收点：绕行必须真实算出
         g.insert_task(p, 1, 4)
         g.insert_task(s, 2, 5)
         tasks = {t.task_id: t for t in (p, s)}

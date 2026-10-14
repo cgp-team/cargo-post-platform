@@ -41,15 +41,34 @@
 ## 输入约定
 
 - 静态闭环：全部车辆空载从场站出发、规划结束后返回场站；不支持带初始位置和当前载量的增量规划，批次之间不继承车辆状态。
-- 订单分三类：客运（上车站、下车站）、派送（卸货站）、揽收（收货站）。容量只按件数约束：单车实时载客 ≤ 5 人、载货 ≤ 4 件。重量、体积字段可传入留存，算法不校验；无优先级，所有订单平等对待。
+- 订单分三类：客运（上车站、下车站）、派送（卸货站）、揽收（收货站）。容量口径以**车辆档案**为准：
+  载客数取 `transport_vehicle.passenger_capacity`（契约要求 ≥ 1，未录入的车辆不参与派单，
+  见 `DispatchServiceImpl.buildPlanRequest` 与错误码 1005008012）；载货件数取
+  `cargo_capacity`（档案缺省时契约默认 4）。
+- 重量/体积是**可选的第二层约束**：只有车辆同时下发 `cargoWeightCapacityKg` /
+  `cargoVolumeCapacityM3` 时算法才按载重/体积判可行性，否则退回件数口径。
+  因此"载重没核定"要留空而不是填 0 —— 0 会被当成真上限，任何带重量的件都判超限
+  （`cargo_capacity_kg` 的 DDL 默认正是 0，适配层已把 0/负数折算成"不下发"）。
+- 逐单时效（`readyTime` / `pickupDeadline` / `deliveryDeadline` / `priority`）：
+  配对货运单（`shipments`）与站点货运单（`orders` 的派送/揽收）**都下发**，
+  取业务表 `transport_order.earliest_pickup_time` / `latest_delivery_time` 真实值，没填即不下发。
+  算法按事件锚点判：派送单的送达截止在 DELIVER 事件判 `ETA_MISSED_DELIVERY`；
+  揽收单的最早可取时刻在 PICKUP 事件强制等待（件没打包好取不到）。
+  揽收单的"送到场站截止"目前没有事件锚点（货随车回场站才到位），仍由批窗兜住。
+  `priority` 决定稀缺舱位/时间余量的分配次序（越大越先），未下发时按单号确定性排序。
 - 客运订单强制时序：同一乘客的上车站必须先于下车站访问，违反即不可行。
+- 运力不足时**货运单可以被舍弃**（进响应 `unassignedOrderIds`），乘客永不舍弃：
+  公交每站必停拉客，且不存在"网上预约乘车"这类需要算法改派乘客点位的形态。
 - 车辆数由算法自动判定：默认优先单车，单车容量不足时自动增车，无需业务侧指定。
 
 ## 可调参数（algorithmConfig）
 
 ACO 超参数全部可选，经请求体 `algorithmConfig` 传入，不传使用默认值；传入值覆盖默认值，超出建议范围时响应带 `warnings` 字段但不拒绝请求。默认值随镜像版本管理，镜像 CHANGELOG 记录参数变更。
 
-默认值：`ant_count=30`、`max_iterations=100`、`alpha=1.0`、`beta=3.0`、`rho=0.1`、`Q=100`、`convergence_threshold=20`。
+默认值：`ant_count=24`、`max_iterations=8`、`alpha=1.0`、`beta=3.0`、`rho=0.1`、`Q=100`、`convergence_threshold=20`。
+（2026-10-11 更正：这里曾写 30/100，是早期设计稿的数字；算法实测 sweet spot 是 24 蚁 × 8 代，
+ACO 更深目标反而变差（收尾精修由 ALNS 负责），Java 适配层的默认超参已改成与算法自身默认值逐项一致，
+两侧不再各念一套口径。）
 
 ## 规模上限
 

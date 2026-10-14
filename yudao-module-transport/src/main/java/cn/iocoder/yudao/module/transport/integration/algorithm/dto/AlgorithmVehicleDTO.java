@@ -19,6 +19,7 @@ public class AlgorithmVehicleDTO {
     /** 默认货仓实时最大包裹件数 */
     public static final int DEFAULT_CARGO_CAPACITY = 4;
 
+
     private Long vehicleId;
 
     /** 实时最大载客人数 */
@@ -26,6 +27,13 @@ public class AlgorithmVehicleDTO {
 
     /** 货仓实时最大包裹件数 */
     private Integer cargoCapacity;
+
+    /**
+     * 货仓最大载重（kg），取车辆档案 {@code transport_vehicle.cargo_capacity_kg}。
+     * 缺省（null）时算法只按件数约束 —— 不替业务编造重量上限。
+     * 下发后 PlanShipment.weightKg 才真正参与可行性判定（CARGO_OUT_WEIGHT_EXCEEDED）。
+     */
+    private Double cargoWeightCapacityKg;
 
     /** 初始载客人数（车辆从场站出发时已有的乘客数，需 < passengerCapacity） */
     private Integer initialPassengerLoad;

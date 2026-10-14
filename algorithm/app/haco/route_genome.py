@@ -80,10 +80,14 @@ class RouteGenome:
         vehicle_id: int,
         depot_station: str,
         skeleton: list[str] | None = None,
+        end_station: str | None = None,
     ):
         self.vehicle_index = vehicle_index
         self.vehicle_id = vehicle_id
         self.depot_station = depot_station
+        # 多起点公交线：收班站可与发车站不同（契约字段 Vehicle.endStationId）。
+        # 缺省回落到发车站，保持单场站模型的既有行为。
+        self.end_station = end_station or depot_station
         self.skeleton = list(skeleton or [])
 
         self.events: list[RouteEvent] = [
@@ -103,7 +107,7 @@ class RouteGenome:
 
         self.events.append(
             RouteEvent(
-                station_id=depot_station,
+                station_id=self.end_station,
                 event_type=EventType.RETURN,
             )
         )
@@ -122,6 +126,7 @@ class RouteGenome:
         result.vehicle_index = self.vehicle_index
         result.vehicle_id = self.vehicle_id
         result.depot_station = self.depot_station
+        result.end_station = self.end_station
         result.skeleton = list(self.skeleton)
         # RouteEvent / TaskPlacement 均为 frozen，list/dict 浅拷贝即可隔离
         result.events = list(self.events)

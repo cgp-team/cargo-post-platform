@@ -680,9 +680,11 @@ def local_search_improve(
                     ):
                         continue
 
-                    # Deadline check: before evaluation
-                    if deadline is not None and deadline.expired():
-                        return current, current_obj
+                    # Deadline check + 计数：一次移动评估就是一份搜索预算
+                    if deadline is not None:
+                        deadline.tick()
+                        if deadline.expired():
+                            return current, current_obj
 
                     obj = _evaluate_solution(
                         cand, tasks_by_id, station_map, matrix,

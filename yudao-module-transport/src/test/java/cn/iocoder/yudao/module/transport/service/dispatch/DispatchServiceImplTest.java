@@ -28,6 +28,7 @@ import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmOrde
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanReqDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmPlanRespDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmRouteStopDTO;
+import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmVehicleDTO;
 import cn.iocoder.yudao.module.transport.integration.algorithm.dto.AlgorithmVehiclePlanDTO;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
@@ -44,6 +45,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -339,6 +342,323 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_sends_per_order_timeliness_and_vehicle_weight_capacity() {
+        // 订单档案里的 earliest_pickup_time / latest_delivery_time 是真数据；此前没下发，
+        // 算法只能按批窗口判，迟到的单照样被报成可行。车辆货仓载重同理取车辆档案真实值。
+        AlgorithmPlanReqDTO req = planRequestForCargoOrder(11L, 12L, new BigDecimal("50.00"),
+                LocalDateTime.parse("2026-08-09T08:10:00"), LocalDateTime.parse("2026-08-09T08:25:00"),
+                new BigDecimal("5.5"), new BigDecimal("0.0200"), null);
+
+        assertEquals(OffsetDateTime.parse("2026-08-09T08:10:00+08:00"), req.getShipments().get(0).getReadyTime());
+        assertEquals(OffsetDateTime.parse("2026-08-09T08:25:00+08:00"),
+                req.getShipments().get(0).getDeliveryDeadline());
+        assertNull(req.getShipments().get(0).getPickupDeadline(), "业务侧没有揽收截止字段，不得凭空下发");
+        assertEquals(Double.valueOf(50.0), req.getVehicles().get(0).getCargoWeightCapacityKg());
+        assertEquals(Double.valueOf(5.5), req.getShipments().get(0).getWeightKg());
+    }
+
+    @Test
+    void createSmartPlan_stops_dropping_weight_on_single_leg_cargo_orders() {
+        // 场站→村（派送）与村→场站（揽收）是客货邮的主力形态，此前只有配对货运单带重量，
+        // 单向订单分支把货运子表的重量/体积丢了 —— 载重校验对绝大多数单等于没生效
+        AlgorithmPlanReqDTO req = planRequestForCargoOrder(1L, 12L, null, null, null,
+                new BigDecimal("5.5"), new BigDecimal("0.0200"), null);
+
+        assertEquals(1, req.getOrders().size(), "场站→站点应作为单向派送订单下发");
+        assertEquals(Double.valueOf(5.5), req.getOrders().get(0).getWeightKg());
+        assertEquals(Double.valueOf(0.02), req.getOrders().get(0).getVolumeM3());
+        assertNull(req.getVehicles().get(0).getCargoWeightCapacityKg(), "车辆档案未配载重时不编造上限");
+    }
+
+    @Test
+    void createSmartPlan_tags_roadAccess_blocked_only_for_stations_closed_to_buses() {
+        // 站点档案 vehicle_access=false = 公交车进不去，算法据此改最近骨架站交接
+        AlgorithmPlanReqDTO blocked = planRequestForCargoOrder(1L, 12L, null, null, null, null, null, false);
+        assertEquals("BLOCKED", blocked.getOrders().get(0).getRoadAccess());
+
+        // 对照：档案未显式标注（历史数据为 null）时行为必须与过去完全一致
+        AlgorithmPlanReqDTO unset = planRequestForCargoOrder(1L, 12L, null, null, null, null, null, null);
+        assertNull(unset.getOrders().get(0).getRoadAccess());
+    }
+
+    @Test
+    void createSmartPlan_tags_paired_shipment_blocked_when_either_leg_is_closed_to_buses() {
+        AlgorithmPlanReqDTO req = planRequestForCargoOrder(11L, 12L, null, null, null, null, null, false);
+        assertEquals(1, req.getShipments().size());
+        assertEquals("BLOCKED", req.getShipments().get(0).getRoadAccess(),
+                "配对单不能只挪一条腿，任一腿进不去就整单改站点交接");
+    }
+
+    @Test
+    void createSmartPlan_never_tags_passenger_orders_with_roadAccess() {
+        // 业务底线：每站必停拉客，乘客点位由不得算法改派 —— 即便站点标注车辆不可进入也不下发标记
+        mockSmartPlanContext();
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(11L).longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build(),
+                StationDO.builder().id(12L).vehicleAccess(false)
+                        .longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        List<AlgorithmOrderDTO> orders = reqCaptor.getValue().getOrders();
+        assertFalse(orders.isEmpty());
+        orders.forEach(order -> {
+            assertEquals(AlgorithmOrderDTO.TYPE_PASSENGER, order.getOrderType());
+            assertNull(order.getRoadAccess(), "客运单不得标 roadAccess");
+            // 客运同样不下发时效：公交每站必停、无预约乘车，给算法一个"乘客可上车时刻"
+            // 等于授权它为了带货而让车在站外等 —— 这条底线不由字段贯通顺带破掉。
+            assertNull(order.getReadyTime(), "客运单不得带 readyTime");
+            assertNull(order.getDeliveryDeadline(), "客运单不得带送达截止");
+        });
+    }
+
+    @Test
+    void createSmartPlan_omits_weight_cap_when_vehicle_kg_is_the_db_default_zero() {
+        // DB 列 `cargo_capacity_kg NOT NULL DEFAULT 0`（transport-schema.sql:9）⇒ "没核定"读出来是 0，
+        // 而算法把"有值"当真上限（feasibility 的 `cargo_weight_capacity_kg is not None and 超了就不行`）
+        // ⇒ 下发 0.0 会让任何带重量的件一律判超限，货运全被舍弃。所以 0 必须折算成"不下发"。
+        AlgorithmPlanReqDTO req = planRequestForCargoOrder(11L, 12L, BigDecimal.ZERO,
+                null, null, new BigDecimal("50"), null, true);
+        assertNull(req.getVehicles().get(0).getCargoWeightCapacityKg(),
+                "载重未核定（DB 默认 0）不得被当成 0kg 硬上限下发");
+        assertNotNull(req.getVehicles().get(0).getPassengerCapacity());
+    }
+
+    @Test
+    void createSmartPlan_reports_data_gap_instead_of_422_when_no_vehicle_has_seats() {
+        // `passenger_capacity` 在 DDL 是 NOT NULL DEFAULT 0（transport-schema.sql:8），而算法契约要求 ≥1
+        // （algorithm/app/models.py:56）：原样下发 0 会让整批派单在算法侧 422（一个看不懂的 HTTP 错误），
+        // 而替业务编一个座位数更不可接受（乘客"每站必停"全靠这个数兑现）。
+        // 正确出口是一条指名车辆的可读业务错误，且**不发起算法调用**。
+        mockSmartPlanContext();
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(0).cargoCapacity(4).build()));
+
+        cn.iocoder.yudao.framework.common.exception.ServiceException ex = assertThrows(
+                cn.iocoder.yudao.framework.common.exception.ServiceException.class,
+                () -> dispatchService.createSmartPlan(smartReqVO()));
+        assertEquals(DISPATCH_VEHICLE_PROFILE_INCOMPLETE.getCode(), ex.getCode());
+        assertTrue(ex.getMessage().contains("7"), "错误消息要点名是哪台车：" + ex.getMessage());
+        verify(algorithmAdapter, never()).plan(any(AlgorithmPlanReqDTO.class));
+    }
+
+    @Test
+    void createSmartPlan_excludes_the_vehicle_without_seated_capacity() {
+        // 同批里还有一台核定过的车 → 不能因为一台没录就整批失败，也不能带着 0 座去派乘客。
+        mockSmartPlanContext();
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(0).cargoCapacity(4).build(),
+                VehicleDO.builder().id(8L).passengerCapacity(9).cargoCapacity(4).build()));
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        List<AlgorithmVehicleDTO> sent = reqCaptor.getValue().getVehicles();
+        assertEquals(1, sent.size(), "未核定载客的车不得进算法请求（下发 0 座会 422）");
+        assertEquals(8L, sent.get(0).getVehicleId());
+        assertEquals(9, sent.get(0).getPassengerCapacity());
+    }
+
+    @Test
+    void createSmartPlan_sends_timeliness_on_station_delivery_order() {
+        // 任务 #32：站点货运单（场站→村）此前不下发任何时效 ⇒ 迟到方案照样报可行。
+        // 派送单有 DELIVER 事件锚点，所以送达截止必须真的进请求（算法侧据此判 ETA_MISSED_DELIVERY）。
+        LocalDateTime earliest = LocalDateTime.of(2026, 10, 12, 8, 5);
+        LocalDateTime latest = LocalDateTime.of(2026, 10, 12, 8, 40);
+        AlgorithmOrderDTO order = planRequestForStationFreight(false, earliest, latest).getOrders().get(0);
+
+        assertEquals(AlgorithmOrderDTO.TYPE_DELIVERY, order.getOrderType());
+        assertEquals("12", order.getStationId());
+        assertEquals(latest, order.getDeliveryDeadline().toLocalDateTime(), "送达截止不得在映射中丢失");
+        assertEquals(earliest, order.getReadyTime().toLocalDateTime());
+        // 契约要求带时区（algorithm/app/models.py 的 datetime），业务侧 LocalDateTime 按班次时区补
+        assertEquals(ZoneOffset.ofHours(8), order.getDeliveryDeadline().getOffset(),
+                "时效必须带 +08:00，否则算法按 UTC 判会早 8 小时");
+    }
+
+    @Test
+    void createSmartPlan_sends_timeliness_on_station_pickup_order() {
+        // 揽收单（村→场站）同样下发真实时效字段。算法侧目前只锚 readyTime（PICKUP 事件要等到能取件），
+        // deliveryDeadline 随请求下发但暂不判（货随车回场站才算送达，收班事件不带 task_id）——
+        // 这条用例钉的是"业务事实要如实下发"，不钉"算法判了它"。
+        LocalDateTime earliest = LocalDateTime.of(2026, 10, 12, 7, 30);
+        LocalDateTime latest = LocalDateTime.of(2026, 10, 12, 11, 0);
+        AlgorithmOrderDTO order = planRequestForStationFreight(true, earliest, latest).getOrders().get(0);
+
+        assertEquals(AlgorithmOrderDTO.TYPE_PICKUP, order.getOrderType());
+        assertEquals("13", order.getStationId());
+        assertEquals(earliest, order.getReadyTime().toLocalDateTime());
+        assertEquals(latest, order.getDeliveryDeadline().toLocalDateTime());
+    }
+
+    @Test
+    void createSmartPlan_sends_no_timeliness_for_orders_without_promised_times() {
+        // 订单档案里两个时刻都为空 = 业务侧没承诺（不是承诺在 0 点）：必须原样留 null，
+        // 否则算法会拿一个编造出来的截止时刻把正常方案判成迟到。
+        AlgorithmOrderDTO order = planRequestForStationFreight(false, null, null).getOrders().get(0);
+
+        assertEquals(AlgorithmOrderDTO.TYPE_DELIVERY, order.getOrderType());
+        assertNull(order.getReadyTime());
+        assertNull(order.getDeliveryDeadline());
+    }
+
+    /**
+     * 站点货运单快照桩：一张单、一辆车，按腿方向映射成 DELIVERY（场站 1→村点 12）
+     * 或 PICKUP（村点 13→场站 1），返回真正下发给算法的请求。
+     */
+    private AlgorithmPlanReqDTO planRequestForStationFreight(boolean pickupLeg,
+                                                             LocalDateTime earliestPickup,
+                                                             LocalDateTime latestDelivery) {
+        TransportOrderDO cargoOrder = TransportOrderDO.builder().id(1L).orderType(2)
+                .pickupStationId(pickupLeg ? 13L : 1L).deliveryStationId(pickupLeg ? 1L : 12L)
+                .earliestPickupTime(earliestPickup).latestDeliveryTime(latestDelivery)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cargoOrder));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L)
+                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000")).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(10).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(12L).longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build(),
+                StationDO.builder().id(13L).longitude(new BigDecimal("104.0300")).latitude(new BigDecimal("30.0000")).build()));
+        lenient().when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture()))
+                .thenReturn(pickupLeg ? feasiblePickupResult() : cargoDeliverPlan(true));
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+        return reqCaptor.getValue();
+    }
+
+    /**
+     * 智能派单快照桩：一张货运单（pickup → delivery）+ 车辆载重 + 货运子表重量体积 + 送达站通行标记，
+     * 返回真正下发给算法的请求。station 1 为场站，11/12 为村点。
+     */
+    private AlgorithmPlanReqDTO planRequestForCargoOrder(Long pickupStationId, Long deliveryStationId,
+                                                         BigDecimal vehicleCargoCapacityKg,
+                                                         LocalDateTime earliestPickup, LocalDateTime latestDelivery,
+                                                         BigDecimal weightKg, BigDecimal volumeM3,
+                                                         Boolean deliveryStationVehicleAccess) {
+        TransportOrderDO cargoOrder = TransportOrderDO.builder().id(1L).orderType(2)
+                .pickupStationId(pickupStationId).deliveryStationId(deliveryStationId)
+                .earliestPickupTime(earliestPickup).latestDeliveryTime(latestDelivery)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cargoOrder));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L)
+                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000")).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(10)
+                        .cargoCapacityKg(vehicleCargoCapacityKg).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(11L).longitude(new BigDecimal("104.0100")).latitude(new BigDecimal("30.0000")).build(),
+                StationDO.builder().id(12L).vehicleAccess(deliveryStationVehicleAccess)
+                        .longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
+        when(cargoOrderMapper.selectList(any())).thenReturn(List.of(
+                CargoOrderDO.builder().id(1L).orderId(1L).itemCount(3).weightKg(weightKg).volumeM3(volumeM3).build()));
+        lenient().when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
+        ArgumentCaptor<AlgorithmPlanReqDTO> reqCaptor = ArgumentCaptor.forClass(AlgorithmPlanReqDTO.class);
+        when(algorithmAdapter.plan(reqCaptor.capture())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+
+        dispatchService.createSmartPlan(smartReqVO());
+        return reqCaptor.getValue();
+    }
+
+    @Test
+    void createSmartPlan_rejected_stop_is_not_turned_into_a_driver_task() {
+        // 算法明确说"这一趟不在这里服务这一单"（accepted=false）时，这条经停只是解释信息：
+        // 写成任务明细司机会照单去一个算法判定不该去的点，而这一单又不会进联运接力 —— 货凭空消失。
+        mockCargoDeliverContext();
+        when(algorithmAdapter.plan(any())).thenReturn(cargoDeliverPlan(false));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        // 只剩 DEPART + RETURN 两条：被拒的 DELIVER 不落明细
+        verify(dispatchPlanItemMapper, times(2)).insert(any(DispatchPlanItemDO.class));
+        ArgumentCaptor<Long> vehicleCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(multiLegService).planLegs(eq(1L), eq(100L), vehicleCaptor.capture(), any(), any());
+        assertNull(vehicleCaptor.getValue(), "被拒的经停不得算作已分配，该单必须进多段联运接力");
+    }
+
+    @Test
+    void createSmartPlan_accepted_stop_is_still_written_and_assigned() {
+        // 正向对照（同一份方案，只把 accepted 从 false 改成 true）：明细照常落库、订单归到这辆车上。
+        // 没有这一条，上一例可以靠"所有 DELIVER 都不落库"骗绿。
+        mockCargoDeliverContext();
+        when(algorithmAdapter.plan(any())).thenReturn(cargoDeliverPlan(true));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        verify(dispatchPlanItemMapper, times(3)).insert(any(DispatchPlanItemDO.class));
+        ArgumentCaptor<Long> vehicleCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(multiLegService).planLegs(eq(1L), eq(100L), vehicleCaptor.capture(), any(), any());
+        assertEquals(Long.valueOf(7L), vehicleCaptor.getValue());
+    }
+
+    /** 场站→村点 12 的单向派送货运单快照（一张单、一辆车、无骨架） */
+    private void mockCargoDeliverContext() {
+        TransportOrderDO cargoOrder = TransportOrderDO.builder().id(1L).orderType(2)
+                .pickupStationId(1L).deliveryStationId(12L)
+                .status(TransportOrderStatusEnum.POOLED.getStatus()).build();
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cargoOrder));
+        when(stationMapper.selectById(1L)).thenReturn(StationDO.builder().id(1L)
+                .longitude(new BigDecimal("104.0000")).latitude(new BigDecimal("30.0000")).build());
+        when(vehicleMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                VehicleDO.builder().id(7L).passengerCapacity(5).cargoCapacity(10).build()));
+        when(stationMapper.selectBatchIds(anyCollection())).thenReturn(List.of(
+                StationDO.builder().id(12L).longitude(new BigDecimal("104.0200")).latitude(new BigDecimal("30.0000")).build()));
+        lenient().when(orderMapper.update(any(TransportOrderDO.class), any())).thenReturn(1);
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+    }
+
+    /** DEPART@1 → DELIVER@12（订单 1，accepted 由用例决定）→ RETURN@1 */
+    private AlgorithmPlanRespDTO cargoDeliverPlan(Boolean accepted) {
+        List<AlgorithmRouteStopDTO> stops = List.of(
+                AlgorithmRouteStopDTO.builder().stationId("1").action(AlgorithmRouteStopDTO.ACTION_DEPART).build(),
+                AlgorithmRouteStopDTO.builder().stationId("12").orderId("1")
+                        .action(AlgorithmRouteStopDTO.ACTION_DELIVER)
+                        .accepted(accepted)
+                        .reasonCode(Boolean.FALSE.equals(accepted) ? "DETOUR_OVER_THRESHOLD" : null)
+                        .build(),
+                AlgorithmRouteStopDTO.builder().stationId("1").action(AlgorithmRouteStopDTO.ACTION_RETURN).build());
+        return AlgorithmPlanRespDTO.builder()
+                .requestId("req-1")
+                .status(AlgorithmPlanRespDTO.STATUS_FEASIBLE)
+                .algorithmVersion("algo-1.0")
+                .parameterVersion("param-1.0")
+                .totalDistance(2.0)
+                .vehiclePlans(List.of(AlgorithmVehiclePlanDTO.builder()
+                        .vehicleId(7L).stops(stops).totalDistance(2.0).build()))
+                .build();
+    }
+
+    @Test
     void createSmartPlan_pool_claimed_by_concurrent_throws() {
         // P1-004 回归：并发智能派单——订单池已被其它派单 CAS 抢占（update 返回 0）→ 不重复派单
         mockSmartPlanContext();
@@ -508,6 +828,73 @@ class DispatchServiceImplTest {
     }
 
     @Test
+    void createSmartPlan_surfaces_the_solver_shedding_explanation_in_plan_reason() {
+        // 算法侧的口径是"少服务必须是事实而不是默认值"：带不下的单进 unassignedOrderIds，
+        // 同时在 warnings 里说清成因（超载 / 必迟到 / 超窗 / 绕行出界）。后端此前收下 warnings
+        // 却全仓无人读取 —— 运营只看得到"少了单"，看不到"为什么少"。
+        mockSmartPlanContext();
+        AlgorithmPlanRespDTO withWarnings = feasibleResult();
+        withWarnings.setWarnings(List.of("DISCARDED_ORDERS=7,8", "DISCARDED_CAPACITY_OVERFLOW=7",
+                "SEARCH_START_MS=1234", "ITERATION_COUNT=2"));
+        when(algorithmAdapter.plan(any())).thenReturn(withWarnings);
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any(), any())).thenReturn(List.of(
+                TransportLegDO.builder().orderId(1L).planId(100L).legSequence(1)
+                        .fromStationId(11L).toStationId(12L).distanceKm(new BigDecimal("5.0"))
+                        .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0))
+                        .estimatedArrival(LocalDateTime.of(2026, 9, 12, 10, 30)).build()));
+        when(multiLegService.preview(1L)).thenReturn(new MultiLegPlanner.PlanResult(
+                DispatchPlanningModeEnum.DIRECT.getMode(), 1, 0, 5.0, 30, 1.0,
+                List.of(), List.of(), null, "直达"));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        String persisted = planCaptor.getValue().getPlanReason();
+        assertTrue(persisted.contains("带不下 2 单"), persisted);
+        assertTrue(persisted.contains("货舱超载 1 单"), persisted);
+        assertTrue(persisted.contains("7、8"), persisted);
+        // 纯遥测不许挤进业务解释：操作员读不懂，还会占掉方案理由那 2000 字的额度
+        assertFalse(persisted.contains("SEARCH_START_MS"), persisted);
+        assertFalse(persisted.contains("ITERATION_COUNT"), persisted);
+    }
+
+    @Test
+    void createSmartPlan_invents_no_shedding_line_when_the_solver_shed_nothing() {
+        // 对照：warnings 只有遥测时不能冒出"带不下 N 单"——解释只能翻译算法真说了的东西
+        mockSmartPlanContext();
+        AlgorithmPlanRespDTO telemetryOnly = feasibleResult();
+        telemetryOnly.setWarnings(List.of("SEARCH_START_MS=1234", "ITERATION_COUNT=2"));
+        when(algorithmAdapter.plan(any())).thenReturn(telemetryOnly);
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any(), any())).thenReturn(List.of(
+                TransportLegDO.builder().orderId(1L).planId(100L).legSequence(1)
+                        .fromStationId(11L).toStationId(12L).distanceKm(new BigDecimal("5.0"))
+                        .estimatedDeparture(LocalDateTime.of(2026, 9, 12, 10, 0))
+                        .estimatedArrival(LocalDateTime.of(2026, 9, 12, 10, 30)).build()));
+        when(multiLegService.preview(1L)).thenReturn(new MultiLegPlanner.PlanResult(
+                DispatchPlanningModeEnum.DIRECT.getMode(), 1, 0, 5.0, 30, 1.0,
+                List.of(), List.of(), null, "直达"));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        ArgumentCaptor<DispatchPlanDO> planCaptor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper).updateById(planCaptor.capture());
+        String persisted = planCaptor.getValue().getPlanReason();
+        assertFalse(persisted.contains("带不下"), persisted);
+        assertFalse(persisted.contains("SEARCH_START_MS"), persisted);
+    }
+
+    @Test
     void getPlanRoadmap_aggregates_by_legs_so_vehicle_view_matches_order_view() {
         // P0-B 回归：多段联运方案（v3 → v101 → v5 接力）的车辆视角必须由本方案运输段聚合。
         // 历史缺陷：车辆视角取算法的单车经停明细，方案 30 上表现为「同一台车 南岸→重大→再回南岸」，
@@ -544,6 +931,36 @@ class DispatchServiceImplTest {
         verify(roadPolylineService, times(2)).route(anyDouble(), anyDouble(), anyDouble(), anyDouble());
         // 不再走「按经停明细出段」的旧口径
         verify(dispatchPlanItemMapper, never()).selectList(any(Wrapper.class));
+    }
+
+    @Test
+    void createSmartPlan_persists_orders_that_got_no_leg() {
+        // V029（任务 #34）：算法与多段联运都没能给出**任何一段**的单，必须落库"为什么少带这一单"。
+        // 此前算法返回的 unassignedOrderIds 只被用来判空 + 拼一句解释文案（实测：它只出现在 isEmpty
+        // 判断里），事后查不到是哪几张单被舍、也无法回流成度量台的题 —— 那正是 #33 的语料缺口。
+        mockSmartPlanContext();
+        when(algorithmAdapter.plan(any())).thenReturn(feasibleResult());
+        doAnswer(invocation -> {
+            DispatchPlanDO plan = invocation.getArgument(0);
+            plan.setId(100L);
+            return 1;
+        }).when(dispatchPlanMapper).insert(any(DispatchPlanDO.class));
+        when(multiLegService.planLegs(eq(1L), eq(100L), any(), any(), any())).thenReturn(List.of());
+        when(multiLegService.preview(1L)).thenReturn(new MultiLegPlanner.PlanResult(
+                DispatchPlanningModeEnum.DIRECT.getMode(), 1, 0, 5.0, 30, 1.0,
+                List.of(), List.of(), null, "无可行段"));
+
+        dispatchService.createSmartPlan(smartReqVO());
+
+        ArgumentCaptor<DispatchPlanDO> captor = ArgumentCaptor.forClass(DispatchPlanDO.class);
+        verify(dispatchPlanMapper, atLeastOnce()).updateById(captor.capture());
+        String shed = captor.getAllValues().stream()
+                .filter(u -> u.getUnassignedOrders() != null)
+                .map(DispatchPlanDO::getUnassignedOrders)
+                .findFirst().orElse(null);
+        assertNotNull(shed, "一单都没排出段却不落库 ⇒ 事后查不到这批为什么空");
+        assertTrue(shed.contains("\"orderId\":1"), shed);
+        assertTrue(shed.contains("NO_LEG_PLANNED"), shed);
     }
 
     @Test

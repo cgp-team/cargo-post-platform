@@ -8,6 +8,21 @@ def _get(config, name: str, default):
     return getattr(config, name, default)
 
 
+def _detour_km(config, default: float) -> float:
+    """绕行阈值：请求给多少用多少，没给才用算法默认。
+
+    契约字段 AlgorithmConfig.maxDetourDistanceKm 是 Optional[float]，声明了但值为 None
+    时代表「请求没指定」——必须回落默认 2.0；早先直接用 _get(config,"max_detour_km",…)
+    会把 None 当阈值传下去，而下游把 None 解读成「不设绕行约束」，预筛整条被关掉。
+    0.0 是合法值（完全不许绕），所以这里按 None 判断而不是用 or 短路。
+    """
+    for name in ("max_detour_km", "maxDetourDistanceKm"):
+        value = _get(config, name, None)
+        if value is not None:
+            return float(value)
+    return float(default)
+
+
 @dataclass
 class HacoConfig:
     """HACO-CPS 运行参数。"""
@@ -79,6 +94,12 @@ class HacoConfig:
     # 默认 2km；车辆闲置运力充足时可放宽到 3km（后端按车辆闲置运力传 max_detour_km 覆盖）。
     max_detour_km: float = 2.0
 
+    # 订单舍弃惩罚（km 等价）：规格 §二.5「惩罚高但有限」。
+    # 用公里表达是为了和绕行阈值同一把尺子 —— 补全一个订单要多绕的里程超过这个值时，
+    # 就改成舍弃（交回后端多段联运），而不是硬塞进路线绕远。
+    # 取 2×放宽后的绕行上限（3km）= 6km：明显比「就近站交接」更贵才值得放弃这单。
+    discard_penalty_km: float = 6.0
+
     # ML Branch Ranker：off|auto|force（force=A/B 实验，只重排不硬砍）
     # 默认 auto：insertion_ranker_osm_v2 top3≥0.80 已过 rank 门
     use_branch_ranker: str = "auto"
@@ -145,6 +166,11 @@ class HacoConfig:
             penalty_skeleton=_get(config, "penalty_skeleton", cls.penalty_skeleton),
             target_feasible_ratio=_get(config, "target_feasible_ratio", cls.target_feasible_ratio),
             restart_ratio=_get(config, "restart_ratio", cls.restart_ratio),
-            max_detour_km=_get(config, "max_detour_km", cls.max_detour_km),
+            max_detour_km=_detour_km(config, cls.max_detour_km),
+            discard_penalty_km=float(
+                _get(config, "discard_penalty_km", None)
+                or _get(config, "discardPenaltyKm", None)
+                or cls.discard_penalty_km
+            ),
             use_branch_ranker=_get(config, "use_branch_ranker", cls.use_branch_ranker),
         )

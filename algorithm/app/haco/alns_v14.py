@@ -148,6 +148,46 @@ def destroy_random(
     return new_routes, destroyed
 
 
+def destroy_route(
+    routes: list[RouteGenome],
+    tasks_by_id: dict[str, TaskBlock],
+    rng: random.Random,
+) -> tuple[list[RouteGenome], list[TaskBlock], int | None]:
+    """整台车的任务一次全部撤出（route removal / ejection），返回 (路线, 待重放任务, 被关车辆号)。
+
+    为什么必须有这一手：目标按字典序比，`vehicle_count` 排在里程之前
+    （`encoding.ObjectiveVector.key`），而其余 destroy 算子全是**任务级**的 ——
+    想关掉一台车得先把它逐件搬空，第一件搬走时"里程变差而用车数没降"，
+    在字典序下必然被拒，于是搜索永远走不到"这台车清空"的那个状态。
+    实测候选车翻倍反而解变差（58.351→76.401 km、用车 3→4 台）就是这道门槛造成的，
+    不是插入质量不够。主循环会把这台车从修复候选里剔掉，
+    任务只能往剩下的车里合（否则最佳位置往往还是它自己，算子等于白做）。
+    """
+    loaded = [r for r in routes if r.task_count() > 0]
+    if len(loaded) < 2:
+        # 只有一台车在用（或全空）：没有"关一台"的余地
+        return [r.copy() for r in routes], [], None
+
+    # 优先撤装载最少的车（关它的搬运成本最低），并列时在候选里随机取一台
+    loaded.sort(key=lambda r: (r.task_count(), r.vehicle_index))
+    lightest = loaded[0].task_count()
+    pool = [r for r in loaded if r.task_count() == lightest]
+    victim = pool[rng.randrange(len(pool))]
+
+    new_routes = [r.copy() for r in routes]
+    removed: list[TaskBlock] = []
+    for route in new_routes:
+        if route.vehicle_index != victim.vehicle_index:
+            continue
+        for task_id in list(route.placements):
+            task = tasks_by_id.get(task_id)
+            if task is not None:
+                removed.append(task)
+            route.remove_task(task_id)
+        break
+    return new_routes, removed, victim.vehicle_index
+
+
 def destroy_worst(
     routes: list[RouteGenome],
     tasks_by_id: dict[str, TaskBlock],
@@ -380,6 +420,110 @@ def repair_greedy(
         remaining.remove(best_task)
 
     return new_routes
+
+
+def repair_with_ejection(
+    routes: list[RouteGenome],
+    destroyed_tasks: list[TaskBlock],
+    tasks_by_id: dict[str, TaskBlock],
+    feasibility_engine: FeasibilityEngine,
+    station_map: dict,
+    matrix,
+    passenger_capacities: dict[int, int],
+    cargo_capacities: dict[int, int],
+    initial_passenger_loads: dict[int, int],
+    initial_cargo_loads: dict[int, int],
+    rng: random.Random,
+    deadline: SearchDeadline | None = None,
+    max_attempts: int = 400,
+) -> list[RouteGenome]:
+    """贪心修复 + 一层「先挪开再塞回」（ejection chain），用于撤车时的任务搬运。
+
+    `repair_greedy` 只往**已有的空隙**里插，插不进就把任务留在原地没安置，撤车判定随即
+    按"插不回"收手。实测 r_village-M-002 的 125k 臂（2 台 / 38.604km）：把 veh0 的 4 件
+    搬进 veh1 时 3 件落位、只剩 S:T1（2 件货）找不到空位；而同一台车只要先把 K:K3 挪开、
+    放进 S:T1、再把 K:K3 塞回去，就得到**完整且可行**的 1 车解（36.618km，
+    key=(0.0, 1, 0.0, 2.587, 36.618, 3640.3)）。车数是业务字典序第二维，
+    这一步之差就是"预算越大反而多开一台"（任务 #27，#6 违背的根因）。
+
+    代价被三道闸挡住：只在贪心确实没安置全时启动；总量 `max_attempts` 次挪开-塞回；
+    每次都问 deadline 要预算。超限时交回的是**当前已修好的那部分**（= 没撤成），
+    不是更差的解 —— 采纳与否仍由调用方的完整性 + 字典序闸门判。
+    """
+    repaired = repair_greedy(
+        routes, destroyed_tasks, tasks_by_id, feasibility_engine,
+        station_map, matrix, passenger_capacities, cargo_capacities,
+        initial_passenger_loads, initial_cargo_loads, rng,
+    )
+    placed = {tid for r in repaired for tid in r.placements}
+    missing = [t for t in destroyed_tasks if t.task_id not in placed]
+    if not missing:
+        return repaired
+
+    attempts = 0
+    two_leg = (TaskType.PASSENGER, TaskType.SHIPMENT)
+
+    def _score(task, route, pi, di):
+        # 一次插入候选 = 一份搜索预算，口径同 local_search_v14（"一次移动评估就是一份搜索预算"）。
+        # 不 tick 的话 ejection 的开销不进确定性预算，评估次数这把尺子会漏计这一段。
+        if deadline is not None:
+            deadline.tick()
+            if deadline.expired():
+                return float("inf")
+        return _insertion_score(
+            task, route, pi, di, tasks_by_id, station_map, matrix,
+            feasibility_engine, passenger_capacities, cargo_capacities,
+            initial_passenger_loads, initial_cargo_loads,
+        )
+
+    def _try_one(task):
+        """把 task 塞进某台车：必要时先挪开该车上的一件，再把挪开的那件塞回任意位置。"""
+        nonlocal attempts
+        for ri, route in enumerate(repaired):
+            for victim_id in list(route.placements):
+                if attempts >= max_attempts:
+                    return None
+                attempts += 1
+                if deadline is not None and deadline.expired():
+                    return None
+                trial = [r.copy() for r in repaired]
+                trial[ri].remove_task(victim_id)
+                event_count = len(trial[ri].events)
+                spot = None
+                for pi in range(1, event_count):
+                    if deadline is not None and deadline.expired():
+                        return None
+                    deliveries = (
+                        range(pi + 1, event_count + 1)
+                        if task.task_type in two_leg else (None,)
+                    )
+                    for di in deliveries:
+                        if _score(task, trial[ri], pi, di) != float("inf"):
+                            spot = (pi, di)
+                            break
+                    if spot is not None:
+                        break
+                if spot is None:
+                    continue
+                try:
+                    trial[ri].insert_task(task, spot[0], spot[1])
+                except (ValueError, IndexError):
+                    continue
+                after = repair_greedy(
+                    trial, [tasks_by_id[victim_id]], tasks_by_id, feasibility_engine,
+                    station_map, matrix, passenger_capacities, cargo_capacities,
+                    initial_passenger_loads, initial_cargo_loads, rng,
+                )
+                got = {tid for r in after for tid in r.placements}
+                if task.task_id in got and victim_id in got:
+                    return after
+        return None
+
+    for task in missing:
+        improved = _try_one(task)
+        if improved is not None:
+            repaired = improved
+    return repaired
 
 
 def repair_regret_k(
@@ -626,7 +770,7 @@ def alns_search(
     deadline: SearchDeadline | None = None,
 ) -> list[RouteGenome]:
     """ALNS 主搜索循环。"""
-    destroy_names = ["random", "worst", "shaw", "segment"]
+    destroy_names = ["random", "worst", "shaw", "segment", "route"]
     repair_names = ["greedy", "regret-2", "regret-3"]
 
     selector = AdaptiveOperatorSelector(destroy_names, repair_names)
@@ -644,8 +788,11 @@ def alns_search(
     cooling_rate = config.cooling_rate if hasattr(config, 'cooling_rate') else 0.995
 
     for iteration in range(max_iterations):
-        if deadline is not None and deadline.expired():
-            break
+        # 一次 destroy+repair 是一份完整评估；计数预算下这是 ALNS 的确定性停止点
+        if deadline is not None:
+            deadline.tick()
+            if deadline.expired():
+                break
         # 选择算子
         destroy_name = selector.select_destroy(rng)
         repair_name = selector.select_repair(rng)
@@ -656,6 +803,7 @@ def alns_search(
         # Destroy
         destroy_fraction = config.destroy_fraction if hasattr(config, 'destroy_fraction') else 0.25
 
+        victim_index: int | None = None
         if destroy_name == "random":
             destroyed_routes, removed = destroy_random(
                 current_routes, tasks_by_id, destroy_fraction, rng
@@ -670,33 +818,50 @@ def alns_search(
                 current_routes, tasks_by_id, destroy_fraction, rng,
                 station_map, matrix
             )
+        elif destroy_name == "route":
+            destroyed_routes, removed, victim_index = destroy_route(
+                current_routes, tasks_by_id, rng
+            )
         else:  # segment
             destroyed_routes, removed = destroy_segment(
                 current_routes, tasks_by_id, destroy_fraction, rng
             )
 
+        # 撤整台车时，修复阶段看不到那台车：任务只能往剩下的车里合。
+        # 不剔掉它的话，第一件搬走的车内任务最佳位置常常还是它自己，算子等于白做。
+        repair_input = (
+            [r for r in destroyed_routes if r.vehicle_index != victim_index]
+            if victim_index is not None else destroyed_routes
+        )
+
         # Repair
         if repair_name == "greedy":
             repaired = repair_greedy(
-                destroyed_routes, removed, tasks_by_id,
+                repair_input, removed, tasks_by_id,
                 feasibility_engine, station_map, matrix,
                 passenger_capacities, cargo_capacities,
                 initial_passenger_loads, initial_cargo_loads, rng
             )
         elif repair_name == "regret-2":
             repaired = repair_regret_k(
-                destroyed_routes, removed, tasks_by_id,
+                repair_input, removed, tasks_by_id,
                 feasibility_engine, station_map, matrix,
                 passenger_capacities, cargo_capacities,
                 initial_passenger_loads, initial_cargo_loads, rng, k=2
             )
         else:  # regret-3
             repaired = repair_regret_k(
-                destroyed_routes, removed, tasks_by_id,
+                repair_input, removed, tasks_by_id,
                 feasibility_engine, station_map, matrix,
                 passenger_capacities, cargo_capacities,
                 initial_passenger_loads, initial_cargo_loads, rng, k=3
             )
+
+        if victim_index is not None:
+            # 被撤空的那台车放回原位（车辆数由 placements 决定，空车不计），
+            # 保持"一条路线对应一台候选车"的结构不变
+            closed = [r for r in destroyed_routes if r.vehicle_index == victim_index]
+            repaired = sorted([*repaired, *closed], key=lambda r: r.vehicle_index)
 
         # 评估
         repaired_obj = evaluate_route_states(

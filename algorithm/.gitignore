@@ -7,3 +7,11 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# 线上请求留痕导出（真实运营数据，不入库；样本以 fixture 形式提交）
+benchmarks/lab/online/
+
+# 合成题集的落盘缓存（benchmarks/lab/instances.build 用 _stable_seed(iid) 可复现现算）
+# 不入库的实测理由：本机那份 cache 比当前构建器旧（6 个具名样本的 request 摘要与现算全不同），
+# 把它钉进仓库等于让负控拿旧几何验新校验器；测试现在缺文件就自己现算（见 test_lab_harness_negative_controls._need）。
+benchmarks/lab/cache/
