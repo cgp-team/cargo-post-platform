@@ -46,20 +46,30 @@ public class AppWalletController {
     @Operation(summary = "创建充值支付订单（返回调起参数）")
     public CommonResult<Map<String, Object>> createPayOrder(
             @RequestParam("amount") BigDecimal amount,
-            @RequestParam(value = "channel", defaultValue = "alipay") String channel) {
+            @RequestParam(value = "channel", defaultValue = "alipay") String channel,
+            @RequestParam(value = "requestNo", required = false) String requestNo) {
         Long userId = getLoginUserId();
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             return CommonResult.error(400, "充值金额必须大于0");
         }
-        Map<String, String> payParams = payService.createPayOrder(userId, amount, channel);
-        Map<String, Object> result = new LinkedHashMap<>(payParams);
-        return success(result);
+        // 幂等键要和库里 request_no 列宽对得上，超长的键会在 insert 时才炸，那已经不是"参数不对"而是"500"了。
+        if (requestNo != null && requestNo.trim().length() > 64) {
+            return CommonResult.error(400, "requestNo 最长 64 个字符");
+        }
+        try {
+            Map<String, String> payParams = payService.createPayOrder(userId, amount, channel, requestNo);
+            Map<String, Object> result = new LinkedHashMap<>(payParams);
+            return success(result);
+        } catch (IllegalArgumentException e) {
+            return CommonResult.error(400, e.getMessage());
+        }
     }
 
     @GetMapping("/query-pay-order")
     @Operation(summary = "查询支付订单状态（前端轮询）")
     public CommonResult<Map<String, Object>> queryPayOrder(@RequestParam("orderNo") String orderNo) {
-        return success(payService.queryAlipayOrder(orderNo));
+        // 只认当前登录用户名下的单：这一支会触发放款，不能对全网开放触发权。
+        return success(payService.queryAlipayOrder(orderNo, getLoginUserId()));
     }
 
     @PostMapping("/recharge")
