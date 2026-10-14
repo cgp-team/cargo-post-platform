@@ -210,6 +210,10 @@ def run_one(iid: str, arm: str, seed: int) -> dict:
         "max_detour": (round(max((s.detourDistance or 0.0) for s in cargo), 3)
                        if cargo else 0.0),
         "wall_ms": wall,
+        # 完整迭代代数：计数口径的读者。=0 且 feasible 意味着「交付的其实是贪心种子」
+        # （搜索一代都没跑完），这正是阶段配额要治的病 —— 所以这一格必须有断言在读，
+        # 不能只活在 ITERATION_COUNT 那条 warning 字符串里。
+        "iterations": len(getattr(out, "iteration_stats", ()) or ()),
         "version": out.algorithm_version,
     }
 

@@ -86,6 +86,33 @@ ACO 更深目标反而变差（收尾精修由 ALNS 负责），Java 适配层�
 - 计算超时 10 秒返回 HTTP 408 + `requestId`，业务后端凭 `requestId` 轮询结果，轮询间隔建议 ≥ 2 秒。
 - 可重试错误：408（超时）、503（服务繁忙）、502/504（网关错误）；不可重试：400（参数校验失败）、422（业务不可行/无解）、413（规模超限）。
 
+## 时限与终止口径
+
+这是**唯一**一处口径说明；代码里的注释与用例都指回这里，不许在别处另立一套说法。
+
+1. **终止的正常依据是评估计数，不是墙钟。** `algorithmConfig.max_evaluations` 决定"这次搜索做了多少完整评估"，
+   同一实例 + 同一种子 + 同一计数 ⇒ 结果一致；批量与回归一律设计数（实测墙钟预算下同一实例同一种子
+   的解质量能差 44%，所以墙钟不能当质量口径）。生产默认 `max_evaluations=None`，此时以时限收手。
+2. **墙钟是保险丝，且在请求边界上兑现。** `app/solver.solve()` 进入即按 `algorithmConfig.overall_time_limit`
+   （默认 `DEFAULT_OVERALL_TIME_LIMIT_SECONDS = 5.0`）建一只表；HACO 主链把自己的搜索预算钳到它的剩余量，
+   OR-Tools **每一次**搜索也从同一只表领预算。这条是修过的真破口：一批业务求解里 OR-Tools 最多被调
+   `(MAX_REROUTE_ITERATIONS+1)×2` 次（带时间窗一次 + 「去时间约束」归因一次），改前每次写死 5s ⇒
+   整批实测 **10.00s** 而声明是 5.0s（`limit=1 → wall=2.01`、`limit=5 → wall=10.00`，倍数关系可复现）。
+   现在由机制闸钉住（`tests/test_overall_time_fuse.py::test_each_ortools_search_draws_from_one_shared_fuse`），
+   断言的是"第二次只能领剩余量"这个结构，不依赖任何一台机器的毫秒读数。
+3. **保险丝约束的是可中断的搜索；固定开销不计入它，但必须报出来。** 预检、OR-Tools 建模、解提取都无法中途打断，
+   所以整次调用可能超出 `overall_time_limit`。超出的量以 `OVERALL_FUSE_TRIPPED=+Nms` 出现在 `warnings`，
+   同批必带 `OVERALL_LIMIT_S` 与 `ELAPSED_MS`（实测小实例把上限压到 1.0s 时整次 HACO 1.80s，越界 796ms 如实报出）。
+   **越界不被隐藏**是这条口径的可验证部分：谎报（超了却不报、或报的数与 `ELAPSED_MS` 对不上）会让用例红。
+4. **与 HTTP 层"计算超时 10 秒"的关系。** 那是**另一个**上限：任务从提交到出结果（含排队 + 不可中断开销）。
+   两者的关系是 `overall_time_limit(默认 5) + 固定开销 ≤ 任务超时(10)`；调用方按 10s 设读取超时是安全的，
+   要压更短就同时调小 `overall_time_limit`，**不要**只调 HTTP 那一侧（那只会让超时先于保险丝发生，
+   算法还在跑而后端已经放弃）。
+5. **迭代代数现在有读者。** `ITERATION_COUNT` 过去只活在 warning 字符串里、0 条断言在读。
+   现在 lab 台账每次运行记 `iterations`，基准断言 `_assert_run_is_honest` 要求
+   "标着 haco 版本的可行解必须 ≥1 代完整迭代"，否则红 —— 0 代意味着交付的其实是贪心种子，
+   正是阶段配额要治的那种病。
+
 ## 适配层责任
 
 代码位于 `yudao-module-transport/.../integration/algorithm/`（`AlgorithmAdapter` 幂等与留痕、`AlgorithmClient` 超时/重试/轮询、`AlgorithmResultValidator` 结果校验），单测见 `src/test/.../integration/algorithm/`。职责清单：
