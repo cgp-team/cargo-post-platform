@@ -103,8 +103,10 @@ jobs:
             local label="$1" want="$2" sql="$3" out
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
+              echo "::error title=DBSTATE::${label} 查询本身失败"
               QUERY_ERRORS=$((QUERY_ERRORS + 1))
             fi
           }
@@ -174,9 +176,11 @@ jobs:
             local label="$1" want="$2" sql="$3" out
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
               [ "${out}" = "${want}" ] || MISSING=$((MISSING + 1))
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
+              echo "::error title=DBSTATE::${label} 查询本身失败"
               MISSING=$((MISSING + 1))
             fi
           }
