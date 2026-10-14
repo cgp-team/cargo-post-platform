@@ -38,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  actions: write  # 实测：只给 contents:read 时 upload-artifact 直接失败 ⇒ 读数取不回来
 
 # 同一时刻只跑一条，排队不取消：两条并发往同一个库写会互相咬
 concurrency:
@@ -150,6 +151,7 @@ jobs:
 
 
       - name: 落地核对（仅 mode=apply）：数不出就必须红
+        if: ${{ github.event.inputs.mode == 'apply' }}
         env:
           ENV_FILE: ${{ vars.ENV_FILE || '/opt/cargo-post-platform/.env' }}
         run: |
