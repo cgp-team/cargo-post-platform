@@ -86,7 +86,7 @@ jobs:
           fi
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
           : > "${REPORT}"
 
@@ -139,7 +139,7 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
 
           # 失败自动诊断（沿用 deploy-dev.yml 的做法）：保留原始 exit code，不打印密码
           trap 'rc=$?; echo; echo "===== [失败诊断] exit ${rc} =====";
@@ -167,7 +167,7 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
           echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
