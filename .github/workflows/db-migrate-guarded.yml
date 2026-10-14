@@ -158,7 +158,15 @@ jobs:
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
-            "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+            # 逐支留凭证：作业绿不够 —— "七支都执行成功了"这句必须由每支自己的退出码与原文支撑
+            errfile="${RUNNER_TEMP:-.}/apply_err.txt"
+            if "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}" 2>"${errfile}"; then
+              echo "::notice title=APPLY::${f##*/} rc=0 原文=$(head -c 150 "${errfile}" 2>/dev/null | tr -d '\r\n') 后续九格读数见 DBSTATE 注解"
+            else
+              rc=$?
+              echo "::error title=APPLY::${f##*/} rc=${rc} 原文=$(head -c 200 "${errfile}" 2>/dev/null | tr -d '\r\n')"
+              exit "${rc}"
+            fi
             echo "${f} done."
           done
 
