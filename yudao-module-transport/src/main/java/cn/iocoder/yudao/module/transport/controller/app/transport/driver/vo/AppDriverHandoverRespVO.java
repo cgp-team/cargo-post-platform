@@ -49,6 +49,9 @@ public class AppDriverHandoverRespVO {
     @Schema(description = "交接照片URL")
     private String photoUrl;
 
+    @Schema(description = "签收/交接的手写签名图 URL（V034 `sign_url`；没签就是 null，不等于「核对过这人确实没签」）")
+    private String signUrl;
+
     @Schema(description = "状态：0待确认 1已确认 2有争议")
     private Integer status;
 
