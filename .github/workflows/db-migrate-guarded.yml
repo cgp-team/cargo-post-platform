@@ -86,7 +86,7 @@ jobs:
           fi
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
           : > "${REPORT}"
 
@@ -103,8 +103,7 @@ jobs:
             local label="$1" want="$2" sql="$3" out
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
-              echo "::notice title=DBSTATE::${label} 现=$(printf %s "${out}" | tr -d '
-' | cut -c1-24) 期望=${want}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
               echo "::error title=DBSTATE::${label} 查询本身失败"
@@ -140,7 +139,7 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
 
           # 失败自动诊断（沿用 deploy-dev.yml 的做法）：保留原始 exit code，不打印密码
           trap 'rc=$?; echo; echo "===== [失败诊断] exit ${rc} =====";
@@ -168,7 +167,7 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
           echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
@@ -177,8 +176,7 @@ jobs:
             local label="$1" want="$2" sql="$3" out
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
-              echo "::notice title=DBSTATE::${label} 现=$(printf %s "${out}" | tr -d '
-' | cut -c1-24) 期望=${want}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
               [ "${out}" = "${want}" ] || MISSING=$((MISSING + 1))
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
