@@ -50,7 +50,13 @@ def test_more_budget_must_not_worsen_service_key_r_village_M_002():
 
     根因不在随机流（把 ALNS 单独起流后违背换个实例就回来了，d16 实测），而在撤车搬运：
     贪心修复"差一件就判撤不掉"。加一层 ejection 后两臂都到 1 车/34.760km（§17）。
+
+    这条用的是**真实语料**（r_village），它要靠 341MB 的实测路网图生成 ⇒ 图不在就只能跳过并说明原因。
+    原来这里直接抛 `AttributeError: 'NoneType' object has no attribute 'request'`，
+    那是"缺输入"被读成"代码坏了"的红，既帮不到排查也不该在 CI 里拦住别的判据。
     """
+    if _load("r_village-M-002") is None:
+        pytest.skip("真实语料未生成（需 data/road_graph_cq.pkl），先跑 python -m benchmarks.lab.real_corpus 生成器")
     a, b = _report("r_village-M-002")
     assert service_key(b) <= service_key(a), (
         f"预算 ×5 后业务键变差：{a} -> {b}"

@@ -33,13 +33,29 @@
 from __future__ import annotations
 
 import copy
+import os
 
 import pytest
 
 from app.haco.config import HacoConfig
 from app.haco.v14_solver import solve as solve_v14
+from benchmarks.lab.roadnet import GRAPH_PKL, ROUTES_JSON
 
 pytestmark = pytest.mark.slow
+
+# 这三条钉的是**真实重庆线路**上的规模性质：骨架、站序、OD 全部来自实测图，
+# 换成合成题就失去意义（合成题的站距分布是造例器给的，"车多了里程不该涨"在那种题上近乎恒真）。
+# 而实测图是 341MB 的 data/road_graph_cq.pkl + data/transit 快照，都进不了仓库（GitHub 单文件硬限）。
+# ⇒ 没有图的机器（含 CI）只能**跳过**，且跳过必须说清缺哪一件、怎么生成，
+#   绝不让它读成"这条用例过了"。本机的跑法见 docs/REAL_ROAD_ROUTING_ARCHITECTURE.md。
+_MISSING = [p for p in (GRAPH_PKL, ROUTES_JSON) if not os.path.exists(p)]
+if _MISSING:
+    pytest.skip(
+        "真实路网输入缺失 ⇒ 跳过（不是通过）："
+        + "、".join(os.path.basename(p) for p in _MISSING)
+        + "；生成方式：python -m app.routing.osm_import 与 python -m benchmarks.lab.real_corpus",
+        allow_module_level=True,
+    )
 
 
 def _real_line_L():
