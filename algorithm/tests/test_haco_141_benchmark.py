@@ -120,6 +120,38 @@ def _print_record(record):
         print(f"    objective_key={record['objective_key']}")
 
 
+# ── 这一族的判据口径（2026-10-14 改，走"承认口径变了"那一条）────────────────────
+# 原来五处钉的都是 `runtime_ms < 5000 / 7000`，即"声明的 overall_time_limit + 1s 余量"。
+# 但算法侧的阶段终止已经从**墙钟**换成**评估计数**（`app/haco/deadline.py` 新增的 `PhaseBudget`，
+# 它自己的理由：墙钟预算下同一实例同一种子实测能差 44%，anytime 判据不能建在机器速度上）。
+# ⇒ 那五条断言的语义当场空了：它不再回答"我们守不守时"，只回答"这台机器今天多快"。
+#   实测摆在这里（同机、同一条用例、各 6 遍 × 3 run = 18 个样本）：
+#     origin/master 4008.5 – 4057.7（极差 49ms，几乎正好贴着 haco_time_limit=4.0）
+#     改动之后      4024.9 – 7683.7（极差 3.6s，高端连本机都越过旧的 7000）
+#   CI 上同一条报 8532.5，而纯 master 在同款 runner 上是 **pass**（基线实测见 PR #192）
+#   ⇒ 红是口径变更带来的，不是环境。
+# 现在钉两件机器速度影响不到的事：
+#   ① 语义不变量：feasible 的方案**一道任务都不许少** —— `task_completeness` 此前只打印、没人断言，
+#      而"少服务"正是本项目业务底线里最贵的那类错（比超时严重得多）。
+#   ② 防不终止：给声明预算 6 倍的挂死闸。它只回答"有没有停下来"，**不是性能判据**：
+#      不许用它论证"性能达标"，也不许将来为了让它绿去调搜索参数。
+HANG_GUARD_FACTOR = 6.0
+
+
+def _assert_run_is_honest(r, overall_time_limit: float):
+    ceiling = overall_time_limit * 1000 * HANG_GUARD_FACTOR
+    assert r["status"] in ("feasible", "infeasible"), f'{r["label"]} 状态不在值域: {r["status"]}'
+    if r["status"] == "feasible":
+        assert r["task_completeness"] is True, (
+            f'{r["label"]} 可行解少任务：expected={r["expected_tasks"]} planned={r["planned_tasks"]} '
+            f'（runtime_ms={r["runtime_ms"]} 只是旁证，红因是少服务）'
+        )
+    assert r["runtime_ms"] < ceiling, (
+        f'{r["label"]} runtime_ms={r["runtime_ms"]} 没在 {ceiling:.0f}ms'
+        f'（声明 {overall_time_limit}s × {HANG_GUARD_FACTOR}）内停下来 ⇒ 这是不终止，不是慢'
+    )
+
+
 # S1: 5 passenger + 3 delivery, 2 vehicles
 
 
@@ -259,8 +291,7 @@ class TestBenchmarkS1:
                                 haco_time_limit=3.0, overall_time_limit=4.0)
             r = _run_and_record(req, f"S1-HACO-run{i}")
             _print_record(r)
-            assert r["status"] in ("feasible", "infeasible")
-            assert r["runtime_ms"] < 5000
+            _assert_run_is_honest(r, 4.0)
 
     def test_s1_hybrid(self):
         req = _make_request(_s1_orders(), vehicles=_s1_vehicles(), mode=AlgorithmMode.HYBRID,
@@ -284,8 +315,7 @@ class TestBenchmarkS2:
                                 haco_time_limit=3.0, overall_time_limit=4.0)
             r = _run_and_record(req, f"S2-HACO-run{i}")
             _print_record(r)
-            assert r["status"] in ("feasible", "infeasible")
-            assert r["runtime_ms"] < 5000
+            _assert_run_is_honest(r, 4.0)
 
     def test_s2_hybrid(self):
         req = _make_request(_s2_orders(), vehicles=_s2_vehicles(), mode=AlgorithmMode.HYBRID,
@@ -309,8 +339,7 @@ class TestBenchmarkS3:
                                 haco_time_limit=4.0, overall_time_limit=5.0)
             r = _run_and_record(req, f"S3-HACO-run{i}")
             _print_record(r)
-            assert r["status"] in ("feasible", "infeasible")
-            assert r["runtime_ms"] < 7000
+            _assert_run_is_honest(r, 5.0)
 
     def test_s3_hybrid(self):
         req = _make_request(_s3_orders(), vehicles=_s3_vehicles(), mode=AlgorithmMode.HYBRID,
@@ -334,8 +363,7 @@ class TestBenchmarkS4:
                                 haco_time_limit=4.0, overall_time_limit=5.0)
             r = _run_and_record(req, f"S4-HACO-run{i}")
             _print_record(r)
-            assert r["status"] in ("feasible", "infeasible")
-            assert r["runtime_ms"] < 7000
+            _assert_run_is_honest(r, 5.0)
 
     def test_s4_hybrid(self):
         req = _make_request(_s4_orders(), vehicles=_s4_vehicles(), mode=AlgorithmMode.HYBRID,
@@ -359,8 +387,7 @@ class TestBenchmarkS5:
                                 haco_time_limit=4.0, overall_time_limit=5.0)
             r = _run_and_record(req, f"S5-HACO-run{i}")
             _print_record(r)
-            assert r["status"] in ("feasible", "infeasible")
-            assert r["runtime_ms"] < 7000
+            _assert_run_is_honest(r, 5.0)
 
     def test_s5_hybrid(self):
         req = _make_request(_s5_orders(), vehicles=_s5_vehicles(), mode=AlgorithmMode.HYBRID,
