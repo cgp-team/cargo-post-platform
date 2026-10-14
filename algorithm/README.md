@@ -69,3 +69,6 @@ docker build -t cargo-post/algorithm:1.0.0 algorithm/
 基镜像 `python:3.11-slim`（契约 Q11，linux/amd64）。compose 服务见 `deploy/docker-compose.yml`
 的 `algorithm` 服务（端口仅绑 127.0.0.1，默认 18081）。镜像构建在 CI container-validation
 job 中验证。
+
+<!-- 一次性 CI 基线取证：这条分支只为触发 algorithm-verification 在**纯 master 代码**上跑一遍
+     test_s4_haco 的 runtime_ms，好把"7000ms 阈值对 runner 速度敏感"从推算变成实测。取完数就关，不合并。 -->
