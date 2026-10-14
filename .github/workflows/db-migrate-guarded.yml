@@ -109,6 +109,12 @@ jobs:
             fi
           }
           QUERY_ERRORS=0
+          emit_summary() { # 读数是给人看的，不该只活在一个传不上去的产物里
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              { echo "### 库结构读数（$(date -u +%FT%TZ)）"; echo '```'; cat "${REPORT}" 2>/dev/null; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          }
+          emit_summary
           echo "--- 现状探测（缺列不算失败：缺列就是要报的东西） ---" | tee -a "${REPORT}"
           probe "执行回流三列V029/V030" 3 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time')) OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'))"
           probe "钱包三表V028" 3 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order')"
@@ -120,6 +126,7 @@ jobs:
           probe "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
           echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
+          emit_summary
           [ "${QUERY_ERRORS}" = 0 ] || { echo "::error::${QUERY_ERRORS} 条探测查询本身失败 ⇒ 这段判据跑不动，不许把'跑不了'读成'库是好的'"; exit 1; }
 
       - name: 执行幂等迁移（仅 mode=apply）
@@ -187,6 +194,7 @@ jobs:
 
       - name: 归档探测读数（无论成败都留凭证）
         if: always()
+        continue-on-error: true  # 2026-10-14 实测：这台 runner 往 blob storage 传产物会 TLS 断，读数已在上面的步骤摘要与日志里
         uses: actions/upload-artifact@v4
         with:
           name: db-state-report
