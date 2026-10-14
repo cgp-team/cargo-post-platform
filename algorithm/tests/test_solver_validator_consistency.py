@@ -181,7 +181,13 @@ def test_consistency_capacity_boundary():
 # ── Solver 不可行时 Validator 不需要验证 ───────────────────────
 
 def test_consistency_infeasible_skips_validation():
-    """Solver INFEASIBLE → Validator 不需要运行。"""
+    """Solver INFEASIBLE → Validator 不需要运行。
+
+    原来这一条用「派送 10 件 > 货舱 4」当无解样本，但 2026-10-11 的舍弃政策
+    （规格 §二.5：货运装不下就如实舍弃、班次照跑）让那种批次不再是无解。
+    本用例要钉的是「无解时校验器不该拿到方案」这个契约，与货运容量无关，
+    所以换成仍然**真无解**的形态：乘客超座位（乘客绝不可舍弃 = 真无解）。
+    """
     stations = _stations()
 
     req = PlanRequest(
@@ -192,8 +198,10 @@ def test_consistency_infeasible_skips_validation():
         stations=stations[1:],
         vehicles=[Vehicle(vehicleId=1, passengerCapacity=5, cargoCapacity=4)],
         orders=[
-            PlanOrder(orderId="D1", orderType=OrderType.DELIVERY,
-                      stationId="S1", itemCount=10),  # 10 > 4
+            # 6 名乘客 > 5 个座位：唯一真无解的容量形态
+            PlanOrder(orderId=f"P{i}", orderType=OrderType.PASSENGER,
+                      boardingStationId="S1", alightingStationId="S2")
+            for i in range(1, 7)
         ],
     )
 

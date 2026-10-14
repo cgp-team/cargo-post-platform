@@ -125,7 +125,13 @@ def test_same_vehicle_constraint():
 # ── 容量约束 ──────────────────────────────────────────────────
 
 def test_shipment_respects_cargo_capacity():
-    """shipment quantity 必须 ≤ cargoCapacity。"""
+    """shipment quantity 必须 ≤ cargoCapacity：整票带不动就不整票接。
+
+    政策变更（2026-10-11，规格 §二.5 订单可舍弃 + 乘客不可舍底线）：
+    以前「一票 10 件 > 舱 4」把整批判无解；现在正确出口是这一票如实进
+    unassignedOrderIds（订单不可拆，只能整票不接），班次本身不再谎称服务了它。
+    实质不变量没变：**绝不出现超舱方案**。
+    """
     stations = _stations()
 
     req = PlanRequest(
@@ -143,12 +149,16 @@ def test_shipment_respects_cargo_capacity():
     )
 
     outcome = solve(req)
-    assert outcome.status == "infeasible"
-    assert outcome.reason_code == "OVER_CAPACITY"
+    served = {s.orderId for p in (outcome.vehicle_plans or []) for s in p.stops if s.orderId}
+    assert "SHP001" not in served, "超舱运单被装上車"
+    if outcome.status == "feasible":
+        assert "SHP001" in set(outcome.unassigned_order_ids or []), "整票不接却未申报"
+    else:
+        assert outcome.reason_code == "OVER_CAPACITY"
 
 
 def test_multiple_shipments_share_capacity():
-    """多个 shipment 共享 cargoCapacity。"""
+    """多个 shipment 共享 cargoCapacity：12 件 > 舱 10，必须至少舍掉一整票。"""
     stations = _stations()
 
     req = PlanRequest(
@@ -168,10 +178,16 @@ def test_multiple_shipments_share_capacity():
     )
 
     outcome = solve(req)
-    # 总量 12 > 10，但 CargoOut/CargoIn 各自独立
-    # SHP001 DELIVER 6 + SHP002 DELIVER 6 = 12 > 10 → OVER_CAPACITY
-    assert outcome.status == "infeasible"
-    assert outcome.reason_code == "OVER_CAPACITY"
+    # 两票派送腿合计 12 件 > CargoOut 上限 10 → 不可能两票都接。
+    # 政策变更后允许「接一票 + 另一票如实舍弃」，但绝不许两票都算已服务。
+    served = {s.orderId for p in (outcome.vehicle_plans or []) for s in p.stops if s.orderId}
+    assert not {"SHP001", "SHP002"} <= served, f"12 件塞进 10 件舱：{served}"
+    if outcome.status == "feasible":
+        unassigned = set(outcome.unassigned_order_ids or [])
+        assert served & unassigned == set(), "同一票既被服务又被申报舍弃"
+        assert ({"SHP001", "SHP002"} - served) <= unassigned, "带不动的票没进多段联运清单"
+    else:
+        assert outcome.reason_code == "OVER_CAPACITY"
 
 
 # ── 多个 shipment ─────────────────────────────────────────────

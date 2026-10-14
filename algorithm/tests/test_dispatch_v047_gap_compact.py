@@ -301,10 +301,15 @@ class _StubRoute:
 
 
 class _StubTask:
-    def __init__(self, task_id: str, task_type=TaskType.SHIPMENT, size: int = 1):
+    def __init__(self, task_id: str, task_type=TaskType.SHIPMENT, size: int = 1,
+                 priority: int = 0):
+        # priority 必须跟着 TaskBlock 的契约走：_compact_solution 的规范序键是
+        # (-priority, task_id)，桩里缺这个字段就会以 AttributeError 的理由变红，
+        # 而那和被钉的「compaction 不得替换更优解」这条判据毫无关系。
         self.task_id = task_id
         self.task_type = task_type
         self.size = size
+        self.priority = priority
 
 
 def _run_compact(monkeypatch, candidate_obj: ObjectiveVector, current_obj: ObjectiveVector):
@@ -327,6 +332,11 @@ def _run_compact(monkeypatch, candidate_obj: ObjectiveVector, current_obj: Objec
     )
     monkeypatch.setattr(v14_solver, "_is_complete", lambda routes, tasks: True)
     monkeypatch.setattr(v14_solver, "_routes_feasible", lambda *a, **kw: True)
+    # 压实现在有两条替换路径：「只搬多余那台」的合并 与 「从零重打」。本夹具钉的是重打那条
+    # 路径的安全替换闸，所以这里把合并隔离掉 —— 否则桩路线（没有 vehicle_index/placements）
+    # 会先撞上接口形状问题，红因与「compaction 不得替换更优解」这条判据毫无关系。
+    # 合并路径自己的闸门由下面两条 test_compact_consolidation_* 用例钉。
+    monkeypatch.setattr(v14_solver, "_consolidate_into", lambda *a, **kw: None)
 
     return v14_solver._compact_solution(
         original_routes,
@@ -358,3 +368,130 @@ def test_compact_solution_accepts_better_objective(monkeypatch):
     better = ObjectiveVector(vehicle_count=1, passenger_impact=10.0)
     result, original, candidate = _run_compact(monkeypatch, better, current)
     assert result is candidate
+
+
+# ═══════════ 合并路径（_consolidate_into）的安全替换闸 ═══════════
+
+
+def _run_compact_with_consolidation(monkeypatch, consolidated_obj, current_obj,
+                                    consolidated_routes):
+    """只驱动「合并」这条替换路径：重打那条一律返回不完整解，隔离出合并的闸门行为。"""
+    from app.haco import v14_solver
+
+    original_routes = [_StubRoute(2, "orig1"), _StubRoute(1, "orig2")]
+    tasks = [_StubTask("T1"), _StubTask("T2"), _StubTask("T3")]
+
+    def fake_eval(routes, *a, **kw):
+        return consolidated_obj if routes is consolidated_routes else current_obj
+
+    monkeypatch.setattr(v14_solver, "evaluate_route_states", fake_eval)
+    monkeypatch.setattr(v14_solver, "_consolidate_into",
+                        lambda *a, **kw: consolidated_routes)
+    monkeypatch.setattr(
+        v14_solver, "_cheapest_insertion",
+        lambda *a, **kw: v14_solver.GreedySeedResult(
+            routes=None, complete=False, placed_count=0, total_tasks=3),
+    )
+    result = v14_solver._compact_solution(
+        original_routes, tasks,
+        templates=[object(), object()],
+        tasks_by_id={t.task_id: t for t in tasks},
+        engine=None,
+        passenger_capacities={0: 5, 1: 5},
+        cargo_capacities={0: 5, 1: 5},
+        initial_passenger_loads={0: 0, 1: 0},
+        initial_cargo_loads={0: 0, 1: 0},
+        station_map=None, matrix=None, config=None, rng=None, deadline=None,
+    )
+    return result, original_routes
+
+
+def test_compact_consolidation_must_not_replace_a_better_solution(monkeypatch):
+    """合并上岗带来第二条替换路径，它必须过同一道闸。
+
+    少用车不许变成「少服务/更差方案」的入口：车数没降、或代价（infeasibility /
+    passenger_impact）把它顶得更差时，一律保留原 HACO 解。
+    """
+    current = ObjectiveVector(vehicle_count=2, passenger_impact=10.0)
+    not_better = ObjectiveVector(vehicle_count=2, passenger_impact=90.0)
+    consolidated = [_StubRoute(3, "cons")]
+    result, original = _run_compact_with_consolidation(monkeypatch, not_better, current, consolidated)
+    assert result is original
+
+
+def test_compact_consolidation_replaces_when_objective_improves(monkeypatch):
+    """正向对照（同一夹具，只把合并后的目标改好一格）：确实收到了更少车用就得采纳。
+
+    没有这条，上一例可以靠「合并结果永远被拒」骗绿。
+    """
+    current = ObjectiveVector(vehicle_count=2, passenger_impact=10.0)
+    better = ObjectiveVector(vehicle_count=1, passenger_impact=10.0)
+    consolidated = [_StubRoute(3, "cons")]
+    result, original = _run_compact_with_consolidation(monkeypatch, better, current, consolidated)
+    assert result is consolidated
+
+
+# ═══════════ 压实容量下界：异质车队下不得按「索引前 m 台」误跳 ═══════════
+
+
+def _run_compact_recording_targets(monkeypatch, cargo_capacities, task_size, n_tasks=3):
+    """只跑 `_compact_solution` 的准入判定，记录它对哪些 m 真的动过手。
+
+    合并与重打两条路都桩掉（合并返回 None=没收到，重打返回不完整解=不采纳），
+    所以这里唯一的信号就是「下界有没有把某个 m 提前判死」。
+    """
+    from app.haco import v14_solver
+
+    original_routes = [_StubRoute(2, "orig1"), _StubRoute(1, "orig2")]
+    tasks = [_StubTask(f"T{i+1}", size=task_size) for i in range(n_tasks)]
+    tried: list[int] = []
+
+    monkeypatch.setattr(
+        v14_solver, "evaluate_route_states",
+        lambda *a, **kw: ObjectiveVector(vehicle_count=2, passenger_impact=0.0),
+    )
+
+    def spy_consolidate(*a, **kw):
+        tried.append(a[1])          # 第二个位置参数就是 target_used
+        return None
+
+    monkeypatch.setattr(v14_solver, "_consolidate_into", spy_consolidate)
+    monkeypatch.setattr(
+        v14_solver, "_cheapest_insertion",
+        lambda *a, **kw: v14_solver.GreedySeedResult(
+            routes=None, complete=False, placed_count=0, total_tasks=n_tasks),
+    )
+    result = v14_solver._compact_solution(
+        original_routes, tasks,
+        templates=[object(), object()],
+        tasks_by_id={t.task_id: t for t in tasks},
+        engine=None,
+        passenger_capacities={i: 50 for i in cargo_capacities},
+        cargo_capacities=cargo_capacities,
+        initial_passenger_loads={i: 0 for i in cargo_capacities},
+        initial_cargo_loads={i: 0 for i in cargo_capacities},
+        station_map=None, matrix=None, config=None, rng=None, deadline=None,
+    )
+    return result, tried, original_routes
+
+
+def test_compact_lower_bound_must_use_largest_m_not_first_m_indices(monkeypatch):
+    """车队货舱是异质的（真实语料里 veh0=8 / veh1=12 就是这样）。
+
+    总货需 12：索引前 1 台（veh0，舱 2）装不下，但「最大的那台」（veh1，舱 20）装得下。
+    按索引取会把 m=1 直接判死，连与索引无关的 `_consolidate_into`（在当前**在用**车之间
+    撤一台）都不会被调用 —— 这就是 r_village-M-002 两臂都停在 2 车/38.604km、
+    而同一批次的合法解能到 1 车/34.758km 的原因（任务 #26，#6 的同源缺口）。
+    """
+    _result, tried, _original = _run_compact_recording_targets(
+        monkeypatch, cargo_capacities={0: 2, 1: 20}, task_size=4)
+    assert 1 in tried, f"m=1 被容量下界误判死，压实从没试过撤到 1 台：tried={tried}"
+
+
+def test_compact_lower_bound_still_rejects_impossible_m(monkeypatch):
+    """反证：下界不是被删掉了。总货需 30 > 两台最大之和 22 ⇒ 一个 m 都不许试。"""
+    result, tried, original = _run_compact_recording_targets(
+        monkeypatch, cargo_capacities={0: 2, 1: 20}, task_size=10)
+    assert tried == []
+    assert result is original
+

@@ -328,7 +328,7 @@ $$w \leftarrow 0.9w + 0.1 \cdot \frac{\text{得分}}{\text{使用次数}}$$
 
 | 分组 | 参数 | 默认值 |
 |---|---|---|
-| 蚁群 | ant_count / max_iterations | 24 / 50 |
+| 蚁群 | ant_count / max_iterations | 24 / 8（实测 sweet spot；更深目标变差，收尾精修交 ALNS） |
 | 蚁群 | α / β（自适应范围） | 1.0 / 3.0（α∈[0.5,3]，β∈[1,5]） |
 | 信息素 | ρ / Q / τ_min / τ_max | 0.1 / 100 / 0.01 / 10 |
 | 收敛 | convergence_threshold | 25（一半时触发重启） |

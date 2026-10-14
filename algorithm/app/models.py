@@ -95,6 +95,15 @@ class PlanOrder(BaseModel):
     #                     算法不得安排绕行上门，改为最近站点交接
     #   "NEAR_STATION" —— 该点位距最近站点 ≤100 m，顺路在站点交接即可，不必绕进巷道
     roadAccess: str | None = None
+    # DISPATCH_CORE_V047 §15 逐单时效（与 PlanShipment 同语义，全部 optional）：
+    # 以前这四个字段只存在于 PlanShipment，于是「站点货运单」（村↔场站，生产主流量）的时效
+    # 在算法侧完全不可见 —— 迟到方案照样报可行。
+    # ⚠ 编码侧按任务类型分档接入（见 v14_solver._encode_tasks）：单节点任务只有自己那一个
+    #    事件点，没有锚点的字段不能硬塞给判据（否则等于拿"揽收完成时刻"去比"送到场站截止"）。
+    readyTime: datetime | None = None
+    pickupDeadline: datetime | None = None
+    deliveryDeadline: datetime | None = None
+    priority: int = Field(default=0, ge=0)
 
 
 class AlgorithmMode(str, Enum):
@@ -159,6 +168,9 @@ class PlanShipment(BaseModel):
     pickupDeadline: datetime | None = None
     deliveryDeadline: datetime | None = None
     priority: int = Field(default=0, ge=0)
+    # 公交通行预检结论（与 PlanOrder.roadAccess 同语义）：BLOCKED=公交进不去该点位，
+    # 两腿都改为最近骨架站交接；NEAR_STATION=点位距最近站 ≤100 m。缺省 None = 不干预。
+    roadAccess: str | None = None
 
 
 class PlanRequest(BaseModel):
@@ -197,6 +209,13 @@ class RouteStop(BaseModel):
     detourDuration: float | None = None
     passengerImpact: float | None = None
     reasonCode: str | None = None
+    # 执行区间归属（通用调度规格 §二.2：地理归属 ≠ 执行归属）。
+    # 语义：该动作实际落在骨架的第几段行程上。execRegion=k 表示发生在第 k 个
+    # 骨架站停靠之后、下一个骨架站停靠之前（k=0 即发车后还没停过任何骨架站）。
+    execRegion: int | None = None
+    # 地理候选区间（规格 §一 geo_candidates）：这个点位地理上贴近哪几段，可能多个。
+    # 只是候选——最终由 execRegion 的全局代价决定，允许与地理归属不同。
+    geoCandidates: list[int] = Field(default_factory=list)
 
 
 class VehiclePlan(BaseModel):

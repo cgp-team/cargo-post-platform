@@ -103,7 +103,14 @@ def test_shipment_cargo_flow():
 # ── 容量约束 ──────────────────────────────────────────────────
 
 def test_cargo_capacity_exceeded():
-    """车上货物超过 cargoCapacity → OVER_CAPACITY。"""
+    """单票 quantity=10 > cargoCapacity=4 → 订单不可拆，只能整票不接。
+
+    政策变更（2026-10-11，规格 §二.5「订单可舍弃，惩罚高但有限」)：
+    以前这里整批 `infeasible / OVER_CAPACITY`。但那等于「为一票货取消一班公交」，
+    同批只要有乘客就会被连带牺牲 —— 与「乘客绝不舍弃」的业务底线冲突。
+    现在的正确出口是：这一票如实进 unassignedOrderIds（交后端多段联运），
+    批次本身不再谎称服务了它。实质不变量仍然是**绝不超舱**。
+    """
     stations = _stations()
 
     req = PlanRequest(
@@ -121,8 +128,14 @@ def test_cargo_capacity_exceeded():
     )
 
     outcome = solve(req)
-    assert outcome.status == "infeasible"
-    assert outcome.reason_code == "OVER_CAPACITY"
+    served = {s.orderId for p in (outcome.vehicle_plans or []) for s in p.stops if s.orderId}
+    assert "SHP001" not in served, "超舱货量被装上車（超载）"
+    if outcome.status == "feasible":
+        # 装不下就如实申报：这一票必须出现在未服务清单里，不许静默消失
+        assert "SHP001" in set(outcome.unassigned_order_ids or []), outcome.warnings
+        assert any("OVERFLOW" in w or "DISCARD" in w for w in (outcome.warnings or []))
+    else:
+        assert outcome.reason_code == "OVER_CAPACITY"
 
 
 def test_multiple_shipments_cargo_capacity():
