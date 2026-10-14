@@ -24,6 +24,12 @@ public class PayOrderDO extends TenantBaseDO {
     private Long id;
     /** 支付订单号（业务生成） */
     private String orderNo;
+    /**
+     * 调用方提供的幂等键（客户端生成，同一笔充值重试时传同一个值）。
+     * null = 这次调用不参与幂等（老调用方没传）；库里存 NULL 而不是空串，
+     * 因为 MySQL 唯一键里 NULL 互不相等，空串会把「所有没传键的调用」撞成一条。
+     */
+    private String requestNo;
     /** 会员用户 ID */
     private Long userId;
     /** 渠道：alipay / wechat */
