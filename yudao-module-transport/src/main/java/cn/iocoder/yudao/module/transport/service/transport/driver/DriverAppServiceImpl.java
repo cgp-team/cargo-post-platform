@@ -1686,6 +1686,9 @@ public class DriverAppServiceImpl implements DriverAppService {
         vo.setItemCount(handover.getItemCount());
         vo.setWeightKg(handover.getWeightKg());
         vo.setPhotoUrl(handover.getPhotoUrl());
+        // 签名与照片各自回读：司机端页面要能分开说"凭证在 / 签名在 / 只有一个在"，
+        // 合成一列或只报一个就把这三种情况压成一句假话（V034 分列的理由）。
+        vo.setSignUrl(handover.getSignUrl());
         vo.setStatus(handover.getStatus());
         vo.setStatusName(TransportHandoverStatusEnum.nameOf(handover.getStatus()));
         vo.setHandoverTime(handover.getHandoverTime());

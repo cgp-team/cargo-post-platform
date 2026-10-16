@@ -14,14 +14,14 @@
 --   `WHERE NOT EXISTS(id=6930)` 永远为假 ⇒ 计价规则菜单一条都没插进去，页面在云上永远不出现，
 --   而 CI 一片绿（没有报错，只有"少了东西"）。这一类"两个文件都自认唯一"的编号，只能靠
 --   `grep -rhoE '\(69[0-9][0-9],' sql/ | sort -u` 当场量，不能靠记性。
---   已经跑过旧版 V032 的库由 `V035__pricing_rule_menu_free_ids.sql` 补上。
+--   已经跑过旧版 V032 的库由 `V036__pricing_rule_menu_free_ids.sql` 补上。
 --   守卫也一并从"按 id 判存在"改成**按 permission 判存在**：id 是本页的户口，permission 才是业务身份
 --   —— 拿 id 当身份，id 一改就会把"已经装过"误判成"没装过"，第二次装就多出重复菜单。
 --   另有一条规矩别破：基线 `sql/mysql/transport-menu.sql` 是裸 `INSERT ... VALUES`（固定主键），
 --   重放第二次必然主键冲突 ⇒ 新增菜单只写 incremental 脚本，不往基线大 SQL 里追加。
 --
 -- 执行入口（2026-10-16 起）：`deploy-dev.yml` 的迁移步骤默认不写库（仓库变量 AUTO_DB_MIGRATE 不为 1 就整段跳过），
---   本文件与 V035 都在 `.github/workflows/db-migrate-guarded.yml` 的 apply 白名单里；
+--   本文件与 V036 都在 `.github/workflows/db-migrate-guarded.yml` 的 apply 白名单里；
 --   没执行的表现是"菜单里没有这一项"，不是报错（表 `transport_pricing_rule` 在基线里已建，
 --   所以不像 V028/V031 那样依赖未执行的建表脚本）—— 少东西比红难发现，所以 guarded 的 `mode=check`
 --   与落地核对都把这一页的数量（2/2）当成必须读出来的数。

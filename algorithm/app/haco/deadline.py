@@ -60,3 +60,54 @@ class SearchDeadline:
             self.max_evaluations is not None
             and self.evaluations >= self.max_evaluations
         )
+
+
+class PhaseBudget:
+    """同一搜索内的阶段配额：共享主 deadline 的硬截止与评估计数，只允许更早收手。
+
+    为什么单独造这个类型：各阶段若各拿一个独立 SearchDeadline，评估计数就各自
+    归零，「第 55% 预算」这种说法在计数口径下根本不成立；而主链的 anytime 判据
+    必须建立在「全局一共做了多少次完整评估」上，才不受机器负载影响
+    （墙钟预算下同一实例同一种子实测能差 44%）。
+
+    鸭子类型：使用方只调 expired() / tick() / remaining() / check()。
+    """
+
+    def __init__(self, master: SearchDeadline, frac: float,
+                 anchor: float, total_seconds: float):
+        self.master = master
+        self.frac = max(0.0, min(1.0, float(frac)))
+        self.anchor = anchor
+        self.total_seconds = total_seconds
+
+    def expired(self) -> bool:
+        if self.master.expired():
+            return True
+        if self.frac >= 1.0:
+            return False
+        lim = self.master.max_evaluations
+        if lim and self.master.evaluations >= max(1, int(lim * self.frac)):
+            return True
+        if self.total_seconds > 0 and (time.monotonic() - self.anchor) >= self.total_seconds * self.frac:
+            return True
+        return False
+
+    def check(self) -> bool:
+        return not self.expired()
+
+    def tick(self, n: int = 1) -> bool:
+        return self.master.tick(n)
+
+    def remaining(self) -> float:
+        """时间余量（秒）。计数预算下这只作上界用：真正的确定性判据是 expired()。"""
+        left = self.master.remaining()
+        if self.total_seconds > 0:
+            left = min(
+                left,
+                max(0.0, self.total_seconds * self.frac - (time.monotonic() - self.anchor)),
+            )
+        return max(0.0, left)
+
+    @property
+    def evaluations(self) -> int:
+        return self.master.evaluations

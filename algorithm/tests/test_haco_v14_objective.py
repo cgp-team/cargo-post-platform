@@ -81,7 +81,9 @@ class TestPassengerImpactNonZero:
         # Passenger: S1 → S3（跨越整个骨架）
         p = _passenger("P1", "S1", "S3")
         # Shipment: S1 → S2（在乘客旅途中绕行）
-        s = _shipment("T1", "S1", "S2", size=1)
+        # 揽收点用离线站 S4（骨架只有 S1..S3）：绕行为真有时才谈得上影响乘客。
+        # 骨架站本身的到站是既定动作，绕行恒为 0 —— 那不是占位，是口径。
+        s = _shipment("T1", "S4", "S2", size=1)
         # Original: DEPOT(0), PASS(1), PASS(2), PASS(3), RETURN(4)
         # After P1 at 1,4: DEPOT(0), BOARD(1), PASS(2), PASS(3), PASS(4), ALIGHT(5), RETURN(6)
         # After T1 at 2,5: DEPOT(0), BOARD(1), PICKUP(2), PASS(3), PASS(4), DELIVER(5), PASS(6), ALIGHT(7), RETURN(8)

@@ -86,8 +86,30 @@ def _total_demand(request: PlanRequest) -> tuple[int, int, int]:
     return passengers, deliveries, pickups
 
 
-def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOutcome:
+def _search_budget_ms(deadline, fallback_seconds: float) -> int:
+    """一次 OR-Tools 搜索能领多少毫秒预算。
+
+    这批业务求解里 `_build_and_solve` 最多被调 `(MAX_REROUTE_ITERATIONS+1)×2` 次
+    （带时间窗一次、「去时间约束」归因一次）。每次都写死常量的话，整批墙钟就是
+    `次数 × 常量`（实测 2 次 = 10.00s，而请求声明的总时限是 5.0s）。
+    预算从**同一只**保险丝领 ⇒ 第二次领到的是剩余量，翻倍在结构上不可能发生。
+    领不到（deadline=None，例如单测直接调本模块）才退回自己的常量；下限 50ms 是
+    Duration 的可用粒度，0 会让 OR-Tools 一次都不迭代而把「预算用尽」伪装成「无解」。
+    """
+    budget = float(fallback_seconds)
+    if deadline is not None:
+        budget = min(budget, max(0.05, float(deadline.remaining())))
+    return max(50, int(budget * 1000))
+
+
+def solve(request: PlanRequest, matrix: DistanceMatrix | None = None, *, deadline=None) -> SolveOutcome:
     """求解一个批次的路线规划。契约口径：总需求超总容量 → OVER_CAPACITY；
+
+    deadline（可选，鸭子类型：只需 .remaining()）= 请求级墙钟保险丝。
+    这里必须逐次钳制：一次业务求解会调用 `_build_and_solve` **多次**
+    （改派循环 × 「去时间约束二次归因」），实测默认 5s 上限时整次调用是 10.0s ——
+    每次都吃满自己的 5s ⇒ 声明的总时限被偷偷翻倍。钳在每次搜索的入口上，
+    总时长才真的受同一只表约束。
 
     时间窗太紧（无满足 batchStart~batchEnd 的方案）→ TIME_WINDOW_EXCEEDED；
     其余无解（时序矛盾等）→ TIMING_CONFLICT；不返回部分方案。
@@ -449,7 +471,12 @@ def solve(request: PlanRequest, matrix: DistanceMatrix | None = None) -> SolveOu
         # PATH_CHEAPEST_ARC（确定性）：对公交骨架的「按序经停」cumul 顺序约束更稳健；
         # PARALLEL_CHEAPEST_INSERTION 在骨架顺序约束下首解构造会失败。
         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        search_parameters.time_limit.FromSeconds(SOLVER_TIME_LIMIT_SECONDS)
+        # 每一次搜索都从**同一只**保险丝领预算：本函数在一批里最多被调
+        # (MAX_REROUTE_ITERATIONS+1)×2 次（时间窗一次、归因一次），
+        # 写死常量的话整批墙钟 = 次数 × SOLVER_TIME_LIMIT_SECONDS（实测 2 次就是 10s，
+        # 而请求声明的总时限是 5s）。Duration 只收整数秒会粗到 1s 台阶，故用毫秒。
+        search_parameters.time_limit.FromMilliseconds(
+            _search_budget_ms(deadline, SOLVER_TIME_LIMIT_SECONDS))
 
         solution = routing.SolveWithParameters(search_parameters)
         return solution, manager, routing

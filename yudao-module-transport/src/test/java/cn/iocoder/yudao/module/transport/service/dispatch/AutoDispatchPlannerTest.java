@@ -98,8 +98,9 @@ class AutoDispatchPlannerTest {
     @Test
     void defaultAlgorithmConfig_hasDocumentedHacoDefaults() {
         Map<String, Object> config = AutoDispatchPlanner.defaultAlgorithmConfig();
-        assertEquals(30, config.get("ant_count"));
-        assertEquals(100, config.get("max_iterations"));
+        // 必须与算法服务自身默认值逐项一致（algorithm/app/models.py），否则生产口径与离线 A/B 口径不同一套
+        assertEquals(24, config.get("ant_count"));
+        assertEquals(8, config.get("max_iterations"));
         assertEquals(1.0, config.get("alpha"));
         assertEquals(3.0, config.get("beta"));
         assertEquals(0.1, config.get("rho"));
@@ -111,7 +112,7 @@ class AutoDispatchPlannerTest {
     void mergeAlgorithmConfig_advancedOverridesDefaultsOnly() {
         Map<String, Object> merged = AutoDispatchPlanner.mergeAlgorithmConfig(Map.of("max_iterations", 500));
         assertEquals(500, merged.get("max_iterations")); // 高级设置覆盖
-        assertEquals(30, merged.get("ant_count"));       // 其余仍走默认
+        assertEquals(24, merged.get("ant_count"));       // 其余仍走默认
     }
 
     // ==================== 候选车辆：一条线路一辆车 + 线路覆盖优先 ====================

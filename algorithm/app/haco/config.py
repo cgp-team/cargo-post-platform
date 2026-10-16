@@ -8,6 +8,21 @@ def _get(config, name: str, default):
     return getattr(config, name, default)
 
 
+def _detour_km(config, default: float) -> float:
+    """绕行阈值：请求给多少用多少，没给才用算法默认。
+
+    契约字段 AlgorithmConfig.maxDetourDistanceKm 是 Optional[float]，声明了但值为 None
+    时代表「请求没指定」——必须回落默认 2.0；早先直接用 _get(config,"max_detour_km",…)
+    会把 None 当阈值传下去，而下游把 None 解读成「不设绕行约束」，预筛整条被关掉。
+    0.0 是合法值（完全不许绕），所以这里按 None 判断而不是用 or 短路。
+    """
+    for name in ("max_detour_km", "maxDetourDistanceKm"):
+        value = _get(config, name, None)
+        if value is not None:
+            return float(value)
+    return float(default)
+
+
 @dataclass
 class HacoConfig:
     """HACO-CPS 运行参数。"""
@@ -43,10 +58,14 @@ class HacoConfig:
     ls_max_moves: int = 50       # 局部搜索最大移动次数
 
     # 时间预算（秒）
+    # 口径的唯一权威说明在 docs/algorithm-integration.md「时限与终止口径」，此处只写取值：
+    # haco_time_limit = 本臂搜索的上限；overall_time_limit = 请求级墙钟保险丝（由 app/solver.solve 兑现，
+    # 约束可中断的搜索，不可中断的固定开销以 OVERALL_FUSE_TRIPPED 报出，不藏）。
     haco_time_limit: float = 4.0
     overall_time_limit: float = 5.0
 
     # 确定性评估次数预算（None=只看时间）。CI/批量回归设有限值可消除抖动。
+    # ⚠ 计数才是「终止的正常依据」；墙钟只是保险丝 —— 见上面那份口径。
     max_evaluations: int | None = None
 
     # deterministic greedy seed 的独立时间预算（秒）。
@@ -78,6 +97,12 @@ class HacoConfig:
     # 超出该值的插入直接判不可行，订单留给多段联运（换乘站接力）而非让单条线路绕远。
     # 默认 2km；车辆闲置运力充足时可放宽到 3km（后端按车辆闲置运力传 max_detour_km 覆盖）。
     max_detour_km: float = 2.0
+
+    # 订单舍弃惩罚（km 等价）：规格 §二.5「惩罚高但有限」。
+    # 用公里表达是为了和绕行阈值同一把尺子 —— 补全一个订单要多绕的里程超过这个值时，
+    # 就改成舍弃（交回后端多段联运），而不是硬塞进路线绕远。
+    # 取 2×放宽后的绕行上限（3km）= 6km：明显比「就近站交接」更贵才值得放弃这单。
+    discard_penalty_km: float = 6.0
 
     # ML Branch Ranker：off|auto|force（force=A/B 实验，只重排不硬砍）
     # 默认 auto：insertion_ranker_osm_v2 top3≥0.80 已过 rank 门
@@ -145,6 +170,11 @@ class HacoConfig:
             penalty_skeleton=_get(config, "penalty_skeleton", cls.penalty_skeleton),
             target_feasible_ratio=_get(config, "target_feasible_ratio", cls.target_feasible_ratio),
             restart_ratio=_get(config, "restart_ratio", cls.restart_ratio),
-            max_detour_km=_get(config, "max_detour_km", cls.max_detour_km),
+            max_detour_km=_detour_km(config, cls.max_detour_km),
+            discard_penalty_km=float(
+                _get(config, "discard_penalty_km", None)
+                or _get(config, "discardPenaltyKm", None)
+                or cls.discard_penalty_km
+            ),
             use_branch_ranker=_get(config, "use_branch_ranker", cls.use_branch_ranker),
         )

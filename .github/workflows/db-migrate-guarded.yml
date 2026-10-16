@@ -2,7 +2,7 @@ name: DB migrate (guarded, manual-only)
 
 # ⚠ 这条流水线**只能由人手动触发**：没有 push、没有 schedule、没有 pull_request。
 #   原因：`.github/workflows/deploy-dev.yml` 里那条 `Run database migration` 曾经每次 push master
-#   无条件重放，把"往生产库加东西"挂在 push 上，等于"任何一次合并都可能改共享库"。
+#   无条件重放白名单脚本，把"往生产库加东西"挂在 push 上，等于"任何一次合并都可能改共享库"。
 #   自 2026-10-16（队列 #69 / 台账 D-127）那一段默认不写库了（仓库变量 AUTO_DB_MIGRATE 不为 1 就跳过），
 #   本文件因此是**唯一的写库入口**，并且默认只做只读探测：
 #     mode=check  → 一个字都不写，只报告"这台库现在有没有这些列/表/菜单"
@@ -11,7 +11,16 @@ name: DB migrate (guarded, manual-only)
 # 只允许跑幂等脚本（重复执行不会报错、也不会二次伤害）：
 #   sql/incremental/V028__wallet_tables.sql   —— 三段 CREATE TABLE IF NOT EXISTS
 #   sql/incremental/V030__execution_writeback_guarded.sql —— 逐列 information_schema 守卫 + 末尾 3/3 自检
-#   sql/incremental/V032__pricing_rule_menu.sql + V035__pricing_rule_menu_free_ids.sql —— 按 permission 判存在的菜单补插
+#   sql/incremental/V031__wallet_menu.sql / V032__pricing_rule_menu.sql —— 菜单行走
+#       `INSERT … SELECT … WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = …)`，授权行走 INSERT IGNORE
+#   sql/incremental/V033__station_pickup_attrs.sql —— 四列逐个查 information_schema 再 PREPARE/EXECUTE
+#   sql/incremental/V034__handover_sign_url.sql / V035__pay_order_request_no.sql —— 同一守卫形态
+#   sql/incremental/V036__pricing_rule_menu_free_ids.sql —— 计价规则页的补插（按 permission 判存在）
+#   ⚠ 入选前逐条量过（本轮实测）：这些文件里 `裸 ALTER TABLE … ADD COLUMN` 出现 0 次、
+#     守卫/NOT EXISTS 各就位 ⇒ 重复执行只会打印 "SELECT 1"，不会撞 ERROR 1060。
+#   ⚠ **编号 035 被两个仓各自认领过一次**：上游用 `V035__pay_order_request_no.sql`（充值幂等键），
+#     本轮原先叫 V035 的那支计价补插已挪到 **V036**（台账 D-133）。这不是重命名装饰：
+#     "按号执行"的清单里同号不同文件 = 谁覆盖谁说不清，与 #70 那次菜单主键撞号同型。
 # ⛔ 刻意**不跑** V029：它是裸 `ALTER TABLE ADD COLUMN`，第二次执行必然
 #   ERROR 1060 Duplicate column name（本机 2026-10-12 实测）。V030 就是它的可重复形态。
 
@@ -34,6 +43,7 @@ on:
 
 permissions:
   contents: read
+  actions: write  # 实测：只给 contents:read 时 upload-artifact 直接失败 ⇒ 读数取不回来
 
 # 同一时刻只跑一条，排队不取消：两条并发往同一个库写会互相咬
 concurrency:
@@ -81,45 +91,56 @@ jobs:
           fi
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
+          REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
+          : > "${REPORT}"
 
-          # 先把"要写到哪"打在日志上（只打库名与主机，不打密码）：
+          # 先把"要写到哪"打在读数上（只打库名与主机，不打密码）：
           # 手动作业最容易出的事故不是脚本错，而是人在错误的库上跑了正确的脚本
-          echo "[目标库] $( "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e 'SELECT CONCAT(VERSION(), "  host=", @@hostname, "  db=", DATABASE())' )"
+          echo "[目标库] $( "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e 'SELECT CONCAT(VERSION(), "  host=", @@hostname, "  db=", DATABASE())' )" | tee -a "${REPORT}"
 
-          # ⚠ 下面三条探测的写法别改回 `IF(cond, A, '前缀', COUNT(*), '后缀')`：MySQL 的 IF() 只收 3 个参，
-          #   多一个就是 1064（这三条在本文件提交时正是这个形状，从来没跑起来过 —— 探测步骤一红，
-          #   后面的 apply 步骤根本轮不到执行）。要拼多段只能用 CONCAT（它是变元的）。
-          #   复扫：python scripts/check_sql_function_arity.py
-
-          echo "--- 执行回流三列（V029/V030 的目标）当前是否存在 ---"
-          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3',CONCAT('缺失（当前 ', COUNT(*), ' /3）')), '  ← actual_arrival_time / actual_finish_time / unassigned_orders')
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA=DATABASE()
-              AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time'))
-                OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'));"
-
-          echo "--- 钱包三表（V028 的目标）当前是否存在 ---"
-          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3',CONCAT('缺失（当前 ', COUNT(*), ' /3）')), '  ← transport_wallet_account / transport_wallet_transaction / transport_pay_order')
-            FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA=DATABASE()
-              AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order');"
-
-          # 计价规则那一页也在只读探测里报：撞号那种坏的形态就是"CI 全绿而后台少一页"，
-          # 所以 mode=check 必须能单独看见它，不能等到 apply 才发现（队列 #70）
-          echo "--- 计价规则菜单（V032/V035 的目标）当前是否存在 ---"
-          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT(IF(COUNT(*)=2,'已存在 2/2',CONCAT('缺失（当前 ', COUNT(*), ' /2）')), '  ← transport:pricing-rule:query / :save')
-            FROM system_menu
-            WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0';"
-          echo "--- 主键 6930/6931/6940/6941 各自归属（撞号探针：四行全念，空格也念出来）---"
-          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT('id=', t.id, ' → ', IFNULL(m.name,'（这一格空着）'), '  [', IFNULL(m.permission,''), ']')
-            FROM (SELECT 6930 AS id UNION ALL SELECT 6931 UNION ALL SELECT 6940 UNION ALL SELECT 6941) t
-            LEFT JOIN system_menu m ON m.id = t.id AND m.deleted = b'0'
-            ORDER BY t.id;"
+          # probe 标签 期望 「只返回一个数字的 SQL」。
+          # ⚠ 判定不在 SQL 里做：MySQL 的 IF() 只接受 3 个参数，而旧写法是
+          #   IF(COUNT(*)=3,'已存在 3/3','缺失（当前 ', COUNT(*), '/3）' —— 5 个参数，
+          #   那条查询本身就报 Incorrect parameter count ⇒ 整步红，
+          #   红得像「库有问题」，实际是判据跑不动（本文件迄今唯一一次跑就是这样红的）。
+          probe() {
+            local label="$1" want="$2" sql="$3" out
+            if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
+              printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
+            else
+              printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
+              echo "::error title=DBSTATE::${label} 查询本身失败"
+              QUERY_ERRORS=$((QUERY_ERRORS + 1))
+            fi
+          }
+          QUERY_ERRORS=0
+          emit_summary() { # 读数是给人看的，不该只活在一个传不上去的产物里
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              { echo "### 库结构读数（$(date -u +%FT%TZ)）"; echo '```'; cat "${REPORT}" 2>/dev/null; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          }
+          emit_summary
+          echo "--- 现状探测（缺列不算失败：缺列就是要报的东西） ---" | tee -a "${REPORT}"
+          probe "执行回流三列V029/V030" 3 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time')) OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'))"
+          probe "钱包三表V028" 3 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order')"
+          probe "揽收点四列V033" 4 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME IN ('contact_name','contact_mobile','business_hours','ecommerce_flag')"
+          probe "交接签名列V034" 1 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_handover' AND COLUMN_NAME='sign_url'"
+          probe "充值幂等键列V035" 1 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_pay_order' AND COLUMN_NAME='request_no'"
+          probe "充值幂等唯一键V035" 1 "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_pay_order' AND INDEX_NAME='uk_pay_order_user_request'"
+                    probe "菜单钱包查询(id=6920)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6920"
+                              probe "钱包查询按权限" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:wallet:query'"
+                              probe "钱包查询角色授权" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:wallet:query' AND rm.role_id=1"
+                    probe "计价规则两行按权限(V032/V036)" 2 "SELECT COUNT(*) FROM system_menu WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0'"
+                    probe "菜单计价规则页(id=6940)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6940 AND deleted = b'0'"
+                    probe "菜单计价规则保存(id=6941)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6941 AND deleted = b'0'"
+                    probe "6930仍属货物交接" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0'"
+          probe "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
+          probe "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
+          echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
+          emit_summary
+          [ "${QUERY_ERRORS}" = 0 ] || { echo "::error::${QUERY_ERRORS} 条探测查询本身失败 ⇒ 这段判据跑不动，不许把'跑不了'读成'库是好的'"; exit 1; }
 
       - name: 执行幂等迁移（仅 mode=apply）
         if: ${{ github.event.inputs.mode == 'apply' }}
@@ -129,7 +150,7 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
 
           # 失败自动诊断（沿用 deploy-dev.yml 的做法）：保留原始 exit code，不打印密码
           trap 'rc=$?; echo; echo "===== [失败诊断] exit ${rc} =====";
@@ -137,16 +158,29 @@ jobs:
             "${COMPOSE[@]}" logs --tail 100 mysql 2>&1 | tail -100 || true;
             echo "===== 诊断结束 ====="; exit ${rc};' ERR
 
-          # V032/V035 成对：前者给全新库（主键已挪到 6940/6941），后者给"已经跑过旧版 V032、
-          # 那一页因为撞号从来没插进去"的库（台账 D-127）。两条都按 permission 判存在 ⇒ 反复执行安全。
+          # V032 给全新库（主键 6940/6941），V036 给"已经跑过旧版 V032、那一页因为撞号从来没插进去"的库
+          # （台账 D-127）。两条都按 permission 判存在 ⇒ 反复执行安全；V036 原先叫 V035，
+          # 与上游的 V035__pay_order_request_no.sql 同号，本轮挪号（D-133）。
           for f in sql/incremental/V028__wallet_tables.sql sql/incremental/V030__execution_writeback_guarded.sql \
-                   sql/incremental/V032__pricing_rule_menu.sql sql/incremental/V035__pricing_rule_menu_free_ids.sql; do
+                   sql/incremental/V031__wallet_menu.sql sql/incremental/V032__pricing_rule_menu.sql \
+                   sql/incremental/V033__station_pickup_attrs.sql sql/incremental/V034__handover_sign_url.sql \
+                   sql/incremental/V035__pay_order_request_no.sql \
+                   sql/incremental/V036__pricing_rule_menu_free_ids.sql; do
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
-            "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+            # 逐支留凭证：作业绿不够 —— "八支都执行成功了"这句必须由每支自己的退出码与原文支撑（8 = 上面 for 循环里的实数）
+            errfile="${RUNNER_TEMP:-.}/apply_err.txt"
+            if "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}" 2>"${errfile}"; then
+              echo "::notice title=APPLY::${f##*/} rc=0 原文=$(head -c 150 "${errfile}" 2>/dev/null | tr -d '\r\n') 后续 15 格读数见 DBSTATE 注解"
+            else
+              rc=$?
+              echo "::error title=APPLY::${f##*/} rc=${rc} 原文=$(head -c 200 "${errfile}" 2>/dev/null | tr -d '\r\n')"
+              exit "${rc}"
+            fi
             echo "${f} done."
           done
+
 
       - name: 落地核对（仅 mode=apply）：数不出就必须红
         if: ${{ github.event.inputs.mode == 'apply' }}
@@ -156,34 +190,49 @@ jobs:
           set -Eeuo pipefail
           set -a; source "${ENV_FILE}"; set +a
           COMPOSE=(docker compose --env-file "${ENV_FILE}" -f deploy/docker-compose.yml)
-          MYSQL_EXEC=("${COMPOSE[@]}" exec -T mysql mysql --default-character-set=utf8mb4 -u root -p"${DB_PASSWORD}")
+          MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
+          REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
-          COLS=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT COUNT(*) FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA=DATABASE()
-              AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time'))
-                OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'));")
-          TABLES=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT COUNT(*) FROM information_schema.TABLES
-            WHERE TABLE_SCHEMA=DATABASE()
-              AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order');")
-          # 注释乱码检查：V030 的 COMMENT 里有「司机完成装车」这段中文，latin1 误读时它会变成乱码而不是报错
-          BAD_COMMENT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT COUNT(*) FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item'
-              AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%';")
+          # 15 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
+          # 六格、本轮把计价那两格换成"按权限 2 + 6940 + 6941 + 6930 归属"四格 ⇒ 数要跟着实跑改，
+          # 否则屏幕上念的格数和真正判的格数就是两个答案（台账 D-133）。
+          echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
+          MISSING=0
+          probe_strict() {
+            local label="$1" want="$2" sql="$3" out
+            if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
+              printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
+              echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
+              [ "${out}" = "${want}" ] || MISSING=$((MISSING + 1))
+            else
+              printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
+              echo "::error title=DBSTATE::${label} 查询本身失败"
+              MISSING=$((MISSING + 1))
+            fi
+          }
+          probe_strict "执行回流三列V029/V030" 3 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time')) OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'))"
+          probe_strict "钱包三表V028" 3 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order')"
+          probe_strict "揽收点四列V033" 4 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME IN ('contact_name','contact_mobile','business_hours','ecommerce_flag')"
+          probe_strict "交接签名列V034" 1 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_handover' AND COLUMN_NAME='sign_url'"
+          probe_strict "充值幂等键列V035" 1 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_pay_order' AND COLUMN_NAME='request_no'"
+          probe_strict "充值幂等唯一键V035" 1 "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_pay_order' AND INDEX_NAME='uk_pay_order_user_request'"
+                    probe_strict "菜单钱包查询(id=6920)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6920"
+                              probe_strict "钱包查询按权限" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:wallet:query'"
+                              probe_strict "钱包查询角色授权" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:wallet:query' AND rm.role_id=1"
+                    probe_strict "计价规则两行按权限(V032/V036)" 2 "SELECT COUNT(*) FROM system_menu WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0'"
+                    probe_strict "菜单计价规则页(id=6940)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6940 AND deleted = b'0'"
+                    probe_strict "菜单计价规则保存(id=6941)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6941 AND deleted = b'0'"
+                    probe_strict "6930仍属货物交接" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0'"
+          probe_strict "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
+          probe_strict "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
+          [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
+          echo "OK: 15 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
-          # 计价规则那一页：撞号的坏法就是"少两行而 CI 全绿"，所以这里必须数到 2（台账 D-127）。
-          PRICING=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT COUNT(*) FROM system_menu
-            WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0';")
-          # 6930 这一格必须仍是交接：谁把它改成别的，就是又有人往别人的主键上放东西
-          SLOT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0';")
-          echo "[核对] 执行回流列 ${COLS}/3，钱包表 ${TABLES}/3，注释异常 ${BAD_COMMENT}，计价菜单 ${PRICING}/2，6930 仍是交接 ${SLOT}/1"
-          [ "${COLS}" = "3" ] || { echo "::error::执行回流列没数满 3/3（现 ${COLS}）：迁移没落到这张表，别当已完成"; exit 1; }
-          [ "${TABLES}" = "3" ] || { echo "::error::钱包三表没数满 3/3（现 ${TABLES}）"; exit 1; }
-          [ "${BAD_COMMENT}" = "0" ] || { echo "::error::列注释里没有原样中文（${BAD_COMMENT} 条异常）——字符集不对，中文注释已损坏"; exit 1; }
-          [ "${PRICING}" = "2" ] || { echo "::error::计价规则菜单没数满 2/2（现 ${PRICING}）：这一页在云上还是不存在，别把本次 apply 当成功"; exit 1; }
-          [ "${SLOT}" = "1" ] || { echo "::error::主键 6930 不再属于货物交接（现 ${SLOT}）：撞号又回来了"; exit 1; }
-          echo "OK: 三列三表齐、注释按 utf8mb4 原样入库、计价菜单 2/2 且 6930 归属未变"
+      - name: 归档探测读数（无论成败都留凭证）
+        if: always()
+        continue-on-error: true  # 2026-10-14 实测：这台 runner 往 blob storage 传产物会 TLS 断，读数已在上面的步骤摘要与日志里
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-state-report
+          path: ${{ runner.temp }}/db_state_report.txt
+          if-no-files-found: warn

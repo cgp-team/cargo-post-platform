@@ -566,11 +566,76 @@ def generate_insertion_candidates(
         cargo_risk = max(0.0, task.size / max(cargo_cap, 1) - 0.5) if task.task_type != TaskType.PASSENGER else 0.0
         cap_risk = pax_risk + cargo_risk
 
+        # ── Stage A 的时效剪枝（只在契约真给了承诺时刻时生效）──────────────
+        # 逐单时效落地后合法插入位骤减，但旧扫描仍然把 O(事件数²) 个位置全部算一遍
+        # 再交给 Stage B 判迟到 —— 实测每单要花掉上千次评估，可解批次因此被
+        # 种子份额饿死（lab 台账 r_line/L 从可行掉到 NO_FEASIBLE_INITIAL_SOLUTION）。
+        # 这里用「当前路线各事件的完成时刻」做**乐观下界**：插入某位的到达时刻
+        # ≥ 前一站完成时刻 + 直达该点的行驶时间（不算本单带来的绕行、不算后序服务），
+        # 只可能低估不会高估 → 被剪掉的位置必然真的赶不上，绝不伤及可行解。
+        from ..models import StopAction
+        from ..validators import service_duration
+        from .feasibility_engine import _EVENT_TO_ACTION
+
+        base_ts = getattr(feasibility_engine, "base_time", None)
+        dl_deadline = task.delivery_deadline_s if base_ts is not None else None
+        pk_deadline = task.pickup_deadline_s if base_ts is not None else None
+        depart: list[float] = []
+        if base_ts is not None and (dl_deadline is not None or pk_deadline is not None):
+            # depart[i] =  bus 办完第 i 个事件、准备出发去下一站的时刻（相对发车）。
+            # 插入位的前驱是 events[i] 时，到达新点的最早时刻 = depart[i] + 直达行驶时间。
+            clock = 0.0
+            for j, ev in enumerate(route.events):
+                svc = service_duration(
+                    _EVENT_TO_ACTION.get(ev.event_type, StopAction.PASS)
+                )
+                depart.append(clock + svc)
+                if j + 1 < len(route.events):
+                    nxt = station_map.get(route.events[j + 1].station_id)
+                    cur = station_map.get(ev.station_id)
+                    clock = float("inf") if (cur is None or nxt is None) else (
+                        clock + svc + compute_duration(cur, nxt, matrix)
+                    )
+        svc_pick = service_duration(StopAction.PICKUP)
+        svc_deliver = service_duration(StopAction.DELIVER)
+
         if task.task_type in (TaskType.PASSENGER, TaskType.SHIPMENT):
             for pickup_index in range(1, event_count):
                 # cheap distance for the pickup insertion point
                 from_station = station_map.get(route.events[pickup_index - 1].station_id)
                 after_pickup = station_map.get(route.events[min(pickup_index, event_count - 1)].station_id)
+
+                # 揽收腿剪枝：连「办完前一站立刻直达该点」都赶不上揽收承诺，
+                # 这个插入位不必再往下枚举送货位了。
+                if (
+                    pk_deadline is not None
+                    and from_station is not None
+                    and pickup_station is not None
+                    and base_ts + depart[pickup_index - 1] \
+                        + compute_duration(from_station, pickup_station, matrix) \
+                        + svc_pick > pk_deadline + 1e-6
+                ):
+                    continue
+
+                # 与 delivery_index 无关的那 6 次查表提到这里算一次。
+                # 可证等价（这几个值只由 pickup_index / from_station / after_pickup / 两个作业点决定），
+                # 但省掉的是内层每个插入位一半的矩阵查表 —— Stage A 是实测的评估成本热点。
+                if from_station and pickup_station and delivery_station and after_pickup:
+                    d_orig_pickup = compute_distance(from_station, after_pickup, matrix)
+                    d_new_pickup = (
+                        compute_distance(from_station, pickup_station, matrix)
+                        + compute_distance(pickup_station, after_pickup, matrix)
+                    )
+                    dd_pickup = max(0.0, d_new_pickup - d_orig_pickup)
+                    t_orig_pickup = compute_duration(from_station, after_pickup, matrix)
+                    t_new_pickup = (
+                        compute_duration(from_station, pickup_station, matrix)
+                        + compute_duration(pickup_station, after_pickup, matrix)
+                    )
+                    dur_pickup = max(0.0, t_new_pickup - t_orig_pickup)
+                    legs_ok = True
+                else:
+                    legs_ok = False
 
                 for delivery_index in range(pickup_index + 1, event_count + 1):
                     _check_count += 1
@@ -583,22 +648,37 @@ def generate_insertion_candidates(
                     # delivery cost: before_delivery → delivery_station → after_delivery
                     dd = 0.0
                     dur = 0.0
-                    if from_station and pickup_station and delivery_station and after_pickup:
-                        # pickup detour
-                        d_orig_pickup = compute_distance(from_station, after_pickup, matrix)
-                        d_new_pickup = (
-                            compute_distance(from_station, pickup_station, matrix)
-                            + compute_distance(pickup_station, after_pickup, matrix)
-                        )
-                        dd_pickup = max(0.0, d_new_pickup - d_orig_pickup)
-
-                        # delivery detour
+                    if legs_ok:
+                        # 派送腿绕行（揽收腿已在上面算好，直接复用 dd_pickup）
                         if delivery_index <= event_count:
                             before_del = station_map.get(route.events[delivery_index - 1].station_id)
                             after_del = station_map.get(route.events[min(delivery_index, event_count - 1)].station_id)
                         else:
                             before_del = after_pickup
-                            after_del = station_map.get(route.depot_station)
+                            after_del = station_map.get(
+                                getattr(route, "end_station", route.depot_station)
+                            )
+
+                        # 派送腿剪枝：用「前驱办完 + 直达送货点 + 派送服务」这个乐观下界
+                        # 比承诺时刻。下界只可能低估，所以被跳过的位必然真赶不上；
+                        # 这些位原本要整套 cheap 算完再被 Stage B 判迟到。
+                        if dl_deadline is not None and delivery_station is not None:
+                            # 到达送货点的下界 = 会前一站办完的时刻 + 直达该点的行驶时间。
+                            # 前驱必须取「实际会被接上的那一站」：delivery_index == event_count 时
+                            # 上面的 before_del 指向 RETURN，而 RETURN 之后不允许再有事，
+                            # 真正的前驱是它前一站 —— 拿 RETURN 当会前驱会把整段回程算进
+                            # 到达时刻，于是最靠后的几个合法位被误剪
+                            # （实测 r_vrp/S 里程 5.99→9.01、r_village/M 22.4→38.6）。
+                            pred = delivery_index - 1
+                            if pred >= 1 and route.events[pred].event_type == EventType.RETURN:
+                                pred -= 1
+                            lb_from = station_map.get(route.events[pred].station_id)
+                            if lb_from is not None and pred < len(depart):
+                                lb_arrive = depart[pred] + compute_duration(
+                                    lb_from, delivery_station, matrix
+                                )
+                                if base_ts + lb_arrive + svc_deliver > dl_deadline + 1e-6:
+                                    continue
 
                         dd_delivery = 0.0
                         if before_del and after_del:
@@ -623,14 +703,7 @@ def generate_insertion_candidates(
                         ):
                             continue
 
-                        # duration estimate (same structure)
-                        t_orig_pickup = compute_duration(from_station, after_pickup, matrix)
-                        t_new_pickup = (
-                            compute_duration(from_station, pickup_station, matrix)
-                            + compute_duration(pickup_station, after_pickup, matrix)
-                        )
-                        dur_pickup = max(0.0, t_new_pickup - t_orig_pickup)
-
+                        # duration estimate（揽收腿已在上面算好，这里只补派送腿）
                         dur_delivery = 0.0
                         if before_del and after_del:
                             t_orig_del = compute_duration(before_del, after_del, matrix)
@@ -780,8 +853,12 @@ def generate_insertion_candidates(
     route_task_base[task.task_id] = task
 
     for slot in top_pool:
-        if deadline is not None and deadline.expired():
-            break
+        # 一次槽位 = 一次完整 FeasibilityEngine + evaluate_route_genome 评估。
+        # 计数预算要靠这些 tick 才能取代墙钟，成为确定性的搜索停止依据。
+        if deadline is not None:
+            deadline.tick()
+            if deadline.expired():
+                break
 
         route = routes[slot.vehicle_index]
         candidate_route = route.copy()

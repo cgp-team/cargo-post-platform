@@ -442,10 +442,14 @@ def test_6_11_preloaded_delivery_within_load_feasible():
 
 
 def test_6_11_initial_cargo_load_infeasible():
-    """cargoCapacity=10，initialCargoLoad=8，再**揽收** 3 件 → 峰值 8+3>10 无解。
+    """cargoCapacity=10，initialCargoLoad=8，再**揽收** 3 件 → 净载荷 11 件超舱。
 
-    对称于 6.10（初始乘客 + 新乘客）。PRELOADED **派送** 不增加峰值，
-    故派送 3 件应可行——见 test_6_11_initial_cargo_load_feasible / step2 两向复用。
+    政策变更（2026-10-11，规格 §二.5「订单可舍弃」+ 业务底线「乘客不可舍弃」）：
+    这一单物理上带不动时，正确出口是「装不下的如实舍弃、班次照跑」，
+    而不是为一票货把整批判无解（那等于取消公交）。
+    所以断言从 `status == infeasible` 改成两条更硬的实质不变量：
+      1) 这 3 件绝不出现在方案里（超载绝不发生）；
+      2) 若批次仍报可行，必须把该单如实写进 unassignedOrderIds（不许悄悄丢）。
     """
     orders = [
         PlanOrder(orderId="K1", orderType=OrderType.PICKUP,
@@ -457,7 +461,12 @@ def test_6_11_initial_cargo_load_infeasible():
     ]
     req = _base_request(orders=orders, vehicles=vehicles)
     outcome = solve(req)
-    assert outcome.status == "infeasible"
+    served = {s.orderId for p in outcome.vehicle_plans for s in p.stops if s.orderId}
+    assert "K1" not in served, "8+3=11 件超舱仍被装上車"
+    if outcome.status == "feasible":
+        assert "K1" in set(outcome.unassigned_order_ids or []), "舍弃未如实申报"
+    else:
+        assert outcome.reason_code == "OVER_CAPACITY"
 
 
 # ═══════════════════════════════════════════════════════════════

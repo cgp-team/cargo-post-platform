@@ -90,6 +90,13 @@ def calculate_passenger_impact(
         if i + 1 >= len(events):
             continue
 
+        # 骨架站是「每站必停」的既定动作，不构成偏离运营路线：
+        # 按 prev→cur→next 的成对差值算会把「线路顺序被打乱后的正常到站」
+        # 误报成十几公里绕行（实测 13.14km），既污染业务目标第 3/4 维，
+        # 也诱导软化阶段去改本来合规的停靠。baseline 同口径豁免。
+        if route.skeleton and current.station_id in route.skeleton:
+            continue
+
         next_station = station_map[events[i + 1].station_id]
 
         direct = compute_distance(from_station, next_station, matrix)

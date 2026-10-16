@@ -5,6 +5,7 @@ package cn.iocoder.yudao.module.transport.service.dispatch;
 import cn.hutool.core.util.IdUtil;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 
 import cn.iocoder.yudao.framework.common.exception.ServiceException;
 
@@ -109,6 +110,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 
 import java.time.LocalTime;
+
+import java.time.OffsetDateTime;
 
 import java.time.ZoneOffset;
 
@@ -944,6 +947,11 @@ public class DispatchServiceImpl implements DispatchService {
             Long plannedVehicleId = vehiclePlan.getVehicleId();
             Long plannedDriverId = resolveDriverId(plannedVehicleId);
             for (AlgorithmRouteStopDTO stop : vehiclePlan.getStops()) {
+                // 与 insertPlanItems 同一口径：算法拒绝的经停不算"已分配"，
+                // 否则这一单既没有可执行明细、也不会转多段联运，货就凭空消失了
+                if (Boolean.FALSE.equals(stop.getAccepted())) {
+                    continue;
+                }
                 Long businessOrderId = stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null;
                 if (businessOrderId != null) {
                     orderVehicleMap.putIfAbsent(businessOrderId, new Long[]{plannedVehicleId, plannedDriverId});
@@ -966,23 +974,75 @@ public class DispatchServiceImpl implements DispatchService {
                     + " 单，已自动交多段联运（MultiLeg）拆段接力，不整批失败");
         }
 
+        // 算法把"为什么少了单"写在 warnings 里（少服务必须是事实而不是默认值），
+        // 后端此前收下却全仓无人读取 —— 解释落不到运营面前。只翻少服务族，
+        // 不倾倒遥测（SEARCH_START_MS / ITERATION_COUNT 这些既读不懂，也会挤占方案理由那 2000 字）。
+        String shedExplain = explainShedWarnings(resultFinal.getWarnings());
+        if (shedExplain != null) {
+            reasons.add(shedExplain);
+        }
+
         // 多段规划上下文（站点/线路站点两张全表）按批预取一次，整批订单共用，避免每单两次全表查询
         MultiLegService.PlanningContext multilegContext = pooledIds.isEmpty() || multiLegService == null
                 ? null : multiLegService.loadPlanningContext();
+        // 逐单是否真的排出段来 —— 决定它算不算"本批未派"（见下面 V029 留痕）
+        Set<Long> legPlannedOrderIds = new LinkedHashSet<>();
+
+        Set<Long> legFailedOrderIds = new LinkedHashSet<>();
+
         for (Long orderId : pooledIds) {
             try {
                 Long[] plannedVehicle = orderVehicleMap.get(orderId);
                 boolean relay = plannedVehicle == null;
-                allLegs.addAll(multiLegService.planLegs(orderId, plan.getId(),
+                List<TransportLegDO> legsOfOrder = multiLegService.planLegs(orderId, plan.getId(),
                         plannedVehicle != null ? plannedVehicle[0] : null,
-                        plannedVehicle != null ? plannedVehicle[1] : null, multilegContext));
+                        plannedVehicle != null ? plannedVehicle[1] : null, multilegContext);
+                allLegs.addAll(legsOfOrder);
+                if (!legsOfOrder.isEmpty()) {
+                    legPlannedOrderIds.add(orderId);
+                }
                 MultiLegPlanner.PlanResult preview = multiLegService.preview(orderId);
                 if (!reasons.contains(preview.reason())) {
                     reasons.add((relay ? "[多段接力] " : "") + preview.reason());
                 }
             } catch (Exception ex) {
+                legFailedOrderIds.add(orderId);
                 log.warn("[createSmartPlan] 订单 {} 运输段规划失败：{}", orderId, ex.getMessage());
             }
+        }
+
+        // 本批"一没排进算法方案、二联运也没排出任何段"的单必须留痕（V029，任务 #34）。
+        // 此前算法返回的 unassignedOrderIds 只被用来判空 + 拼一句解释文案，事后查不到
+        // "这批为什么少带两单"，也无法回流成度量台的题（正是 #33 的语料缺口）。
+        // 乘客单受业务底线保护永不舍弃：它若真的一条段都没有，同样如实记下来（那是缺陷，不是政策）。
+        List<Map<String, Object>> shedOrders = new ArrayList<>();
+        Set<Long> algoUnassignedBusinessIds = new LinkedHashSet<>();
+        for (String algoOrderId : unassignedFromAlgo) {
+            Long businessId = toBusinessOrderId(algoOrderId);
+            if (businessId != null) {
+                algoUnassignedBusinessIds.add(businessId);
+            }
+        }
+        for (Long orderId : pooledIds) {
+            if (legPlannedOrderIds.contains(orderId)) {
+                continue;
+            }
+            Map<String, Object> shed = new LinkedHashMap<>();
+            shed.put("orderId", orderId);
+            shed.put("reasonCode", legFailedOrderIds.contains(orderId) ? "LEG_PLAN_FAILED"
+                    : algoUnassignedBusinessIds.contains(orderId) ? "NO_LEG_AFTER_ALGORITHM_UNASSIGNED"
+                    : "NO_LEG_PLANNED");
+            shed.put("algorithmUnassigned", algoUnassignedBusinessIds.contains(orderId));
+            shedOrders.add(shed);
+        }
+        if (!shedOrders.isEmpty()) {
+            DispatchPlanDO shedUpdate = new DispatchPlanDO();
+            shedUpdate.setId(plan.getId());
+            shedUpdate.setUnassignedOrders(JSONUtil.toJsonStr(shedOrders));
+            dispatchPlanMapper.updateById(shedUpdate);
+            plan.setUnassignedOrders(shedUpdate.getUnassignedOrders());
+            log.warn("[createSmartPlan] 本批 {} 单未排入任何运输段，已落库 plan={} unassigned={}",
+                    shedOrders.size(), plan.getId(), shedUpdate.getUnassignedOrders());
         }
 
         if (!allLegs.isEmpty()) {
@@ -3167,9 +3227,53 @@ public class DispatchServiceImpl implements DispatchService {
 
         stations.add(depotDTO);
 
-        stationMapper.selectBatchIds(stationIds).stream().map(this::toStationDTO).forEach(stations::add);
+        // 站点档案一次取全：既给算法站点坐标，也用来识别"车辆进不去"的作业点（vehicle_access=false）
+        List<StationDO> stationRows = stationMapper.selectBatchIds(stationIds);
+        Set<Long> vehicleBlockedStations = new HashSet<>();
+        stationRows.forEach(row -> {
+            if (Boolean.FALSE.equals(row.getVehicleAccess())) {
+                vehicleBlockedStations.add(row.getId());
+            }
+        });
+        stationRows.stream().map(this::toStationDTO).forEach(stations::add);
 
-        List<AlgorithmVehicleDTO> vehicleDTOs = vehicles.stream()
+        // 核定载客数没录的车不能当"0 座"下发：契约要求 passengerCapacity ≥ 1
+        // （algorithm/app/models.py:56），送 0 会让整批派单在算法侧直接 422；替业务编一个
+        // 座位数更不行（车辆的载客能力是乘客"每站必停"能不能被兑现的前提）。
+        // 所以这类车先退出本批候选；若候选被剔空，报可读的"数据缺口"而不是让算法猜。
+        List<Long> unprofiledVehicleIds = new ArrayList<>();
+
+        List<VehicleDO> profiledVehicles = new ArrayList<>();
+
+        for (VehicleDO vehicle : vehicles) {
+
+            Integer seats = vehicle.getPassengerCapacity();
+
+            if (seats == null || seats <= 0) {
+
+                unprofiledVehicleIds.add(vehicle.getId());
+
+            } else {
+
+                profiledVehicles.add(vehicle);
+
+            }
+
+        }
+
+        if (!unprofiledVehicleIds.isEmpty()) {
+
+            log.warn("[buildPlanRequest] 核定载客数未录入，本批不参与派单 vehicleIds={}", unprofiledVehicleIds);
+
+            if (profiledVehicles.isEmpty()) {
+
+                throw exception(DISPATCH_VEHICLE_PROFILE_INCOMPLETE, unprofiledVehicleIds);
+
+            }
+
+        }
+
+        List<AlgorithmVehicleDTO> vehicleDTOs = profiledVehicles.stream()
 
                 .map(vehicle -> AlgorithmVehicleDTO.builder()
 
@@ -3182,6 +3286,19 @@ public class DispatchServiceImpl implements DispatchService {
                         .cargoCapacity(vehicle.getCargoCapacity() != null
 
                                 ? vehicle.getCargoCapacity() : AlgorithmVehicleDTO.DEFAULT_CARGO_CAPACITY)
+
+                        // 货仓载重：DB 列是 `cargo_capacity_kg NOT NULL DEFAULT 0`
+                        // （sql/mysql/transport-schema.sql:9），所以"没核定"读出来是 0 而不是 null，
+                        // 而算法把"有值"当真上限（app/haco/feasibility_engine.py 的
+                        // `cargo_weight_capacity_kg is not None and 载重 > 上限`）⇒ 下发 0.0 会让
+                        // **任何带重量的件一律判超限**、货运全被舍弃。0/负数折算成"未核定"= 不下发，
+                        // 算法退回件数口径（注释里那句"没配就留空"到这里才真的成立）。
+
+                        .cargoWeightCapacityKg(vehicle.getCargoCapacityKg() != null
+
+                                && vehicle.getCargoCapacityKg().signum() > 0
+
+                                ? vehicle.getCargoCapacityKg().doubleValue() : null)
 
                         // 公交骨架（Mandatory Passenger Service）：该车辆按"自己这条线在本窗口的站序"经停，
                         // 货运任务只能插进骨架间隙 → 顺路带货、有先后、不会掉头取货
@@ -3206,7 +3323,7 @@ public class DispatchServiceImpl implements DispatchService {
         List<AlgorithmOrderDTO> orderDTOs = orders.stream()
 
                 .map(order -> toAlgorithmOrders(order, depot.getId(), passengerMap, cargoMap, postalMap,
-                        shipmentDTOs))
+                        vehicleBlockedStations, shipmentDTOs))
 
                 .flatMap(List::stream).collect(Collectors.toList());
 
@@ -3257,8 +3374,9 @@ public class DispatchServiceImpl implements DispatchService {
 
 
     /** 订单映射为算法订单：客运按乘客数拆单（一张算法客运单 = 1 人）；
-
-     *  货运/邮快件按下车站是否为场站区分：场站→站点为派送(DELIVERY)，站点→场站为揽收(PICKUP)。 */
+     *  货运/邮快件按下车站是否为场站区分：场站→站点为派送(DELIVERY)，站点→场站为揽收(PICKUP)。
+     *  重量/体积取货运子表真实录入值；作业点若落在 vehicle_access=false 的站点则标 roadAccess=BLOCKED，
+     *  由算法改为最近骨架站交接（乘客单永不标注 —— 每站必停拉客）。 */
 
     private List<AlgorithmOrderDTO> toAlgorithmOrders(TransportOrderDO order, Long depotStationId,
 
@@ -3267,6 +3385,8 @@ public class DispatchServiceImpl implements DispatchService {
                                                       Map<Long, CargoOrderDO> cargoMap,
 
                                                       Map<Long, PostalOrderDO> postalMap,
+
+                                                      Set<Long> vehicleBlockedStations,
 
                                                       List<AlgorithmShipmentDTO> shipments) {
 
@@ -3294,6 +3414,13 @@ public class DispatchServiceImpl implements DispatchService {
 
         }
 
+        // 货运子表一次取好：重量/体积是真实录入值，缺省即不下发（算法按件数约束，不换算、不编造）
+        CargoOrderDO cargo = Objects.equals(order.getOrderType(), 2) ? cargoMap.get(order.getId()) : null;
+        Double weightKg = cargo != null && cargo.getWeightKg() != null ? cargo.getWeightKg().doubleValue() : null;
+        Double volumeM3 = cargo != null && cargo.getVolumeM3() != null ? cargo.getVolumeM3().doubleValue() : null;
+        String pickupLegAccess = roadAccessOf(order.getPickupStationId(), vehicleBlockedStations);
+        String deliveryLegAccess = roadAccessOf(order.getDeliveryStationId(), vehicleBlockedStations);
+
         // 揽收：村→场站（收货站为场站），算法经停上车站点并装载
 
         if (depotStationId != null && Objects.equals(order.getDeliveryStationId(), depotStationId)) {
@@ -3308,7 +3435,19 @@ public class DispatchServiceImpl implements DispatchService {
 
                     .itemCount(getItemCount(order, cargoMap, postalMap))
 
+                    .weightKg(weightKg)
+
+                    .volumeM3(volumeM3)
+
+                    .roadAccess(pickupLegAccess)
+
                     .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
+
+                    // 逐单时效与配对单同源：不下发就等于站点货运单没有任何承诺时刻（任务 #32）
+
+                    .readyTime(toOffset(order.getEarliestPickupTime()))
+
+                    .deliveryDeadline(toOffset(order.getLatestDeliveryTime()))
 
                     .build());
 
@@ -3328,7 +3467,20 @@ public class DispatchServiceImpl implements DispatchService {
 
                     .itemCount(getItemCount(order, cargoMap, postalMap))
 
+                    .weightKg(weightKg)
+
+                    .volumeM3(volumeM3)
+
+                    .roadAccess(deliveryLegAccess)
+
                     .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
+
+                    // 派送单（场站→村）的送达截止是这一侧唯一的硬承诺：算法会按 DELIVER
+                    // 事件时刻判它，迟到就不可行（v14_solver._encode_tasks 的 DELIVERY 分支）
+
+                    .readyTime(toOffset(order.getEarliestPickupTime()))
+
+                    .deliveryDeadline(toOffset(order.getLatestDeliveryTime()))
 
                     .build());
 
@@ -3341,8 +3493,6 @@ public class DispatchServiceImpl implements DispatchService {
         // 既看不出先后顺序，也没法约束同车与取送顺序，站点清单里也就看不到揽收点。
         // 现在按 PlanShipment 下发，算法展开为 PICKUP + DELIVERY 两个节点（同车 + 顺序约束由算法保证），
         // 后端 AlgorithmResultValidator 已支持按 shipmentId 校验配对完整性。
-        CargoOrderDO cargo = Objects.equals(order.getOrderType(), 2) ? cargoMap.get(order.getId()) : null;
-
         shipments.add(AlgorithmShipmentDTO.builder()
 
                 .shipmentId(String.valueOf(order.getId()))
@@ -3354,14 +3504,78 @@ public class DispatchServiceImpl implements DispatchService {
                 .quantity(getItemCount(order, cargoMap, postalMap))
                 .economicValue(resolveEconomicValue(order, cargoMap, postalMap))
 
-                .weightKg(cargo != null && cargo.getWeightKg() != null ? cargo.getWeightKg().doubleValue() : null)
+                .weightKg(weightKg)
 
-                .volumeM3(cargo != null && cargo.getVolumeM3() != null ? cargo.getVolumeM3().doubleValue() : null)
+                .volumeM3(volumeM3)
+
+                // 逐单时效：订单档案里的 earliest_pickup_time / latest_delivery_time 是真数据，
+                // 不送进算法就只能按批窗口判，迟到单照样被报成可行（揽收截止与优先级业务侧尚无字段，留空）
+                .readyTime(toOffset(order.getEarliestPickupTime()))
+
+                .deliveryDeadline(toOffset(order.getLatestDeliveryTime()))
+
+                // 任一腿的站点车辆进不去 → 整单按"到最近骨架站交接"处理（算法不能只挪一条腿）
+                .roadAccess(pickupLegAccess != null || deliveryLegAccess != null ? "BLOCKED" : null)
 
                 .build());
 
         return Collections.emptyList();
 
+    }
+
+
+    /** 站点档案明确标注车辆不可进入时下发 BLOCKED；未标注返回 null（算法行为与历史完全一致） */
+    private static String roadAccessOf(Long stationId, Set<Long> vehicleBlockedStations) {
+        return stationId != null && vehicleBlockedStations.contains(stationId) ? "BLOCKED" : null;
+    }
+
+
+    /** 业务侧 LocalDateTime 按班次时区下发（算法要求带时区的时间） */
+    private static OffsetDateTime toOffset(LocalDateTime time) {
+        return time == null ? null : time.atOffset(BATCH_ZONE_OFFSET);
+    }
+
+
+    /**
+     * 算法 warnings 里的少服务条目 → 一句可读解释（进方案 planReason）。
+     *
+     * <p>口径来自算法侧：带不下的单进 {@code unassignedOrderIds}，同时在 warnings 说明成因
+     * （超载 / 按承诺时效判定必迟到 / 绕行超出可服务范围）。这里只做人话翻译，不重新判断，
+     * 也不为没有条目编造原因；没有 DISCARDED_ORDERS 就返回 null（不添加解释行）。</p>
+     */
+    private static String explainShedWarnings(List<String> warnings) {
+        List<String> discarded = warningIds(warnings, "DISCARDED_ORDERS");
+        if (discarded.isEmpty()) {
+            return null;
+        }
+        List<String> causes = new ArrayList<>();
+        appendCause(causes, warningIds(warnings, "DISCARDED_CAPACITY_OVERFLOW"), "货舱超载");
+        appendCause(causes, warningIds(warnings, "DISCARDED_ETA_UNSERVABLE"), "按承诺时效判定必迟到");
+        appendCause(causes, warningIds(warnings, "DISCARDED_SHED_FOR_WINDOW"), "超出班次时间窗");
+        appendCause(causes, warningIds(warnings, "DISCARDED_UNSERVABLE"), "绕行超出可服务范围");
+        String causeText = causes.isEmpty() ? "" : "（" + String.join("、", causes) + "）";
+        return "算法判定本趟带不下 " + discarded.size() + " 单" + causeText
+                + "，已转多段联运接力：" + String.join("、", discarded);
+    }
+
+
+    private static void appendCause(List<String> causes, List<String> ids, String label) {
+        if (!ids.isEmpty()) {
+            causes.add(label + " " + ids.size() + " 单");
+        }
+    }
+
+
+    /** 取 `KEY=id1,id2` 形式的条目；键不存在或值为空返回空表 */
+    private static List<String> warningIds(List<String> warnings, String key) {
+        if (warnings == null || warnings.isEmpty()) {
+            return List.of();
+        }
+        String prefix = key + "=";
+        return warnings.stream()
+                .filter(w -> w != null && w.startsWith(prefix))
+                .flatMap(w -> Arrays.stream(w.substring(prefix.length()).split(",")))
+                .map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 
 
@@ -3596,15 +3810,33 @@ public class DispatchServiceImpl implements DispatchService {
 
     /** 经停明细落库：visit_sequence 从 1 递增；补填司机归属（按车辆当前有效人车绑定）。
 
-     *  预计到达时间由 {@link DispatchEstimationService#estimatePlan} 在明细落库后统一估算回写 */
+     *  预计到达时间由 {@link DispatchEstimationService#estimatePlan} 在明细落库后统一估算回写。
+
+     *  <p>算法明确拒绝的经停（accepted=false，即"这一趟不在这里服务这一单"）不写成任务明细：
+
+     *  那是解释信息，不是可执行动作。写进去司机会照单去一个算法判定不该去的点，
+
+     *  而这一单又不会进联运接力（见 orderVehicleMap 同样跳过）—— 等于货凭空消失。</p> */
 
     private void insertPlanItems(Long planId, Long vehicleId, List<AlgorithmRouteStopDTO> stops) {
 
         Long driverId = resolveDriverId(vehicleId);
 
-        for (int i = 0; i < stops.size(); i++) {
+        int written = 0;
 
-            AlgorithmRouteStopDTO stop = stops.get(i);
+        for (AlgorithmRouteStopDTO stop : stops) {
+
+            if (Boolean.FALSE.equals(stop.getAccepted())) {
+
+                log.info("[insertPlanItems] 方案 {} 车辆 {} 跳过算法已拒绝的经停 {}（原因码 {}）",
+
+                        planId, vehicleId, stop.getStationId(), stop.getReasonCode());
+
+                continue;
+
+            }
+
+            written++;
 
             PlanItemActionEnum action = PlanItemActionEnum.fromCode(stop.getAction());
 
@@ -3620,7 +3852,7 @@ public class DispatchServiceImpl implements DispatchService {
 
                     .orderId(stop.getOrderId() != null ? toBusinessOrderId(stop.getOrderId()) : null)
 
-                    .visitSequence(i + 1)
+                    .visitSequence(written)
 
                     .actionType(action != null ? action.getAction() : null);
 

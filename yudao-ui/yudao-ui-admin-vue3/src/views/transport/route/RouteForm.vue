@@ -22,8 +22,8 @@
       </el-form-item>
       <el-form-item label="数据来源" prop="sourceType">
         <el-select v-model="formData.sourceType" placeholder="请选择" style="width:100%">
-          <el-option label="项目自建线路" value="PROJECT" />
-          <el-option label="现实公交线路" value="REAL" />
+          <el-option label="客货邮专线" value="PROJECT" />
+          <el-option label="公交线路" value="REAL" />
         </el-select>
       </el-form-item>
       <el-form-item label="服务类型" prop="serviceType">

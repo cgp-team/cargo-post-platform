@@ -171,11 +171,27 @@ def test_total_demand_over_total_capacity_infeasible() -> None:
     assert not outcome.vehicle_plans
 
 
-def test_cargo_over_total_capacity_infeasible() -> None:
+def test_cargo_over_total_capacity_is_shed_not_served() -> None:
+    """14 件派送 > 3 车合计 12 件舱位：多出来的必须不被服务且如实申报。
+
+    2026-10-11 政策变更（规格 §二.5 订单可舍弃）：这一形态以前直接
+    `infeasible / OVER_CAPACITY`，等于为两票货取消整班；现在按「装得下的照走、
+    装不下的进 unassignedOrderIds」处置。本用例钉住的是**不超载 + 不漏报**，
+    而不是某一种 status。
+    """
     orders = [cargo_order(i, OrderType.DELIVERY, f"S{i % 9 + 1}", items=2) for i in range(7)]
     outcome = solve(make_request(orders, vehicle_count=3))  # 14 件 > 3 车合计 12 件
-    assert outcome.status == "infeasible"
-    assert outcome.reason_code == "OVER_CAPACITY"
+    all_ids = {o.orderId for o in orders}
+    served = {s.orderId for p in (outcome.vehicle_plans or []) for s in p.stops if s.orderId}
+    carried = sum(o.itemCount for o in orders if o.orderId in served)
+    assert carried <= 12, f"三车合计 12 件舱位却装了 {carried} 件"
+    if outcome.status == "feasible":
+        assert served, "舱位够用却一单都不接"
+        unassigned = set(outcome.unassigned_order_ids or [])
+        assert (all_ids - served) <= unassigned, "带不动的派送件没进多段联运清单"
+        assert served & unassigned == set(), "同一单既算已服务又算未服务"
+    else:
+        assert outcome.reason_code == "OVER_CAPACITY"
 
 
 def test_net_load_capacity_reuse_single_vehicle() -> None:

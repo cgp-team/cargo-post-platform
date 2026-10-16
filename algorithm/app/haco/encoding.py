@@ -61,6 +61,27 @@ class TaskBlock:
     weight_kg: float | None = None
     volume_m3: float | None = None
 
+    # 公交通行预检结果（契约 PlanOrder.roadAccess 透传，None = 未做预检，行为不变）：
+    # "BLOCKED"=只能经巷道/窄路到达，公交车进不去；"NEAR_STATION"=距最近站点 ≤100m。
+    # 两者都不该由车绕进去，出口阶段的处置同「绕行超阈值」（就近站交接 → 舍弃），
+    # 但原因码不同：那不是「不划算」，是「去不了」。
+    road_access: str | None = None
+
+    # DISPATCH_CORE_V047 §15 逐单时效（epoch 秒；None = 契约未给 = 不检查）。
+    # 以前这四个字段只存在于 PlanShipment，既不进 TaskBlock 也没人比较，
+    # 于是「承诺按时送达」在算法层面完全不可见（离线/生产都看不出迟到）。
+    ready_time_s: float | None = None
+    pickup_deadline_s: float | None = None
+    delivery_deadline_s: float | None = None
+    # 稀缺运力/时间余量下的分配次序：数值越大越先得到舱位、越晚被舍弃（契约未给时 0）
+    priority: int = 0
+
+    # 地理候选区间（通用调度规格 §一 geo_candidates(p)）：这个点位地理上贴近骨架的
+    # 哪几段行程，可能有多个。它只是**候选**——最终由哪段行程执行（exec_region）
+    # 取决于全局代价，允许与地理归属不一致（规格 §二.2「地理归属 ≠ 执行归属」）。
+    # 由发射阶段按真实路段距离算出，不在编码期猜测，也不参与硬过滤。
+    geo_candidates: tuple[int, ...] = ()
+
     # 运行时计算的属性
     pickup_station_obj: Station | None = None
     delivery_station_obj: Station | None = None

@@ -43,6 +43,10 @@ public interface ErrorCodeConstants {
     ErrorCode DISPATCH_TASK_WINDOW_EMPTY = new ErrorCode(1_005_008_009, "任务窗口 {} 内没有可派订单（{} 单时间窗与本窗口无交集，请调整窗口或等下一班次）");
     ErrorCode DISPATCH_NO_BACKTRACKING = new ErrorCode(1_005_008_010, "车辆已驶过站点、不能掉头取货：{}；请留到下一班次或改派其他线路");
     ErrorCode DISPATCH_VEHICLE_BUSY = new ErrorCode(1_005_008_011, "车辆已被在途方案占用（待审核/已下发/执行中），请更换车辆或稍后再派");
+    // 车辆档案的核定载客数是"没录"还是"0 座"必须分开：DB 列 passenger_capacity NOT NULL DEFAULT 0
+    // （sql/mysql/transport-schema.sql:8），而算法契约要求 ≥1（algorithm/app/models.py:56）——
+    // 原样下发 0 会让整批派单在算法侧 422，替业务编一个座位数更不行，所以只能报可读的数据缺口。
+    ErrorCode DISPATCH_VEHICLE_PROFILE_INCOMPLETE = new ErrorCode(1_005_008_012, "本批候选车辆的核定载客数未录入，无法安全派单（车辆 ID：{}）；请先在车辆管理补录核定载客数");
     // Product
     ErrorCode PRODUCT_NOT_EXISTS = new ErrorCode(1_005_009_000, "商品不存在");
     ErrorCode PRODUCT_NAME_DUPLICATE = new ErrorCode(1_005_009_001, "商品名称已存在");

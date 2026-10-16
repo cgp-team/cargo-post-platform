@@ -19,22 +19,25 @@ DEFAULT_DELIVERY_SECONDS = 60
 DEFAULT_PASS_SECONDS = 30
 
 
+# 每站必停的服务时长表。实测 cProfile：`service_duration` 在一次求解里被调近千万次
+# （热路径 `feasibility_engine.check` 每验一条候选插入就把整条路线的动作序列过一遍），
+# 而它返回的是常量 —— 用字典取值替掉 if 链，语义逐项等价（DEPART/RETURN 仍为 0）。
+_SERVICE_SECONDS = {
+    StopAction.BOARD: DEFAULT_BOARD_SECONDS,
+    StopAction.ALIGHT: DEFAULT_ALIGHT_SECONDS,
+    StopAction.PICKUP: DEFAULT_PICKUP_SECONDS,
+    StopAction.DELIVER: DEFAULT_DELIVERY_SECONDS,
+    # PASS = 骨架站计划停靠拉客时间（每站必停），不得为 0，否则等价于掠站而过
+    StopAction.PASS: DEFAULT_PASS_SECONDS,
+}
+
+
 def service_duration(action: StopAction) -> int:
     """根据 stop action 返回服务时间（秒）。
 
     PASS 为骨架站计划停靠拉客时间（每站必停），不得为 0。
     """
-    if action == StopAction.BOARD:
-        return DEFAULT_BOARD_SECONDS
-    if action == StopAction.ALIGHT:
-        return DEFAULT_ALIGHT_SECONDS
-    if action == StopAction.PICKUP:
-        return DEFAULT_PICKUP_SECONDS
-    if action == StopAction.DELIVER:
-        return DEFAULT_DELIVERY_SECONDS
-    if action == StopAction.PASS:
-        return DEFAULT_PASS_SECONDS
-    return 0  # DEPART, RETURN
+    return _SERVICE_SECONDS.get(action, 0)  # DEPART, RETURN → 0
 
 
 def validate_passenger_load(

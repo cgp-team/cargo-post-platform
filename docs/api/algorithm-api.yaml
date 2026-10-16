@@ -11,7 +11,12 @@ info:
     - requestId 幂等保留 24 小时，重复提交返回缓存结果（cached: true）。
     - 坐标统一 GCJ-02；当前距离按欧氏直线计算，后续切换高德路网距离。
     - 静态闭环：车辆空载从场站出发并返回；算法自动判定启用车辆数。
-    - 规模上限：30 站点 / 25 订单（乘客+包裹合计）/ 3 车 / 10 秒计算超时。
+    - 规模上限：算法服务自身接受 100 站点 / 25 订单 / 3 车 / 10 秒计算超时；
+      业务适配层（transport 模块）按 30 站点预检并缩批，因此调用方实际可用上限是 30 站点。
+      两侧都还没按需求动态推导：抬车辆上限受"候选车翻倍反而解更差"（构造侧对称破缺未解）阻塞，
+      抬站点上限要等它一起解决，在此之前请勿把调用方批次放到 30 以上。
+    - 部分解语义：本趟带不下的货运单不阻断整批，status 仍为 feasible，
+      单号进 unassignedOrderIds，由业务侧转多段联运（MultiLegPlanner）接力；乘客单永不进该名单。
     - 无解语义存在待澄清矛盾：Q10 回复为 200 + status=infeasible，
       Q12 回复将 422 标注为业务不可行。适配层需同时兼容两种返回。
 servers:
@@ -60,13 +65,24 @@ paths:
                   orderType: DELIVERY
                   stationId: S2
                   itemCount: 1
+                  readyTime: '2026-08-09T08:05:00+08:00'
+                  deliveryDeadline: '2026-08-09T08:40:00+08:00'
                 - orderId: O-U001
                   orderType: PICKUP
                   stationId: S1
                   itemCount: 1
+                  readyTime: '2026-08-09T08:10:00+08:00'
+              shipments:
+                - shipmentId: TP001
+                  pickupStationId: S1
+                  deliveryStationId: S2
+                  quantity: 2
+                  weightKg: 5.5
+                  readyTime: '2026-08-09T08:10:00+08:00'
+                  deliveryDeadline: '2026-08-09T08:25:00+08:00'
               algorithmConfig:
-                ant_count: 30
-                max_iterations: 100
+                ant_count: 24
+                max_iterations: 8
       responses:
         '200':
           description: 规划完成（含幂等缓存命中）
@@ -83,7 +99,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '413':
-          description: 规模超限（30 站点 / 25 订单 / 3 车），不可重试
+          description: 规模超限（算法服务按自身的 100 站点 / 25 订单 / 3 车判定；业务适配层更早按 30 站点缩批），不可重试
           content:
             application/json:
               schema:
@@ -228,8 +244,8 @@ components:
           $ref: '#/components/schemas/Station'
         stations:
           type: array
-          maxItems: 30
-          description: 全部服务站点（含场站），GCJ-02 坐标
+          maxItems: 100
+          description: 全部服务站点（含场站），GCJ-02 坐标。算法服务接受到 100；业务适配层按 30 预检缩批
           items:
             $ref: '#/components/schemas/Station'
         vehicles:
@@ -241,9 +257,16 @@ components:
         orders:
           type: array
           maxItems: 25
-          description: 乘客+包裹订单合计不超过 25
+          description: 乘客+包裹订单与配对货运单（shipments）合计不超过 25，超出返回 413
           items:
             $ref: '#/components/schemas/PlanOrder'
+        shipments:
+          type: array
+          description: |
+            配对货运单（揽收→送达，同一辆车、先取后送）。取货站与送达站都不是场站的完整链路
+            必须走这里：拆成两个单向订单会丢掉"同车 + 先取后送"约束，等于货凭空出现在送达站。
+          items:
+            $ref: '#/components/schemas/PlanShipment'
         algorithmConfig:
           $ref: '#/components/schemas/AlgorithmConfig'
         scenario:
@@ -282,6 +305,86 @@ components:
           minimum: 1
           default: 4
           description: 货仓实时最大包裹件数
+        cargoWeightCapacityKg:
+          type: number
+          format: double
+          minimum: 0
+          description: |
+            货仓最大载重（kg），取车辆档案 transport_vehicle.cargo_capacity_kg。
+            下发后 PlanOrder/PlanShipment 的 weightKg 才真正参与可行性判定
+            （超载单被舍弃进 unassignedOrderIds，不阻断整批）；缺省时只按件数约束。
+        cargoVolumeCapacityM3:
+          type: number
+          format: double
+          minimum: 0
+          description: 货仓最大体积（m³）；同上，缺省时算法不按体积判定，不替业务编造上限
+        initialPassengerLoad:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 出发时车上已有乘客数（上一站上车未下车），需 < passengerCapacity
+        initialCargoLoad:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 出发时已预装货件数（场站预装派送件），需 <= cargoCapacity
+        skeleton:
+          type: array
+          items:
+            type: string
+          description: |
+            公交骨架（Mandatory Passenger Service）：该车辆必须按序经停的站点编号（不含场站）。
+            提供时货运任务只能插进骨架间隙（顺路带货、有先后、不掉头）；缺省为纯 VRP。
+    PlanShipment:
+      type: object
+      required: [shipmentId, pickupStationId, deliveryStationId, quantity]
+      properties:
+        shipmentId:
+          type: string
+        pickupStationId:
+          type: string
+        deliveryStationId:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        weightKg:
+          type: number
+          minimum: 0
+          description: 货运子表真实录入值；车辆下发 cargoWeightCapacityKg 时参与可行性判定
+        volumeM3:
+          type: number
+          minimum: 0
+        economicValue:
+          type: number
+          minimum: 0
+          description: 业务层真实报价；缺失时算法不报错、不造假价格，仅用于性价比比较
+        readyTime:
+          type: string
+          format: date-time
+          description: |
+            包裹最早可取时刻（transport_order.earliest_pickup_time）。早于该时刻到达不算迟到，
+            但必须等到能取件才揽收，等待计入班次时长。
+        pickupDeadline:
+          type: string
+          format: date-time
+          description: 揽收截止；业务侧尚无对应字段时不下发，算法不凭空判迟到
+        deliveryDeadline:
+          type: string
+          format: date-time
+          description: 送达截止（transport_order.latest_delivery_time）；方案完成时刻晚于此判 ETA_MISSED_DELIVERY
+        priority:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 越大越先获得稀缺舱位/时间余量；不下发时按单号确定性排序，与旧行为等价
+        roadAccess:
+          type: string
+          enum: [BLOCKED, NEAR_STATION]
+          description: |
+            公交通行预检结论：BLOCKED=站点档案标注车辆不可进入，算法不得安排绕行上门，
+            改为最近骨架站交接（两腿一起挪，配对单不能只挪一条腿）；NEAR_STATION=点位距最近站 ≤100 m。
+            缺省 null = 未预检，行为与历史一致。
     PlanOrder:
       type: object
       required: [orderId, orderType]
@@ -309,11 +412,38 @@ components:
         weightKg:
           type: number
           minimum: 0
-          description: 保留字段，算法不校验
+          description: 货运子表真实录入值；车辆下发 cargoWeightCapacityKg 时参与可行性判定，否则只按件数
         volumeM3:
           type: number
           minimum: 0
-          description: 保留字段，算法不校验
+          description: 同上，需车辆下发 cargoVolumeCapacityM3 才生效
+        roadAccess:
+          type: string
+          enum: [BLOCKED, NEAR_STATION]
+          description: 同 PlanShipment.roadAccess；仅标注货运作业点，客运单永不标注（每站必停拉客）
+        readyTime:
+          type: string
+          format: date-time
+          description: |
+            同 PlanShipment.readyTime（transport_order.earliest_pickup_time）。派送/揽收都按各自的
+            事件点等待；客运单不下发（乘客点位不由算法改派）。
+        pickupDeadline:
+          type: string
+          format: date-time
+          description: 揽收截止；业务侧尚无对应字段时不下发，算法不凭空判迟到
+        deliveryDeadline:
+          type: string
+          format: date-time
+          description: |
+            送达截止（transport_order.latest_delivery_time）。
+            DELIVERY 派送单有 DELIVER 事件锚点 ⇒ 判 ETA_MISSED_DELIVERY；
+            PICKUP 揽收单暂无事件锚点（货随车回场站才算送达，而收班事件不带 task_id）⇒
+            下发是让请求自证事实，算法当前不据它判迟到，这一侧仍由批窗 batchEnd 兜住。
+        priority:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 越大越先获得稀缺舱位/时间余量；不下发时按单号确定性排序，与旧行为等价
     AlgorithmConfig:
       type: object
       additionalProperties: true
@@ -321,12 +451,12 @@ components:
       properties:
         ant_count:
           type: integer
-          default: 30
-          description: 蚂蚁种群数量
+          default: 24
+          description: 蚂蚁种群数量（业务适配层默认与此一致，勿两侧各写一套）
         max_iterations:
           type: integer
-          default: 100
-          description: 最大迭代次数
+          default: 8
+          description: 最大迭代次数（实测 2~8 最优，更深目标反而变差，收尾精修由 ALNS 负责）
         alpha:
           type: number
           default: 1.0
@@ -360,15 +490,28 @@ components:
         reasonCode:
           type: string
           enum: [OVER_CAPACITY, TIMING_CONFLICT, PARTIAL_ONLY]
-          description: 无解原因码；PARTIAL_ONLY 语义待澄清（当前按不返回部分方案处理）
+          description: |
+            无解原因码。部分可完成不走 infeasible：算法返回 status=feasible + 完整车辆方案，
+            带不下的货运单号进 unassignedOrderIds（PARTIAL_ONLY 保留给"只给状态不给方案"的历史口径，
+            当前算法服务不再产生它）。
         cached:
           type: boolean
           description: 是否为幂等缓存命中（重复提交不重新计算）
         warnings:
           type: array
-          description: algorithmConfig 超出建议范围等非致命告警
+          description: |
+            algorithmConfig 超出建议范围等非致命告警，以及求解遥测（如 DISCARDED_CAPACITY_OVERFLOW=…、
+            CARGO_OVERFLOW_SHEDDING=…、SEARCH_START_MS=…）。业务侧应至少持久化以便复盘"为什么少了单"。
           items:
             type: string
+        unassignedOrderIds:
+          type: array
+          items:
+            type: string
+          description: |
+            本趟带不下的单号（订单号或 shipmentId）：绕行超阈值、载重/体积超舱、可证明迟到都走这里，
+            业务侧转多段联运接力，不整批失败。硬约束：客运单永不出现在此名单（乘客不可舍弃），
+            且声明未分配的单号不得同时出现在 vehiclePlans 里。
         algorithmVersion:
           type: string
           description: 随 Docker 镜像版本管理
