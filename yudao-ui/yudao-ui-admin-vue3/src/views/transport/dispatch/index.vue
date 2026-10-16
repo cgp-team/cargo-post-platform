@@ -211,15 +211,18 @@
     <div v-show="smartStep === 0" v-loading="smartLoading">
       <!-- 一键智能派单：不选站点、不选车辆、不填参数 -->
       <el-descriptions :column="2" border size="small" style="margin-bottom:14px">
-        <el-descriptions-item label="待调度订单">{{ poolCount }} 单</el-descriptions-item>
+        <el-descriptions-item label="待调度订单">{{ poolPendingText }}</el-descriptions-item>
         <el-descriptions-item label="当前可用车辆">{{ vehicleList.length }} 台</el-descriptions-item>
         <el-descriptions-item label="候选站点">自动（按订单分布推导）</el-descriptions-item>
         <el-descriptions-item label="算法">HACO-CPS v1.4.1</el-descriptions-item>
       </el-descriptions>
 
-      <el-steps v-if="autoRunning" :active="autoProgress" finish-status="process" align-center style="margin-bottom:12px">
-        <el-step v-for="stage in autoStages" :key="stage" :title="stage" />
-      </el-steps>
+      <!-- 这里以前是一条墙钟进度条配五个假阶段名（分析订单 / 检查运力 / 选站点 / 跑 HACO-CPS / 生成方案），
+           每 900ms 自己走一格，算法卡住它照样走完 —— 界面报的是"算法跑到哪一步"，实际报的是"过了多久"。
+           现在只念后端真给出来的那句话（第 N 套方案、正在调度 M 单），没得念就只说"调度中"。 -->
+      <div v-show="autoRunning" class="text-gray-500" style="margin-bottom:12px">
+        <Icon icon="ep:loading" /> {{ autoStage || '调度中…' }}
+      </div>
 
       <el-alert
         v-if="autoResult"
@@ -764,11 +767,32 @@ const validateResult = ref<DispatchApi.DispatchValidateRespVO>()
 /** 一键智能派单：进度阶段 / 结果摘要（默认路径，管理员无需任何选择） */
 const smartAdvanced = ref<string[]>([])
 const autoRunning = ref(false)
-const autoProgress = ref(0)
-const autoStages = ['分析订单与约束', '检查车辆运力', '选择调度站点', '运行 HACO-CPS', '生成调度方案']
+/** 进度那一行只念后端真给的话（第 N 套方案、正在调度 M 单）；没有可念的就说"调度中" */
+const autoStage = ref('')
 const autoResult = ref<DispatchApi.DispatchPlanRespVO>()
-/** 订单池中"待调度"（已入池 status=1）数量，供一键弹窗展示 */
-const poolCount = computed(() => poolList.value.filter((o) => o.status === 1).length || poolTotal.value)
+/**
+ * 订单池里"已入池(待调度)"的数量。
+ * 这里原来写的是「当前页 status===1 的条数，为 0 时兜 poolTotal（**全状态**总数）」——
+ * 同一页 `:844` 那里已经有一条正确算法（用 `status:1` 单独查 total），于是"待调度单数"
+ * 在一个页面上有两个答案，而且第二个答案在筛选页里必然偏大。
+ * 现在两处都走同一个后端读数（`pooledTotal()`）：null = 还没读到（界面念"读取中"，不拿别的数冒充）。
+ */
+const poolPending = ref<number | null>(null)
+const poolPendingError = ref(false)
+const poolPendingText = computed(() => {
+  if (poolPendingError.value) return '没读到（不拿别的数冒充）'
+  return poolPending.value === null ? '读取中…' : `${poolPending.value} 单`
+})
+const refreshPoolPending = async () => {
+  poolPendingError.value = false
+  try {
+    poolPending.value = await pooledTotal()
+  } catch (e) {
+    // 读失败就念"没读到"，不许退回"当前页有几条"或"全状态总数"（那就是第二个答案）
+    poolPending.value = null
+    poolPendingError.value = true
+  }
+}
 const acoForm = reactive<Record<string, number | undefined>>({
   ant_count: undefined,
   max_iterations: undefined,
@@ -782,7 +806,9 @@ const openSmart = () => {
   smartForm.value = { depotStationId: undefined, vehicleIds: [] }
   validateResult.value = undefined
   smartStep.value = 0
+  autoResult.value = undefined
   Object.keys(acoForm).forEach((k) => (acoForm[k] = undefined))
+  refreshPoolPending()
   smartVisible.value = true
 }
 /** 第 1 步：约束校验 / 运力预警 */
@@ -836,7 +862,7 @@ const submitSmart = async () => {
 
 /**
  * 一键智能派单：后端自动选站点 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
- * 进度条按阶段展示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
+ * 进度那一行只念后端真实取数（还剩几单、第几套方案），完成后展示方案摘要并支持"查看方案"。
  */
 /** 一键调度最多连出几套方案（订单池里可能有多个片区，跨片区订单分批出方案） */
 const MAX_AUTO_ROUNDS = 4
@@ -886,33 +912,32 @@ const runAutoSmart = async () => {
   }
   smartLoading.value = true
   autoRunning.value = true
-  autoProgress.value = 0
+  autoStage.value = '正在校验约束与运力…'
   autoResult.value = undefined
-  const timer = window.setInterval(() => {
-    if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1
-  }, 900)
   try {
     // 1) 约束校验（auto=true：后端自动推导站点与候选车辆）
     const validated = await DispatchApi.validateDispatch({ auto: true })
     validateResult.value = validated
     if (validated.capacityCheck?.overCapacity) {
-      autoProgress.value = 1
       message.warning('运力不足：算法会自动增加车辆或给出不可行原因，可继续提交')
     }
-    // 2) 智能派单（按片区分批，算法决定实际使用几辆车）
-    const planIds = await runAutoPlans()
+    // 2) 智能派单（按片区分批，算法决定实际使用几辆车）——阶段文案由每轮真实剩余单数给出
+    const planIds = await runAutoPlans((text) => {
+      autoStage.value = text
+    })
     // 3) 读取方案摘要（订单数/车辆数/里程/算法版本）
+    autoStage.value = '正在读取方案摘要…'
     const plan = await DispatchApi.getDispatchPlan(planIds[0])
     autoResult.value = plan
-    autoProgress.value = autoStages.length
     message.success(`智能派单完成，共 ${planIds.length} 套方案：${planIds.map((id) => '#' + id).join('、')}`)
     getPlanList()
+    refreshPoolPending()
     // 4) 就地展开调度结果可视化（任务段时间线 + 地图路线 + 播放）
     smartVisible.value = false
     openVisual(planIds)
   } finally {
-    window.clearInterval(timer)
     autoRunning.value = false
+    autoStage.value = ''
     smartLoading.value = false
   }
 }

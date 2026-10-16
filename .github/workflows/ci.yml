@@ -253,5 +253,12 @@ jobs:
       # 数据不清 = 继续念上一次的结果；只弹 toast = 空白旁边写着"暂无"，把没取到说成没有
       - name: Static check admin catch keeps a visible failure state
         run: python3 scripts/check_admin_catch_leaves_data.py
+      # 墙钟定时器不许替后端报进度（队列 #66 / 台账 D-132）：调度页原来那条进度条按 900ms 自增、
+      # 配五个假阶段名，算法卡住它照样走完 —— 界面念"算法跑到哪一步"，实际念"过了多久"。
+      # 带上 --self-test：判据自己也要被"塞回真文件的旧代码"咬一次，否则它只会认形状不认现状。
+      - name: Static check admin no wall-clock-driven progress
+        run: |
+          python3 scripts/check_admin_no_wallclock_progress.py --self-test
+          python3 scripts/check_admin_no_wallclock_progress.py
       - name: Check generated-file drift
         run: git diff --exit-code
