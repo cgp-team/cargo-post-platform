@@ -21,8 +21,8 @@ public class AiInvocationLogRespVO {
     @Schema(description = "送出去的内容（已脱敏）")
     private String maskedInput;
 
-    @Schema(description = "模型返回的文本")
-    private String output;
+    @Schema(description = "模型返回的文本（字段名带 Text 是为了避开保留字 output，见 DO 上的注释）")
+    private String outputText;
 
     @Schema(description = "消耗 token 数")
     private Integer tokens;

@@ -10,8 +10,8 @@
     <ContentWrap>
       <div class="mb-12px font-bold">1 · 上报语义分类 / 照片支撑度</div>
       <div class="flex flex-col gap-8px">
-        <el-input v-model="form.text" placeholder="上报描述，如：路上塌方了，车过不去" />
-        <el-input v-model="form.photoUrl" placeholder="现场照片地址（可空；只有要问「照片撑不撑得上这段描述」时才填）" />
+        <el-input v-model="reportText" placeholder="上报描述，如：路上塌方了，车过不去" />
+        <el-input v-model="photoUrl" placeholder="现场照片地址（可空；只有要问「照片撑不撑得上这段描述」时才填）" />
         <div class="flex gap-8px flex-wrap">
           <el-button
             type="primary"
@@ -44,9 +44,15 @@
           <span class="text-gray-500">反馈样本数</span>
           <el-input-number v-model="sampleCount" :min="1" :max="100000" style="width: 140px" />
           <el-button :loading="busyLoading" v-hasPermi="['transport:ai:task:run']" @click="runCluster">
-            对上面这段文本做主题聚类
+            对这段反馈做主题聚类
           </el-button>
         </div>
+        <el-input
+          v-model="feedbackText"
+          type="textarea"
+          :rows="2"
+          placeholder="反馈摘要（聚类只吃这一格，不与上面的上报描述共用）"
+        />
       </div>
     </ContentWrap>
 
@@ -54,7 +60,7 @@
       <div class="mb-12px font-bold">3 · 简报润色（数字一个都不许改）</div>
       <div class="flex flex-col gap-8px">
         <el-input
-          v-model="form.text"
+          v-model="briefingText"
           type="textarea"
           :rows="4"
           placeholder="贴入简报事实底稿（Markdown 表格即可）"
@@ -103,7 +109,7 @@
           :title="'模型回了，但没按格式：' + (result.reason || '解析不出结构')"
           description="所以这里不给建议。原文在下面，请自己判断，不要当成结论。"
         />
-        <el-result v-else icon="info" :title="result.suggestion || '没有给出建议（依据不足）'">
+        <el-result v-else icon="info" :title="resultTitle">
           <template #sub-title>
             <div class="whitespace-pre-wrap text-left">{{ result.basis }}</div>
             <div v-if="result.numbersPreserved === false" class="text-red-500">
@@ -136,7 +142,16 @@ defineOptions({ name: 'TransportAiAssist' })
 
 const message = useMessage()
 
-const form = reactive<AiTaskApi.AiTaskReqVO>({ text: '', photoUrl: '', categories: undefined, items: undefined, sampleCount: undefined, day: undefined })
+/**
+ * 三格各用各的输入。
+ * 浏览器点验时抓到的缺陷：原来三格共用一个 `form.text`，于是在第 1 格打的字会同时出现在第 3 格的
+ * "简报事实底稿"里，而聚类按钮念的"对上面这段文本"实际上送去的是**上报描述** —— 语义对不上。
+ * （第 1 格里分类与照片支撑度共用同一个描述是合理的：它们问的是同一件事。）
+ */
+const reportText = ref('')
+const feedbackText = ref('')
+const briefingText = ref('')
+const photoUrl = ref('')
 const itemsText = ref('')
 const sampleCount = ref(20)
 const hintDay = ref('')
@@ -145,6 +160,20 @@ const busyLoading = ref(false)
 const hintLoading = ref(false)
 const error = ref('')
 const result = ref<AiTaskApi.AiDraftVO | null>(null)
+
+/**
+ * 结果区那一行标题。
+ * 原来是 `suggestion || '没有给出建议（依据不足）'` —— 浏览器点验时发现情景提示那一格明明是
+ * "日历上没读到生效事件"（是个确切的空集），却被迫戴"依据不足"的帽子。缺值不是依据不足，
+ * 两者的写法要分开（与后台那族"缺值不许折叠成结论"同一条）。
+ */
+const resultTitle = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (r.suggestion) return r.suggestion
+  if (r.scene === 'scenario-capacity-hint') return '这一天没有可给的留舱提示'
+  return '没有给出建议（依据不足）'
+})
 
 /**
  * 每次调用前先清结果：留着上一次的答案在屏幕上，下一次失败时就会被读成"这次也是这个答案"
@@ -169,19 +198,19 @@ const ask = async (fn: () => Promise<AiTaskApi.AiDraftVO>, okWord: string) => {
 }
 
 const runClassify = () => {
-  if (!form.text?.trim()) {
+  if (!reportText.value.trim()) {
     message.warning('先填上报描述（空材料问出来的是编造）')
     return
   }
-  return ask(() => AiTaskApi.classifyReport({ text: form.text, categories: form.categories }), '已给出分类建议（草稿）')
+  return ask(() => AiTaskApi.classifyReport({ text: reportText.value }), '已给出分类建议（草稿）')
 }
 
 const runPhoto = () => {
-  if (!form.text?.trim() || !form.photoUrl?.trim()) {
+  if (!reportText.value.trim() || !photoUrl.value.trim()) {
     message.warning('描述与照片地址都要有 —— 没照片时这一格不该问')
     return
   }
-  return ask(() => AiTaskApi.checkPhotoSupport({ text: form.text, photoUrl: form.photoUrl }), '已给出核对意见（草稿）')
+  return ask(() => AiTaskApi.checkPhotoSupport({ text: reportText.value, photoUrl: photoUrl.value }), '已给出核对意见（草稿）')
 }
 
 const runMerge = () => {
@@ -194,19 +223,19 @@ const runMerge = () => {
 }
 
 const runCluster = () => {
-  if (!form.text?.trim()) {
-    message.warning('聚类吃的是反馈摘要文本，先填上面那个输入框')
+  if (!feedbackText.value.trim()) {
+    message.warning('聚类吃的是「反馈摘要」那一格，先填它（不是上面的上报描述）')
     return
   }
-  return ask(() => AiTaskApi.clusterFeedback({ text: form.text, sampleCount: sampleCount.value }), '已给出主题分布（供人工排期）')
+  return ask(() => AiTaskApi.clusterFeedback({ text: feedbackText.value, sampleCount: sampleCount.value }), '已给出主题分布（供人工排期）')
 }
 
 const runPolish = () => {
-  if (!form.text?.trim()) {
+  if (!briefingText.value.trim()) {
     message.warning('先贴入事实底稿')
     return
   }
-  return ask(() => AiTaskApi.polishBriefing({ text: form.text }), '已生成成稿并核对过数字')
+  return ask(() => AiTaskApi.polishBriefing({ text: briefingText.value }), '已生成成稿并核对过数字')
 }
 
 const runScenario = async () => {

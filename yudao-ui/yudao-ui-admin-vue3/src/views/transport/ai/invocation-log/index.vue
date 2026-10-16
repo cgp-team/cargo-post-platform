@@ -49,7 +49,7 @@
         </template>
       </el-table-column>
       <el-table-column label="送入(已脱敏)" prop="maskedInput" align="center" show-overflow-tooltip min-width="200" />
-      <el-table-column label="返回" prop="output" align="center" show-overflow-tooltip min-width="220" />
+      <el-table-column label="返回" prop="outputText" align="center" show-overflow-tooltip min-width="220" />
       <el-table-column label="token" prop="tokens" align="center" width="90" />
       <el-table-column label="耗时(ms)" prop="latencyMs" align="center" width="100" />
       <el-table-column label="失败要点" prop="errorBrief" align="center" show-overflow-tooltip min-width="160" />

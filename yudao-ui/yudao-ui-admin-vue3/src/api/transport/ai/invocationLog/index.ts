@@ -5,7 +5,8 @@ export interface AiInvocationLogVO {
   scene: string
   operatorId?: number
   maskedInput?: string
-  output?: string
+  /** 字段名带 Text 是为了避开 SQL 保留字 output（见 AiInvocationLogDO 上的注释） */
+  outputText?: string
   tokens?: number
   latencyMs?: number
   status: string

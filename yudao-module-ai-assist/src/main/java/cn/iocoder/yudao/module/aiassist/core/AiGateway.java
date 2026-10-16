@@ -161,7 +161,7 @@ public class AiGateway {
             AiInvocationLogDO row = new AiInvocationLogDO();
             row.setScene(scene);
             row.setMaskedInput(trim(input, 1000));
-            row.setOutput(output);
+            row.setOutputText(output);
             row.setTokens(tokens);
             row.setLatencyMs(latency == null || latency == 0 ? null : latency);
             row.setStatus(status);

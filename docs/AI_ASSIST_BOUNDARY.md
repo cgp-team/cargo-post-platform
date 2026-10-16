@@ -253,7 +253,10 @@ create_time   datetime
 
 ### 13.2 没做 / 本线做不到的（需要下一个 agent 或主线配合）
 
-1. **界面点验**：五条页面（capacity-conflict、query-builder、capability、invocation-log、**assist**）**未在真机/浏览器点验** ⇒ 按 §9.5 登记 **NOT VERIFIED IN BROWSER**。交接后请点一遍：菜单「AI 辅助」下的五个页、查询构造器的增删改、客货检视的"未录容量"分支、能力状态页在"未配置端点"时应显示「未就绪」，以及 **assist 页在默认配置（开关关）下六格全部念「未就绪 / 没有产生任何 AI 输出」而不是空白或假忙**。
+1. **界面点验**：~~五条页面未点验~~ **2026-10-16 晚已在本机栈（一次性库 + 本机后端 + vite dev）逐页点过**，
+   读数见 **13.7**：菜单「AI 辅助」下五页 + 乡镇事件日历维护页全部打开、真点、且**正向路径也走了**
+   （日历页 UI 建一条 → assist 情景提示读到它）。三处"只有真跑才现形"的缺陷就是这么抓到的（见 D-144）。
+   ⚠ 仍要登记的部分：**云上部署形态未点验**（PR #195 未合、云上没装 V050–V055）⇒ 对云上那份**仍按 §9.5 记 `NOT VERIFIED IN BROWSER`**。
 2. **§6.3 接真实数据（依赖申请）**：平台里**没有"预报量"的存储字段**——真实数据是"车辆核定容量（`transport_vehicle`）+ 订单池/计划量（`transport_order` 系列、`transport_dispatch_plan_item.quantity`）"。要自动带出这两头，需要在 `yudao-module-transport` 新增一个**只读 `api` 包**（该模块目前没有 `api` 包，也没有任何模块依赖它的先例）。当前实现是"页面手工录入 + 服务端确定性判定"，功能闭环但不自动。
 3. **§6.4 定时聚合**：需要"读既有聚合 + 调度器 + 落库位置"，本期只做了**存条件 + 模板排版**。"自然语言"那一层（话→参数）未做，且契约已定**永远不做话→SQL**。
 4. **§7 AI 功能（2026-10-16 已补齐代码，只剩端点）**：开关 + `GET /transport/ai/capability/status` + 「能力未就绪」页 + **五个模型任务与一条规则提示**都已落地；`application.yaml` 里的 `buspost.ai.*` 也由本线补上了（原先是"依赖申请"）。**仍缺的只有一件：一个真实可用的推理端点**（`base-url` + `BUSPOST_AI_API_KEY` + `model`）—— 这要配在云上那台机器上，**服务器由用户管，谁都不要直接连**。在端点配好之前，assist 页六格一律念「未就绪」，这是设计行为不是缺陷。红线不变：不许用模板文案冒充 AI 输出。
@@ -316,3 +319,36 @@ create_time   datetime
   所以修掉的是"用户第一次点 apply 就会踩"的坑，不是历史脏数据。
 - **仍未做**：连**云**库执行（只能走 guarded `check` 只读 / `apply` 需人给 `confirm=APPLY`）；
   以及 13.2 第 1 条那五条页面的浏览器点验（含新的 assist 页）。
+
+### 13.7 浏览器点验（2026-10-16 晚 · 台账 D-144）：六页真点过了，抓到三处真缺陷
+
+**怎么搭的**（不碰在用的库与服务，收工即停）：
+```
+# 1) 一次性库（六份基线 + guarded 15 支白名单；--drop 可清）
+python3 tmp/build_check_db.py
+# 2) 临时 Redis（本机 6379 要口令，别去改它）
+"/c/Program Files/Redis/redis-server.exe" --port 6390 --save '""' --appendonly no &
+# 3) 后端（只覆盖两项：一次性库 + redis 键空间 9）
+cd cargo-post-platform-m195
+MSYS_NO_PATHCONV=1 java -jar yudao-server/target/yudao-server.jar --spring.profiles.active=local \
+  --spring.data.redis.port=6390 --spring.data.redis.database=9 \
+  '--spring.datasource.dynamic.datasource.master.url=jdbc:mysql://127.0.0.1:3306/buspost_ai_check?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true' &
+# 4) 前端（VITE_BASE_URL 已指向 48080）
+cd yudao-ui/yudao-ui-admin-vue3 && node ./node_modules/vite/bin/vite.js --mode env.local --port 5173 --host 127.0.0.1 &
+# 登录 admin（本地 yudao.captcha.enable=false）→ 五页路由 /ai/{assist,capability,invocation-log,capacity-conflict,query-builder}，日历页 /transport/town-event
+```
+
+**三处只有真跑才现形的缺陷**（细节在 D-144）：
+1. **调用日志页整页 500** —— `output` 是 JSqlParser 保留字，MP 分页拦截器解析原句就炸；
+   **我第一版只改列名没修好**（MP 会补 `AS output` 别名，别名里还是那个词）⇒ 字段/列/JSON 一起改 `output_text`。
+   范围是**量出来的**：93 个 DO / 930 列全过一遍 JSqlParser，只有这一列炸；既有单测抓不到是因为它们走 mock 映射器、
+   **从没生成过真 SQL** ⇒ 补 `DoColumnJsSqlParserTest`（真树全过 + 反证 `SELECT output` 必须解析不过）。
+2. **assist 页三格共用一个输入**（在第 1 格打字会填满第 3 格的"简报底稿"）⇒ 拆成三个独立输入。
+3. **空日历那格标题念"依据不足"**，而真实状态是"没读到生效事件" ⇒ 按场景分词改措辞。
+
+**六页读数**：assist（6 格 + 未就绪文案 + 正向情景提示）/ capability（三行条件逐条列）/
+invocation-log（**500 → 4 行**，送入栏显示 `138****8000`）/ capacity-conflict（19·300·500 vs 25·400·600 ⇒ 3 处 BLOCK、缺口 6/100/100）/
+query-builder（必填校验拦空标题；**create `data=1`、同条件 10 秒内再打 ⇒ `code=900`、`total=1`**）/
+town-event（**UI 建成**：杨柳镇/赶集/2026-10-17）。
+跨页正向：日历那条被 assist 读到 ⇒ `杨柳镇：赶集（登记的那一天）→ 建议提前与调度确认留舱量`，
+依据明写 `规则展开，未经模型` —— **"关掉 AI 整套后台仍完整可用"第一次有页面级证据**。

@@ -34,8 +34,12 @@ public class AiInvocationLogDO extends TenantBaseDO {
     private Long operatorId;
     /** 送出去的内容（落库前已过 §4 脱敏出口，不许存原文） */
     private String maskedInput;
-    /** 模型返回的文本 */
-    private String output;
+    /**
+     * 模型返回的文本。字段与列**都不叫 `output`**：那是 JSqlParser 的保留字，而 MyBatis-Plus 的分页拦截器
+     * 要先用它解析原句 —— 一旦生成的列名或别名里出现裸的 `output`，整张表的分页查询都会抛 ParseException
+     * （这个只读页就整页 500）。内存里拿 JSqlParser 5.2 实测过六种形状：只有"列名与字段同名、不产生别名"那一版能过。
+     */
+    private String outputText;
     /** 消耗 token 数 */
     private Integer tokens;
     /** 耗时（毫秒） */

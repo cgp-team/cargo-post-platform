@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS `ai_invocation_log`
     `scene`        varchar(64)  NOT NULL COMMENT '场景：nl-query / ticket-review / capacity-brief / risk-card / digest',
     `operator_id`  bigint       DEFAULT NULL COMMENT '操作人编号（登录管理员，不是 AI）',
     `masked_input` text         DEFAULT NULL COMMENT '送出去的内容（落库前已过 §4 脱敏出口，不许存原文）',
-    `output`       text         DEFAULT NULL COMMENT '模型返回的文本',
+    -- 列名不叫 `output`：那是 JSqlParser 的保留字（MyBatis-Plus 的分页拦截器要先解析原句，
+    -- 撞上就抛 ParseException ⇒ 这个只读页每次 500）。JDK 内存探针实测：93 个 DO 里只有这一列炸。
+    `output_text`  text         DEFAULT NULL COMMENT '模型返回的文本（DO 字段与 JSON 字段都叫 outputText —— 见 DO 上的注释）',
     `tokens`       int          DEFAULT NULL COMMENT '消耗 token 数',
     `latency_ms`   int          DEFAULT NULL COMMENT '耗时（毫秒）',
     `status`       varchar(16)  NOT NULL COMMENT '状态：OK / RATE_LIMITED / ERROR / EMPTY',
