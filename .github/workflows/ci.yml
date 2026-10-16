@@ -233,5 +233,17 @@ jobs:
         run: |
           python3 scripts/check_menu_id_collisions.py
           python3 scripts/check_sql_function_arity.py --self-test
+      # 后台列表页"搜索先回第 1 页"（队列 #74 / 台账 D-128）：不重置页码不会报错，
+      # 只会让运营翻到第 N 页后改筛选看见"暂无数据"，读成"这个条件下没有单"
+      - name: Static check admin query-page reset
+        run: python3 scripts/check_admin_query_page_reset.py
+      # 后台写按钮的"在飞保护"（队列 #75 / 台账 D-128）：这 40 个写接口后端零幂等键，
+      # 双击就是两条真记录；而"声明了 xxxLoading 却没绑进模板"是静默的——代码看着有保护，按钮照样能点
+      - name: Static check admin write-button guard
+        run: python3 scripts/check_admin_write_button_guard.py
+      # 站点全量字典只从共享缓存走，且站点写口必须带失效（队列 #75 / 台账 D-128）：
+      # 下一个 PR 把直连接口加回来是最常见的回归，而"改完站点别的页面还在念旧表"是正确性问题
+      - name: Static check admin station-dict sharing
+        run: python3 scripts/check_admin_station_dict_sharing.py
       - name: Check generated-file drift
         run: git diff --exit-code

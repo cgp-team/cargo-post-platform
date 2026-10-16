@@ -1,12 +1,12 @@
 <template>
   <ContentWrap title="站点管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="站点编码">
-          <el-input v-model="queryParams.stationCode" placeholder="请输入站点编码" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.stationCode" placeholder="请输入站点编码" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="站点名称">
-          <el-input v-model="queryParams.stationName" placeholder="请输入站点名称" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.stationName" placeholder="请输入站点名称" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="站点类型">
           <el-select v-model="queryParams.stationType" placeholder="全部" clearable style="width:140px">
@@ -22,7 +22,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -105,10 +105,12 @@
 <script setup lang="ts">
 import * as StationApi from '@/api/transport/station'
 import StationForm from './StationForm.vue'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 defineOptions({ name: 'TransportStation' })
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])
@@ -142,6 +144,7 @@ const getList = async () => {
     total.value = res.total
   } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 
 const resetQuery = () => {
   Object.assign(queryParams, { pageNo: 1, pageSize: 10, stationCode: '', stationName: '', stationType: undefined, dispatchEnabled: undefined })
@@ -149,7 +152,7 @@ const resetQuery = () => {
 }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
-  try { await message.confirm('确认删除该站点？'); await StationApi.deleteStation(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }
+  try { await message.confirm('确认删除该站点？'); await StationApi.deleteStation(id); stationDict.invalidate(); message.success('删除成功'); getList() } catch (e) { /* cancelled */ }
 }
 
 onMounted(getList)

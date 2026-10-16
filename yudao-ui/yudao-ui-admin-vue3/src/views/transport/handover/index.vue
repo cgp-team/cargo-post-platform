@@ -1,22 +1,27 @@
 <template>
   <ContentWrap title="货物交接管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="订单编号">
-          <el-input v-model="queryParams.orderId" placeholder="运输订单编号" clearable @keyup.enter="getList" style="width:160px" />
+          <el-input v-model="queryParams.orderId" placeholder="运输订单编号" clearable @keyup.enter="handleQuery" style="width:160px" />
         </el-form-item>
         <el-form-item label="交接站点">
-          <el-input v-model="queryParams.stationId" placeholder="站点编号" clearable @keyup.enter="getList" style="width:140px" />
+          <el-input v-model="queryParams.stationId" placeholder="站点编号" clearable @keyup.enter="handleQuery" style="width:140px" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="请选择状态" clearable style="width:140px">
-            <el-option label="待确认" :value="0" />
-            <el-option label="已确认" :value="1" />
-            <el-option label="有争议" :value="2" />
+            <!-- 选项由 constants.ts 的后端枚举映射生成：筛的是 status，列里念的也是同一份映射，
+                 两边不会再各说一套话（以前这里写死"待确认/已确认/有争议"三个自造码） -->
+            <el-option
+              v-for="(label, code) in HANDOVER_STATUS_LABELS"
+              :key="code"
+              :label="label"
+              :value="Number(code)"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -33,7 +38,7 @@
         <el-table-column label="重量(kg)" prop="weightKg" align="center" width="90" />
         <el-table-column label="状态" prop="status" align="center" width="100">
           <template #default="scope">
-            <el-tag :type="statusTagType(scope.row.status)">{{ scope.row.statusName }}</el-tag>
+            <el-tag :type="handoverStatusTag(scope.row.status)">{{ handoverStatusLabel(scope.row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="交接时间" prop="handoverTime" align="center" width="170" />
@@ -52,8 +57,11 @@
         <el-table-column label="备注" prop="remark" align="center" show-overflow-tooltip />
         <el-table-column label="操作" align="center" width="140" fixed="right">
           <template #default="scope">
+            <!-- 隐藏条件必须跟后端一致：`HandoverServiceImpl#disputeHandover` 只拦 COMPLETED(4)。
+                 以前写的是 `status !== 2` —— 于是对 4（真会被后端拒）留着按钮，对 2（后端肯接）反而藏掉，
+                 两面都是错的：前者点下去必抛，后者是界面承诺不了一次它能做的事。 -->
             <el-button
-              v-if="scope.row.status !== 2"
+              v-if="scope.row.status !== HANDOVER_DISPUTE_BLOCKED_STATUS"
               link
               type="warning"
               v-hasPermi="['transport:handover:update']"
@@ -78,7 +86,7 @@
       </el-form>
       <template #footer>
         <el-button @click="disputeVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitDispute">确定</el-button>
+        <el-button type="primary" :loading="disputeLoading" @click="submitDispute">确定</el-button>
       </template>
     </Dialog>
   </ContentWrap>
@@ -88,6 +96,12 @@
 import { ref } from 'vue'
 import * as HandoverApi from '@/api/transport/handover'
 import { Dialog } from '@/components/Dialog'
+import {
+  HANDOVER_DISPUTE_BLOCKED_STATUS,
+  HANDOVER_STATUS_LABELS,
+  handoverStatusLabel,
+  handoverStatusTag
+} from '../constants'
 
 defineOptions({ name: 'TransportHandover' })
 
@@ -106,12 +120,6 @@ const queryParams = reactive<{ pageNo: number; pageSize: number; orderId?: numbe
 const disputeVisible = ref(false)
 const disputeForm = reactive<{ id?: number; remark: string }>({ remark: '' })
 
-const statusTagType = (status?: number) => {
-  if (status === 1) return 'success'
-  if (status === 2) return 'danger'
-  return 'warning'
-}
-
 const getList = async () => {
   loading.value = true
   try {
@@ -122,6 +130,7 @@ const getList = async () => {
     loading.value = false
   }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 
 const resetQuery = () => {
   Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderId: undefined, stationId: undefined, status: undefined })
@@ -139,6 +148,8 @@ const disputeRules = {
   remark: [{ required: true, message: '请填写争议原因', trigger: 'blur' }]
 }
 const disputeFormRef = ref()
+// 后端 dispute 这个写口没有幂等键 ⇒ 请求在飞时按钮必须不可再点（:loading 同时禁掉点击）
+const disputeLoading = ref(false)
 const submitDispute = async () => {
   try { await disputeFormRef.value?.validate() } catch { return }
   try {
@@ -150,6 +161,8 @@ const submitDispute = async () => {
     message.warning('请填写争议原因')
     return
   }
+  if (disputeLoading.value) return
+  disputeLoading.value = true
   try {
     await HandoverApi.disputeHandover({ id: disputeForm.id!, remark: disputeForm.remark })
     message.success('已标记争议')
@@ -157,6 +170,8 @@ const submitDispute = async () => {
     getList()
   } catch (e) {
     // 错误已由请求层提示
+  } finally {
+    disputeLoading.value = false
   }
 }
 

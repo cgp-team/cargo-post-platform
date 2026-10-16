@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="车辆管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="车牌号">
-          <el-input v-model="queryParams.plateNo" placeholder="请输入车牌号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.plateNo" placeholder="请输入车牌号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="请选择" clearable style="width:120px">
@@ -12,7 +12,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -94,6 +94,7 @@ const getList = async () => {
   loading.value = true
   try { const res = await VehicleApi.getVehiclePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, plateNo: '', status: undefined }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {

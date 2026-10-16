@@ -1,15 +1,15 @@
 <template>
   <ContentWrap title="司机管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="司机姓名">
-          <el-input v-model="queryParams.name" placeholder="请输入司机姓名" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.name" placeholder="请输入司机姓名" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="手机号">
-          <el-input v-model="queryParams.mobile" placeholder="请输入手机号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.mobile" placeholder="请输入手机号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -62,6 +62,7 @@ const queryParams = reactive<DriverQueryParams>({
   mobile: '',
 }); const formRef = ref()
 const getList = async () => { loading.value = true; try { const res = await DriverApi.getDriverPage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, name: '', mobile: '' }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => { try { await message.confirm('确认删除该司机？'); await DriverApi.deleteDriver(id); message.success('删除成功'); getList() } catch (e) { /* cancelled */ } }

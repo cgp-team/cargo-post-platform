@@ -85,6 +85,23 @@ export const PRODUCT_ORDER_STATUS_TAGS: Record<number, TagType> = { 0: 'info', 1
 export const SHIFT_STATUS_LABELS: Record<number, string> = { 0: '未发车', 1: '在途', 2: '已完成' }
 export const SHIFT_STATUS_TAGS: Record<number, TagType> = { 0: 'primary', 1: 'success', 2: 'info' }
 
+// ===== 交接状态（同源：后端 `TransportHandoverStatusEnum`，8 个值一个不许少）=====
+// 这里以前写的是「待确认0 / 已确认1 / 有争议2」—— 三个都是自造码：
+// 0 真名是"等待交接"、1 是"前序已到达"、2 是"接收方待接"，而后端把真名打在 statusName 那一列，
+// 于是**同一列被两套语义读**：筛"有争议"拿到的是"接收方待接"的单，而 7=异常（标记争议真正落到的状态）
+// 永远筛不到。列与筛选共用这一份映射，改枚举时两侧一起动。
+export const HANDOVER_STATUS_LABELS: Record<number, string> = {
+  0: '等待交接', 1: '前序已到达', 2: '接收方待接', 3: '交接中',
+  4: '交接完成', 5: '交接超时', 6: '已取消', 7: '异常'
+}
+export const HANDOVER_STATUS_TAGS: Record<number, TagType> = {
+  0: 'info', 1: 'primary', 2: 'warning', 3: 'warning',
+  4: 'success', 5: 'danger', 6: 'info', 7: 'danger'
+}
+/** 唯一允许标记争议的状态判据：后端 `HandoverServiceImpl#disputeHandover` 只拦 COMPLETED(4)。
+ *  前端多拦一个状态，就等于把一个后端肯接的动作藏掉；少拦一个，就是点下去必抛错。 */
+export const HANDOVER_DISPUTE_BLOCKED_STATUS = 4
+
 // ===== 取值辅助（统一 undefined/null 兜底文案）=====
 export const labelOf = (map: Record<number, string>, value?: number | null, fallback = '未知') =>
   value === undefined || value === null ? '-' : map[value] ?? fallback
@@ -116,3 +133,8 @@ export const productOrderStatusLabel = (status?: number | null) => labelOf(PRODU
 export const productOrderStatusTag = (status?: number | null) => tagOf(PRODUCT_ORDER_STATUS_TAGS, status)
 export const shiftStatusLabel = (status?: number | null) => labelOf(SHIFT_STATUS_LABELS, status)
 export const shiftStatusTag = (status?: number | null) => tagOf(SHIFT_STATUS_TAGS, status)
+// 交接状态念不出来的时候必须露出码值本身：静默兜成"未知"会把"后端加了枚举、前端没跟"
+// 这格藏成一片灰色，运营看见的是"未知"，调度查的是"为什么未知"
+export const handoverStatusLabel = (status?: number | null) =>
+  labelOf(HANDOVER_STATUS_LABELS, status, `后端新状态(${status})`)
+export const handoverStatusTag = (status?: number | null) => tagOf(HANDOVER_STATUS_TAGS, status)

@@ -99,8 +99,10 @@
 import * as OrderApi from '@/api/transport/order'
 import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const formLoading = ref(false)
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -243,7 +245,7 @@ const open = async (type: string, id?: number) => {
 }
 
 const loadStationList = async () => {
-  try { stationList.value = await StationApi.getSimpleStationList() } catch (e) { /* ignore */ }
+  try { stationList.value = await stationDict.load() } catch (e) { /* ignore */ }
 }
 
 defineExpose({ open })

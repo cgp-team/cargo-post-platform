@@ -1,7 +1,7 @@
 <template>
   <ContentWrap title="人车绑定">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="司机">
           <el-select v-model="queryParams.driverId" placeholder="请选择司机" clearable filterable style="width:180px">
             <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id!" />
@@ -14,7 +14,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -94,8 +94,14 @@ const queryParams = reactive<QueryParams>({ pageNo: 1, pageSize: 10, driverId: u
 const driverOptions = ref<DriverVO[]>([])
 const vehicleOptions = ref<VehicleVO[]>([])
 const loadOptions = async () => {
-  driverOptions.value = await DriverApi.getSimpleDriverList()
-  vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
+  // 司机与班次两张字典互不依赖：串成链 = 两个 RTT 之和，且司机那一个抛错时车辆根本不取。
+  // 并发跑，失败的那一格留空（错误由请求层提示），不替后端宣布"没有"。
+  const [d, v] = await Promise.allSettled([
+    DriverApi.getSimpleDriverList(),
+    VehicleApi.getSimpleVehicleList()
+  ])
+  if (d.status === 'fulfilled') driverOptions.value = d.value
+  if (v.status === 'fulfilled') vehicleOptions.value = v.value
 }
 
 const getList = async () => {
@@ -108,6 +114,7 @@ const getList = async () => {
     loading.value = false
   }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, driverId: undefined, status: undefined }); getList() }
 
 // 绑定

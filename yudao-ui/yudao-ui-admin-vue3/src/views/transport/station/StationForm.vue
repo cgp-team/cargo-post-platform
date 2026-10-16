@@ -105,8 +105,10 @@ import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
 import { gcj02ToBd09, bd09ToGcj02 } from '@/components/Map'
 import { loadBaiduMapSdk } from '@/components/Map/src/utils'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const formLoading = ref(false)
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -259,9 +261,11 @@ const submitForm = async () => {
   try {
     if (formType.value === 'create') {
       await StationApi.createStation(formData.value)
+      stationDict.invalidate()
       message.success('创建成功')
     } else {
       await StationApi.updateStation(formData.value)
+      stationDict.invalidate()
       message.success('更新成功')
     }
     dialogVisible.value = false

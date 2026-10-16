@@ -3,7 +3,7 @@
     <!-- 订单池（WEB-24: 去掉内层卡片，改分节标题，避免卡片套卡片） -->
     <section class="dispatch-section">
       <h3 class="dispatch-section-title">订单池</h3>
-      <el-form :inline="true" :model="poolQuery" @submit.prevent="getPoolList">
+      <el-form :inline="true" :model="poolQuery" @submit.prevent="handlePoolQuery">
         <el-form-item label="订单状态">
           <el-select v-model="poolQuery.status" placeholder="请选择" clearable style="width:140px">
             <!-- 订单池按后端定义只含「待入池/已入池」：审核通过还没归集的、以及已归集待调度的 -->
@@ -19,11 +19,11 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getPoolList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handlePoolQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetPoolQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
-      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :disabled="collectDisabled" @click="submitCollectBySelection">
+      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :loading="collectLoading" :disabled="collectDisabled" @click="submitCollectBySelection">
         <Icon icon="ep:download" />归集入池
       </el-button>
       <!-- 手动取消：只取消勾选的订单，其它订单不受影响（已分配/在途的单不会被取消） -->
@@ -113,7 +113,7 @@
     <!-- 调度方案 -->
     <section class="dispatch-section" style="margin-top:16px">
       <h3 class="dispatch-section-title">调度方案</h3>
-      <el-form :inline="true" :model="planQuery" @submit.prevent="getPlanList">
+      <el-form :inline="true" :model="planQuery" @submit.prevent="handlePlanQuery">
         <el-form-item label="方案状态">
           <!-- WEB-09: 选项从 constants.ts 生成，与标签显示同源 -->
           <el-select v-model="planQuery.status" placeholder="请选择" clearable style="width:140px">
@@ -126,7 +126,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getPlanList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handlePlanQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetPlanQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -498,12 +498,14 @@ import {
   PLAN_STATUS_LABELS,
   DISPATCH_MODE_LABELS
 } from '../constants'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 defineOptions({ name: 'TransportDispatch' })
 
 const message = useMessage()
 
 // 调度结果可视化：一键智能派单后就地展开（任务段时间线 + 地图路线 + ▶播放）
+const stationDict = useStationDictStore()
 const visualVisible = ref(false)
 const visualPlanIds = ref<number[]>([])
 const openVisual = (planIds: number[]) => {
@@ -542,7 +544,7 @@ const vehicleName = (id?: number) => {
 }
 const loadSimpleLists = async () => {
   try {
-    stationList.value = await StationApi.getSimpleStationList()
+    stationList.value = await stationDict.load()
   } catch (e) { /* ignore */ }
   try {
     vehicleList.value = await VehicleApi.getSimpleVehicleList()
@@ -576,6 +578,7 @@ const getPoolList = async () => {
     poolLoading.value = false
   }
 }
+const handlePoolQuery = () => { poolQuery.pageNo = 1; getPoolList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetPoolQuery = () => {
   Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: undefined, orderType: undefined })
   getPoolList()
@@ -613,6 +616,7 @@ const getPlanList = async () => {
     planLoading.value = false
   }
 }
+const handlePlanQuery = () => { planQuery.pageNo = 1; getPlanList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetPlanQuery = () => {
   Object.assign(planQuery, { pageNo: 1, pageSize: 10, status: undefined, mode: undefined })
   getPlanList()

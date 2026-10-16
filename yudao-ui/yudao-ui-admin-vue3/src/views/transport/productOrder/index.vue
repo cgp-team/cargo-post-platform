@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="商品订单管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="订单号">
-          <el-input v-model="queryParams.orderNo" placeholder="请输入业务订单号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.orderNo" placeholder="请输入业务订单号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="全部" clearable style="width: 130px">
@@ -11,7 +11,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -127,6 +127,7 @@ const getList = async () => {
     total.value = res.total
   } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderNo: '', status: undefined }); getList() }
 
 const openDetail = (id: number) => detailRef.value?.open(id)

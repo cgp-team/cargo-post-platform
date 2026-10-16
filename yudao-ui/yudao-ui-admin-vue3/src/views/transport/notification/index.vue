@@ -1,12 +1,12 @@
 <template>
   <ContentWrap title="用户通知管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="用户编号">
-          <el-input v-model="queryParams.userId" placeholder="会员编号" clearable @keyup.enter="getList" style="width:140px" />
+          <el-input v-model="queryParams.userId" placeholder="会员编号" clearable @keyup.enter="handleQuery" style="width:140px" />
         </el-form-item>
         <el-form-item label="订单编号">
-          <el-input v-model="queryParams.orderId" placeholder="运输订单编号" clearable @keyup.enter="getList" style="width:160px" />
+          <el-input v-model="queryParams.orderId" placeholder="运输订单编号" clearable @keyup.enter="handleQuery" style="width:160px" />
         </el-form-item>
         <el-form-item label="阅读状态">
           <el-select v-model="queryParams.readStatus" placeholder="请选择" clearable style="width:130px">
@@ -15,7 +15,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -66,7 +66,7 @@
       </el-form>
       <template #footer>
         <el-button @click="sendVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitSend">发送</el-button>
+        <el-button type="primary" :loading="sendLoading" @click="submitSend">发送</el-button>
       </template>
     </Dialog>
   </ContentWrap>
@@ -104,6 +104,7 @@ const getList = async () => {
     loading.value = false
   }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 
 const resetQuery = () => {
   Object.assign(queryParams, { pageNo: 1, pageSize: 10, userId: undefined, orderId: undefined, readStatus: undefined })
@@ -121,8 +122,12 @@ const sendRules = {
   title: [{ required: true, message: '请填写标题', trigger: 'blur' }]
 }
 const sendFormRef = ref()
+// 后端这个写口没有幂等键 ⇒ 请求在飞时按钮必须不可再点（:loading 会同时禁掉点击）
+const sendLoading = ref(false)
 const submitSend = async () => {
   try { await sendFormRef.value?.validate() } catch { return } // 校验不过：字段级红字提示
+  if (sendLoading.value) return
+  sendLoading.value = true
   try {
     await NotificationApi.sendNotification(sendForm)
     message.success('发送成功')
@@ -130,6 +135,8 @@ const submitSend = async () => {
     getList()
   } catch (e) {
     // 错误已由请求层提示
+  } finally {
+    sendLoading.value = false
   }
 }
 

@@ -5,7 +5,7 @@
         <el-input-number v-model="userId" :min="1" :controls="false" placeholder="输入用户 ID" style="width: 180px" />
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" :disabled="!userId" @click="query">
+        <el-button type="primary" :loading="accLoading" :disabled="!userId" @click="query">
           <Icon icon="ep:search" />查询
         </el-button>
       </el-form-item>

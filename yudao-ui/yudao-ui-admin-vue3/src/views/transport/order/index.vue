@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="订单管理">
     <div>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="订单号">
-          <el-input v-model="queryParams.orderNo" placeholder="请输入订单号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.orderNo" placeholder="请输入订单号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="订单类型">
           <el-select v-model="queryParams.orderType" placeholder="请选择" clearable style="width:140px">
@@ -13,7 +13,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -243,7 +243,7 @@
 
     <!-- 事件时间线：读 /transport/order-event/list-by-order（权限复用 transport:order:query）。
          ⚠ 三格必须分开念：读到 N 条 / 后端确实说没有 / 这一格没读到（失败原因照实显示）。 -->
-    <div class="mt-16px">
+    <div class="mt-16px" v-loading="eventsLoading">
       <div class="mb-8px font-bold">事件时间线</div>
       <el-alert v-if="eventsError" type="warning" :closable="false" show-icon
                 :title="`事件流没读到：${eventsError}`"
@@ -259,7 +259,8 @@
           <div v-if="ev.detail" class="text-gray-600">{{ ev.detail }}</div>
         </el-timeline-item>
       </el-timeline>
-      <span v-else class="text-gray-500">后端说这单没有事件记录（接口正常返回空列表，不是读取失败）</span>
+      <!-- 还在飞的时候不许念"后端说没有"：那等于替后端宣布了一个它还没给的结论 -->
+      <span v-else-if="!eventsLoading" class="text-gray-500">后端说这单没有事件记录（接口正常返回空列表，不是读取失败）</span>
     </div>
     <template #footer>
       <el-button @click="detailVisible = false">关 闭</el-button>
@@ -282,10 +283,12 @@ import {
   reviewStatusLabel
 } from '../constants'
 import OrderForm from './OrderForm.vue'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 defineOptions({ name: 'TransportOrder' })
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const loading = ref(true)
 const total = ref(0)
 const list = ref([])
@@ -305,7 +308,7 @@ const stations = ref<StationApi.StationVO[]>([])
 const stationName = (id?: number) => (id == null ? '' : stations.value.find((s) => s.id === id)?.stationName || '')
 const loadStations = async () => {
   try {
-    stations.value = await StationApi.getSimpleStationList()
+    stations.value = await stationDict.load()
   } catch (e) {
     // WEB-10: 兜底数据失败也要可见提示（不影响订单列表主流程）
     message.error('站点信息加载失败，下单地址可能不完整')
@@ -320,6 +323,7 @@ const getList = async () => {
     total.value = res.total
   } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderNo: '', orderType: undefined }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {

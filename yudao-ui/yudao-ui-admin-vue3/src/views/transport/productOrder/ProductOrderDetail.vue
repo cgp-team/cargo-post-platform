@@ -70,12 +70,14 @@ const open = async (id: number) => {
   try {
     detail.value = await ProductOrderApi.getProductOrder(id)
     if (detail.value.vehicleId || detail.value.shiftId) {
-      try {
-        vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
-      } catch (e) { /* ignore */ }
-      try {
-        shiftOptions.value = await ShiftApi.getSimpleShiftList()
-      } catch (e) { /* ignore */ }
+      // 两个字典互不依赖：串成链是两个 RTT 之和，且车辆那一个抛错时班次根本不去取
+      // —— 班次那格就"看着像没有班次"。并发跑，失败的那格留空。
+      const [veh, shift] = await Promise.allSettled([
+        VehicleApi.getSimpleVehicleList(),
+        ShiftApi.getSimpleShiftList()
+      ])
+      if (veh.status === 'fulfilled') vehicleOptions.value = veh.value
+      if (shift.status === 'fulfilled') shiftOptions.value = shift.value
     }
   } finally { loading.value = false }
 }

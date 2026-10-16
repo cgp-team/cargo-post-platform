@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   DISPATCH_MODE_LABELS,
+  HANDOVER_DISPUTE_BLOCKED_STATUS,
+  HANDOVER_STATUS_LABELS,
+  HANDOVER_STATUS_TAGS,
   ORDER_STATUS_LABELS,
   ORDER_STATUS_TAGS,
   ORDER_TYPE_LABELS,
@@ -20,6 +23,8 @@ import {
   VEHICLE_STATUS_LABELS,
   VEHICLE_STATUS_TAGS,
   dispatchModeLabel,
+  handoverStatusLabel,
+  handoverStatusTag,
   labelOf,
   orderStatusLabel,
   planStatusLabel,
@@ -51,7 +56,8 @@ const PAIRED_TABLES: Array<[Record<number, string>, Record<number, TagType>, str
   [VEHICLE_STATUS_LABELS, VEHICLE_STATUS_TAGS, '车辆状态'],
   [VEHICLE_REALTIME_STATUS_LABELS, VEHICLE_REALTIME_STATUS_TAGS, '车辆实时状态'],
   [PRODUCT_ORDER_STATUS_LABELS, PRODUCT_ORDER_STATUS_TAGS, '商品订单状态'],
-  [SHIFT_STATUS_LABELS, SHIFT_STATUS_TAGS, '班次状态']
+  [SHIFT_STATUS_LABELS, SHIFT_STATUS_TAGS, '班次状态'],
+  [HANDOVER_STATUS_LABELS, HANDOVER_STATUS_TAGS, '交接状态']
 ]
 
 describe('transport 枚举契约（单一来源）', () => {
@@ -96,6 +102,38 @@ describe('transport 枚举契约（单一来源）', () => {
 
   it('承运审核结果覆盖 0-4', () => {
     expect(Object.keys(REVIEW_STATUS_LABELS).map(Number).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('WEB-1 回归：交接状态与后端 TransportHandoverStatusEnum 的 0-7 全名逐字一致', () => {
+    // 页面上那三个自造码（待确认0/已确认1/有争议2）曾让筛"有争议"拿到的是"接收方待接"的单，
+    // 而 7=异常（标记争议真正落到的状态）永远筛不到 —— 全名锁定，改枚举必须同时改这里
+    expect(HANDOVER_STATUS_LABELS).toEqual({
+      0: '等待交接',
+      1: '前序已到达',
+      2: '接收方待接',
+      3: '交接中',
+      4: '交接完成',
+      5: '交接超时',
+      6: '已取消',
+      7: '异常'
+    })
+  })
+
+  it('WEB-1 回归：标记争议只对后端肯接的状态露出（后端只拦 COMPLETED=4）', () => {
+    expect(HANDOVER_DISPUTE_BLOCKED_STATUS).toBe(4)
+    // 这一格是"界面别承诺做不到的动作"与"别藏掉后端肯接的动作"两条线的交点：
+    // 4 必须能被筛到，否则按钮的隐藏条件与枚举脱钩
+    expect(HANDOVER_STATUS_LABELS[HANDOVER_DISPUTE_BLOCKED_STATUS]).toBe('交接完成')
+    expect(HANDOVER_STATUS_LABELS[2]).toBe('接收方待接')
+    expect(HANDOVER_STATUS_LABELS[7]).toBe('异常')
+  })
+
+  it('交接状态念不出来时必须露出码值，不许静默兜成"未知"', () => {
+    // 后端加了枚举而前端没跟，症状本来是隐形的（一片"未知"）；这里要求把码值念出来
+    expect(handoverStatusLabel(8)).toContain('8')
+    expect(handoverStatusLabel(undefined)).toBe('-')
+    expect(handoverStatusTag(4)).toBe('success')
+    expect(handoverStatusTag(7)).toBe('danger')
   })
 })
 

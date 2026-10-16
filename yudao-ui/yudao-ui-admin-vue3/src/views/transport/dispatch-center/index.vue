@@ -331,8 +331,10 @@ const renderBaseOverlays = (stations: any[], vehicleList: any[]) => {
 }
 
 onMounted(async () => {
-  await loadPool()
-  initMap()
+  // 待调度池与地图（SDK + 站点/线路/车辆）互不依赖：串成链 = 两段之和，
+  // 而池子那次请求一旦抛错，地图连初始化都轮不到 —— 页面就只剩一张空白底图。
+  // allSettled 让两条各自失败各自留空，不互相拖着。
+  await Promise.allSettled([loadPool(), initMap()])
 })
 
 onUnmounted(() => {
