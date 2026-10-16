@@ -310,5 +310,13 @@ jobs:
         run: |
           python3 scripts/check_admin_ai_data_mask.py --self-test
           python3 scripts/check_admin_ai_data_mask.py
+      # 同一个业务对象不许两张表 / 两个同名 DO（队列 #98 / 台账 D-136）：
+      # 表名不撞、菜单主键不撞，check_menu_id_collisions 判绿 —— 它认的是户口不是业务身份。
+      # 真树现读（HEAD 干净导出）90 条 CREATE TABLE / 85 个表名 / 跨模块重名 0 ⇒ 这本闸今天是绿的，
+      # 一旦两条线各建一套就红（2026-10-16 真发生过：V037 的 transport_town_event_calendar 与 V050 的 town_event_calendar）
+      - name: Static check one business table has a single owner
+        run: |
+          python3 scripts/check_business_table_single_owner.py --self-test
+          python3 scripts/check_business_table_single_owner.py
       - name: Check generated-file drift
         run: git diff --exit-code
