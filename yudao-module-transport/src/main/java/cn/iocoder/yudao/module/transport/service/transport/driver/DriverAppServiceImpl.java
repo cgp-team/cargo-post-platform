@@ -1532,9 +1532,8 @@ public class DriverAppServiceImpl implements DriverAppService {
         }
     }
 
-    /** 司机上报异常（车辆故障/道路中断等，需求 §108）：段置异常 + 订单置异常 + 后台告警 */
     /**
-     * 段异常上报（队列 #60 / 台账 D-135）。
+     * 司机上报异常（车辆故障/道路中断等，需求 §108）：段置异常 + 订单置异常 + 后台告警。
      * ⚠ 司机带上来的现场照片此前**整条链路都没接**：`AppDriverLegActionReqVO` 有 `photoUrl`，
      *   而这里只把 `remark` 交给本方法 ⇒ 请求里的地址被丢弃，事后无凭证可查。
      *   存储位置不落新列：订单事件本来就有 `extra_data`（`text`，注释写的就是"扩展数据JSON"，
