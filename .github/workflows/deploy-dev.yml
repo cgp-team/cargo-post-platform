@@ -153,6 +153,10 @@ jobs:
           pnpm build:prod
 
       - name: Run database migration
+        env:
+          # 仓库变量（Settings → Secrets and variables → Actions → Variables）。没设就是空串 ⇒
+          # 下面 `${AUTO_DB_MIGRATE:-0}` 按 0 处理，即**默认不写库**（队列 #69 / 台账 D-127）。
+          AUTO_DB_MIGRATE: ${{ vars.AUTO_DB_MIGRATE }}
         run: |
           set -Eeuo pipefail
 
@@ -197,28 +201,54 @@ jobs:
             exit 1
           fi
 
-          for f in cleanup-upstream-menus transport-schema transport-schema-incremental transport-menu; do
-            if [ -f "sql/mysql/${f}.sql" ]; then
-              echo "Applying ${f}.sql..."
-              # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
-              # 不显式指定会把 UTF-8 SQL 按 latin1 误读，中文双重编码入库
-              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
-              echo "${f}.sql done."
-            fi
-          done
+          # ⚠ 这里**不再无条件写共享云库**（队列 #69 / 台账 D-127）。本 job 由 push master 触发，
+          #   而"往云上库写东西"需要一次显式确认 —— 唯一的写库入口是
+          #   `.github/workflows/db-migrate-guarded.yml`（`mode=check` 只读探测；`mode=apply` 必须
+          #   `confirm=APPLY`，且脚本本身必须幂等）。以前这一段每次 push 都重放白名单脚本，
+          #   等于把"要不要动云上数据"这个决定塞进了一次普通提交。
+          #
+          # 默认 AUTO_DB_MIGRATE=0：一个字节都不写。真要让某次部署带上迁移，就把仓库变量设成 1
+          #   （那是人在设置页上的一次显式动作），或直接跑 guarded 工作流。
+          #   缺列不会被放过：下一步 Validate schema drift columns 当场红并逐条列出缺哪一列 ——
+          #   所以这不是把风险藏起来，是把写库从隐式变成显式。
+          if [ "${AUTO_DB_MIGRATE:-0}" = "1" ]; then
+            echo "AUTO_DB_MIGRATE=1 ⇒ 本次部署重放基线脚本与迁移白名单（等同旧行为）。"
+            for f in cleanup-upstream-menus transport-schema transport-schema-incremental transport-menu; do
+              if [ -f "sql/mysql/${f}.sql" ]; then
+                echo "Applying ${f}.sql..."
+                # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
+                # 不显式指定会把 UTF-8 SQL 按 latin1 误读，中文双重编码入库
+                "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+                echo "${f}.sql done."
+              fi
+            done
 
-          # 多段联运框架（V018）+ 站点可达性/方案/段/交接/通知扩展列（V019）
-          # + 移除模拟运营表与菜单（V021）+ 会员中心菜单（V022）
-          # 注意顺序：必须在 transport-schema 之后（新表、补列）
-          for f in sql/incremental/V018__multi_leg_framework.sql sql/incremental/V019__station_access_and_plan_leg.sql \
-                   sql/incremental/V021__remove_simulation.sql sql/incremental/V022__member_menu.sql \
-                   sql/incremental/V024__key_indexes_and_unique_keys.sql sql/incremental/V025__leg_conflict_indexes.sql; do
-            if [ -f "${f}" ]; then
-              echo "Applying ${f}..."
-              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
-              echo "${f} done."
-            fi
-          done
+            # 多段联运框架（V018）+ 站点可达性/方案/段/交接/通知扩展列（V019）
+            # + 移除模拟运营表与菜单（V021）+ 会员中心菜单（V022）
+            # 注意顺序：必须在 transport-schema 之后（新表、补列）
+            for f in sql/incremental/V018__multi_leg_framework.sql sql/incremental/V019__station_access_and_plan_leg.sql \
+                     sql/incremental/V021__remove_simulation.sql sql/incremental/V022__member_menu.sql \
+                     sql/incremental/V024__key_indexes_and_unique_keys.sql sql/incremental/V025__leg_conflict_indexes.sql; do
+              if [ -f "${f}" ]; then
+                echo "Applying ${f}..."
+                "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}"
+                echo "${f} done."
+              fi
+            done
+
+            # 多段联运菜单（货物交接 / 用户通知）
+            for f in transport-multi-leg-menu; do
+              if [ -f "sql/mysql/${f}.sql" ]; then
+                echo "Applying ${f}.sql..."
+                "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
+                echo "${f}.sql done."
+              fi
+            done
+            echo "All migrations applied."
+          else
+            echo "跳过写库：本次部署不碰共享云库的数据定义。"
+            echo "看漂移跑 db-migrate-guarded.yml（mode=check，只读）；要动数据同一个工作流 mode=apply + confirm=APPLY。"
+          fi
 
           # V024/V025 为幂等索引脚本（内部用 information_schema 判断存在性），可安全重复执行。
           #
@@ -235,17 +265,6 @@ jobs:
           else
             echo "OK: transport_product.status 已是新语义（1=上架），V026 无需再执行。"
           fi
-
-          # 多段联运菜单（货物交接 / 用户通知）
-          for f in transport-multi-leg-menu; do
-            if [ -f "sql/mysql/${f}.sql" ]; then
-              echo "Applying ${f}.sql..."
-              "${MYSQL_EXEC[@]}" "${DB_NAME}" < "sql/mysql/${f}.sql"
-              echo "${f}.sql done."
-            fi
-          done
-          echo "All migrations applied."
-
       - name: Validate schema drift columns
         run: |
           set -Eeuo pipefail
@@ -327,7 +346,9 @@ jobs:
           if [ -n "${MISSING}" ]; then
             echo "===== SCHEMA DRIFT DETECTED — missing columns ====="
             echo -e "${MISSING}"
-            echo "Fix: ensure transport-schema-incremental.sql has ADD COLUMN for these."
+            echo "Fix: 把 ADD COLUMN 补进 transport-schema-incremental.sql（或新建增量脚本），"
+            echo "     然后跑 db-migrate-guarded.yml：mode=check 先看差集，mode=apply + confirm=APPLY 才写库。"
+            echo "     本次部署不会替你写库（见上一步 AUTO_DB_MIGRATE）。"
             exit 1
           fi
           echo "Schema drift validation PASS: 上游 22 列 + 多段联运/可达性/通知 18 列 全部存在。"

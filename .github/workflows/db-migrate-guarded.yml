@@ -1,15 +1,17 @@
 name: DB migrate (guarded, manual-only)
 
 # ⚠ 这条流水线**只能由人手动触发**：没有 push、没有 schedule、没有 pull_request。
-#   原因：`.github/workflows/deploy-dev.yml` 里那条 `Run database migration` 是每次 push master
-#   无条件重放的，把"往生产库加东西"挂在 push 上，等于"任何一次合并都可能改共享库"。
-#   本文件把同一件事收成一个显式动作，并且**默认只做只读探测**：
-#     mode=check  → 一个字都不写，只报告"这台库现在有没有这些列/表"
-#     mode=apply  → 必须另外把 confirm 填成 APPLY 才会执行，且只跑幂等的两支脚本
+#   原因：`.github/workflows/deploy-dev.yml` 里那条 `Run database migration` 曾经每次 push master
+#   无条件重放，把"往生产库加东西"挂在 push 上，等于"任何一次合并都可能改共享库"。
+#   自 2026-10-16（队列 #69 / 台账 D-127）那一段默认不写库了（仓库变量 AUTO_DB_MIGRATE 不为 1 就跳过），
+#   本文件因此是**唯一的写库入口**，并且默认只做只读探测：
+#     mode=check  → 一个字都不写，只报告"这台库现在有没有这些列/表/菜单"
+#     mode=apply  → 必须另外把 confirm 填成 APPLY 才会执行，且只跑幂等的脚本
 #
 # 只允许跑幂等脚本（重复执行不会报错、也不会二次伤害）：
 #   sql/incremental/V028__wallet_tables.sql   —— 三段 CREATE TABLE IF NOT EXISTS
 #   sql/incremental/V030__execution_writeback_guarded.sql —— 逐列 information_schema 守卫 + 末尾 3/3 自检
+#   sql/incremental/V032__pricing_rule_menu.sql + V035__pricing_rule_menu_free_ids.sql —— 按 permission 判存在的菜单补插
 # ⛔ 刻意**不跑** V029：它是裸 `ALTER TABLE ADD COLUMN`，第二次执行必然
 #   ERROR 1060 Duplicate column name（本机 2026-10-12 实测）。V030 就是它的可重复形态。
 
@@ -85,9 +87,14 @@ jobs:
           # 手动作业最容易出的事故不是脚本错，而是人在错误的库上跑了正确的脚本
           echo "[目标库] $( "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e 'SELECT CONCAT(VERSION(), "  host=", @@hostname, "  db=", DATABASE())' )"
 
+          # ⚠ 下面三条探测的写法别改回 `IF(cond, A, '前缀', COUNT(*), '后缀')`：MySQL 的 IF() 只收 3 个参，
+          #   多一个就是 1064（这三条在本文件提交时正是这个形状，从来没跑起来过 —— 探测步骤一红，
+          #   后面的 apply 步骤根本轮不到执行）。要拼多段只能用 CONCAT（它是变元的）。
+          #   复扫：python scripts/check_sql_function_arity.py
+
           echo "--- 执行回流三列（V029/V030 的目标）当前是否存在 ---"
           "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3','缺失（当前 ' , COUNT(*), '/3）'), '  ← actual_arrival_time / actual_finish_time / unassigned_orders')
+            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3',CONCAT('缺失（当前 ', COUNT(*), ' /3）')), '  ← actual_arrival_time / actual_finish_time / unassigned_orders')
             FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA=DATABASE()
               AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time'))
@@ -95,10 +102,24 @@ jobs:
 
           echo "--- 钱包三表（V028 的目标）当前是否存在 ---"
           "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
-            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3','缺失（当前 ' , COUNT(*), '/3）'), '  ← transport_wallet_account / transport_wallet_transaction / transport_pay_order')
+            SELECT CONCAT(IF(COUNT(*)=3,'已存在 3/3',CONCAT('缺失（当前 ', COUNT(*), ' /3）')), '  ← transport_wallet_account / transport_wallet_transaction / transport_pay_order')
             FROM information_schema.TABLES
             WHERE TABLE_SCHEMA=DATABASE()
               AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order');"
+
+          # 计价规则那一页也在只读探测里报：撞号那种坏的形态就是"CI 全绿而后台少一页"，
+          # 所以 mode=check 必须能单独看见它，不能等到 apply 才发现（队列 #70）
+          echo "--- 计价规则菜单（V032/V035 的目标）当前是否存在 ---"
+          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT CONCAT(IF(COUNT(*)=2,'已存在 2/2',CONCAT('缺失（当前 ', COUNT(*), ' /2）')), '  ← transport:pricing-rule:query / :save')
+            FROM system_menu
+            WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0';"
+          echo "--- 主键 6930/6931/6940/6941 各自归属（撞号探针：四行全念，空格也念出来）---"
+          "${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT CONCAT('id=', t.id, ' → ', IFNULL(m.name,'（这一格空着）'), '  [', IFNULL(m.permission,''), ']')
+            FROM (SELECT 6930 AS id UNION ALL SELECT 6931 UNION ALL SELECT 6940 UNION ALL SELECT 6941) t
+            LEFT JOIN system_menu m ON m.id = t.id AND m.deleted = b'0'
+            ORDER BY t.id;"
 
       - name: 执行幂等迁移（仅 mode=apply）
         if: ${{ github.event.inputs.mode == 'apply' }}
@@ -116,7 +137,10 @@ jobs:
             "${COMPOSE[@]}" logs --tail 100 mysql 2>&1 | tail -100 || true;
             echo "===== 诊断结束 ====="; exit ${rc};' ERR
 
-          for f in sql/incremental/V028__wallet_tables.sql sql/incremental/V030__execution_writeback_guarded.sql; do
+          # V032/V035 成对：前者给全新库（主键已挪到 6940/6941），后者给"已经跑过旧版 V032、
+          # 那一页因为撞号从来没插进去"的库（台账 D-127）。两条都按 permission 判存在 ⇒ 反复执行安全。
+          for f in sql/incremental/V028__wallet_tables.sql sql/incremental/V030__execution_writeback_guarded.sql \
+                   sql/incremental/V032__pricing_rule_menu.sql sql/incremental/V035__pricing_rule_menu_free_ids.sql; do
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
@@ -149,8 +173,17 @@ jobs:
             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item'
               AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%';")
 
-          echo "[核对] 执行回流列 ${COLS}/3，钱包表 ${TABLES}/3，注释异常 ${BAD_COMMENT}"
+          # 计价规则那一页：撞号的坏法就是"少两行而 CI 全绿"，所以这里必须数到 2（台账 D-127）。
+          PRICING=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT COUNT(*) FROM system_menu
+            WHERE permission IN ('transport:pricing-rule:query','transport:pricing-rule:save') AND deleted = b'0';")
+          # 6930 这一格必须仍是交接：谁把它改成别的，就是又有人往别人的主键上放东西
+          SLOT=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "
+            SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0';")
+          echo "[核对] 执行回流列 ${COLS}/3，钱包表 ${TABLES}/3，注释异常 ${BAD_COMMENT}，计价菜单 ${PRICING}/2，6930 仍是交接 ${SLOT}/1"
           [ "${COLS}" = "3" ] || { echo "::error::执行回流列没数满 3/3（现 ${COLS}）：迁移没落到这张表，别当已完成"; exit 1; }
           [ "${TABLES}" = "3" ] || { echo "::error::钱包三表没数满 3/3（现 ${TABLES}）"; exit 1; }
           [ "${BAD_COMMENT}" = "0" ] || { echo "::error::列注释里没有原样中文（${BAD_COMMENT} 条异常）——字符集不对，中文注释已损坏"; exit 1; }
-          echo "OK: 三列三表齐、注释按 utf8mb4 原样入库"
+          [ "${PRICING}" = "2" ] || { echo "::error::计价规则菜单没数满 2/2（现 ${PRICING}）：这一页在云上还是不存在，别把本次 apply 当成功"; exit 1; }
+          [ "${SLOT}" = "1" ] || { echo "::error::主键 6930 不再属于货物交接（现 ${SLOT}）：撞号又回来了"; exit 1; }
+          echo "OK: 三列三表齐、注释按 utf8mb4 原样入库、计价菜单 2/2 且 6930 归属未变"

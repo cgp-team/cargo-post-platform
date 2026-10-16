@@ -75,7 +75,39 @@ SELECT COUNT(*) FROM infra_file WHERE url LIKE 'http://1.15.29.107/%' AND url NO
 部署流水线含两项提速机制（2026-08 起）：
 
 - **路径跳过**：`docs/`、`.github/` 的纯变更不触发部署（小程序已拆至 [cargo-post-miniprogram](https://github.com/cgp-team/cargo-post-miniprogram) 仓库，不再经过本流水线）；CI 门禁（`ci.yml`）自 2026-08-23 起改为「始终触发 + 变更探测按需跳过 job」（docs-only PR 也会产生 skipped 的必需检查，配合 master 分支保护可正常合并）。
-- **部分构建**：`Detect changed areas` 步骤以「最近一次成功部署的 commit」为基准用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行（如纯 SQL 变更只跑迁移）；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
+- **部分构建**：`Detect changed areas` 步骤以「最近一次成功部署的 commit」为基准用 GitHub compare API 分析变更文件，后端打包/前端构建/对应发布步骤按需执行；compare API 失败或手动触发时一律全量构建。后端 Maven 打包为「离线优先（`-o`）+ 多核并行（`-T 1C`）」，离线失败自动回退在线。
+
+### 部署不写库：迁移只有一个入口（2026-10-16 起）
+
+`deploy-dev.yml` 的 `Run database migration` 步骤**默认一个字节都不写**：整段包在
+`if [ "${AUTO_DB_MIGRATE:-0}" = "1" ]` 里，取值来自仓库变量（Settings → Secrets and variables → Actions → Variables）。
+变量不存在或不为 `1` 时只打一行「跳过写库」，随后照常跑只读校验。
+
+理由：这一段以前挂在 push master 上，每次合并都无条件重放一批 SQL 到共享云库 ——「要不要动云上数据」这个决定
+被塞进了一次普通提交。现在它是一次显式动作：
+
+| 想做的事 | 走哪条 | 会写库吗 |
+|---|---|---|
+| 看这台库现在缺什么 | `db-migrate-guarded.yml`，`mode=check`（默认值） | 不写，纯 `information_schema` 探测 |
+| 真的补列/补菜单 | 同一个工作流，`mode=apply` **且** `confirm` 原样填 `APPLY` | 写，且只跑白名单里的幂等脚本 |
+| 某次部署顺带把迁移带上 | 把仓库变量 `AUTO_DB_MIGRATE` 设成 `1` 再 push（跑完记得清回 `0`） | 写，等同旧行为 |
+
+白名单脚本（重复执行不报错、也不会二次伤害）：`V028__wallet_tables.sql`、`V030__execution_writeback_guarded.sql`、
+`V032__pricing_rule_menu.sql` + `V035__pricing_rule_menu_free_ids.sql`。⛔ `V029` 刻意不放进白名单：它是裸
+`ALTER TABLE ADD COLUMN`，第二次执行必然 `ERROR 1060 Duplicate column name`（本机 2026-10-12 实测）；
+`V030` 就是它的可重复形态。`V026` 同理（`SET status = 1 - status` 会来回翻转），部署时只检测并告警，不自动执行。
+
+「不写库」不会把风险藏起来：下一步 `Validate schema drift columns` 是只读的，DO 用到的列在表里不存在就当场红，
+并逐条列出缺哪一列 —— 那时才需要去跑 guarded 工作流补上。
+
+两条静态 SQL 闸挂在 `ci.yml` 的 `drift-check` job 上（每次 PR 必跑，`python3` 标准库，无外部依赖）：
+
+- `scripts/check_menu_id_collisions.py`：同一菜单主键被两个文件以不同 `permission` 认领 ⇒ 红。
+  这条闸的由来：`V032` 与 `sql/mysql/transport-multi-leg-menu.sql` 都写了 6930/6931，两边都自称幂等，
+  结果是**先落地的赢**——计价规则那一页从来没插进去，而 CI 全绿。现在 `V032`/`V035` 用 6940/6941（当场量出来的空段）。
+- `scripts/check_sql_function_arity.py --self-test`：`IF()` 只收 3 个参（`IFNULL()` 2 个），超了就是 MySQL 1064。
+  由来：guarded 工作流的只读探测步骤写了 5 参的 `IF()`，那一步一红，排在它后面的 `apply` 步骤根本轮不到执行 ——
+  即「唯一的写库入口」当时是跑不动的。`--self-test` 会先用 8 条注入用例自证能红，再扫树，防止判据空转。
 
 托管 runner 跨境上传 jar 到国内服务器过慢（实测约 50KB/s），因此部署 workflow 固定运行在服务器本机的 self-hosted runner（`runs-on: [self-hosted, cargo-post]`）上，构建与部署同机完成，无需 DEPLOY_* Secrets 与 SSH 通道。
 

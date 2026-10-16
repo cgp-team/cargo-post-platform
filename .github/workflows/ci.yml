@@ -225,5 +225,13 @@ jobs:
           test -f algorithm/app/main.py
           test -f deploy/docker-compose.yml
           test -f sql/mysql/transport-schema.sql
+      # 两条静态 SQL 闸（台账 D-127）：都是"全绿而库里少一页/整条作业跑不动"那种坏的形态，
+      # 只能静态查 —— 等部署时才发现，代价是让共享库当试验品。
+      # · 菜单主键撞号：计价规则与货物交接都认领 6930，先落地的赢，另一页永远不存在。
+      # · IF()/IFNULL() 参数量：探测步骤一 1064，写库的 apply 步骤根本轮不到执行。
+      - name: Static check SQL gates (menu id collisions, function arity)
+        run: |
+          python3 scripts/check_menu_id_collisions.py
+          python3 scripts/check_sql_function_arity.py --self-test
       - name: Check generated-file drift
         run: git diff --exit-code

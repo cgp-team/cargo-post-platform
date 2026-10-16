@@ -3,8 +3,8 @@
 --
 -- 为什么单独一个文件而不是往 `sql/mysql/transport-menu.sql` 里加一行：
 --   那份基线文件用的是**裸 `INSERT INTO system_menu ... VALUES`**（`transport-menu.sql:130-146`），
---   固定主键重复执行会 `Duplicate entry`；而部署流水线每次 push master 都会无条件重放白名单脚本
---   （`.github/workflows/deploy-dev.yml:200` 的 `for f in ... transport-menu ...`）
+--   固定主键重复执行会 `Duplicate entry`；而白名单脚本会被反复重放（`deploy-dev.yml` 在仓库变量
+--   `AUTO_DB_MIGRATE=1` 时整段重放，`db-migrate-guarded.yml` 每次 apply 也重跑）
 --   ⇒ 追加进基线文件等于把"第二次部署"变成一次红。这里用 `WHERE NOT EXISTS` 写成可安全重复执行的形态
 --   （沿用 V024/V025/V030 的规矩：**进白名单的脚本必须能重跑**）。
 --
