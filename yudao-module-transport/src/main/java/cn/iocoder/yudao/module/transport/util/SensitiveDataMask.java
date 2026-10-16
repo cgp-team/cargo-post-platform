@@ -17,7 +17,7 @@ import cn.hutool.core.util.StrUtil;
 public final class SensitiveDataMask {
 
     /** 非手机号形状时的兜底：只保留首字符，其余整段屏蔽（不是"掩码成功"的暗示，是"这条我不敢猜"） */
-    private static final String UNKNOWN_SHAPE_KEEP = 1;
+    private static final int UNKNOWN_SHAPE_KEEP = 1;
 
     private SensitiveDataMask() {
     }
