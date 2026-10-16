@@ -210,35 +210,41 @@ create_time   datetime
 
 | 项 | 落点 | 证据 |
 |---|---|---|
-| §6 第 2 项 事件日历 | 表 `town_event_calendar`（`sql/incremental/V050__ai_event_calendar.sql`，菜单 7100–7104）；`yudao-module-ai-assist` 的 eventcalendar Service/Controller；`views/transport/ai/event-calendar/**` | 见 13.5 读数 |
 | §6 第 3 项 客货空间检视 | 只读判定 `POST /transport/ai/capacity-conflict/check`（菜单 7110，`V051`）；`CapacityConflictServiceImpl`（未录≠0、decimal 比载重） | 同上 |
 | §6 第 4 项 查询构造器+简报 | 表 `ai_saved_query`（`V052`，菜单 7120–7123）+ CRUD `/transport/ai/saved-query/*`；模板排版 `POST /transport/ai/briefing/render`；`views/transport/ai/query-builder/**` | 同上 |
-| 云端迁移通道 | `V050`/`V051`/`V052` 已进 `db-migrate-guarded.yml` 的 apply 白名单，并补了 7 格 `probe`/`probe_strict`（check 只读、apply 需 `confirm=APPLY`；格数 15→22） | YAML 可解析；`mode=check` 里三支探不到不算失败 |
+| §7 AI 外壳（开关 + 能力未就绪） | `buspost.ai.*` 用 `@Value` 读（**默认 off/空 ⇒ 天然"未就绪"，不改任何 yaml**）；`GET /transport/ai/capability/status`（菜单 7130，`V053`）；`views/transport/ai/capability/**` | 见 13.5 读数 |
+| §5 调用日志（契约里唯一新增的表） | 表 `ai_invocation_log`（`V054`，菜单 7140，**只读页**）；`AiInvocationLogServiceImpl#record` 为**旁路**（落库失败不抛、但记 error 级日志）；`GET /transport/ai/invocation-log/page`；`views/transport/ai/invocation-log/**` | 同上 |
+| 云端迁移通道 | `V050`–`V054` 已进 `db-migrate-guarded.yml` 的 apply 白名单（`V050` 现仅建所有 AI 页共用的顶级目录 7100），并补了 14 格 `probe`/`probe_strict`（check 只读、apply 需 `confirm=APPLY`；格数 15→29，含主线 V037 那 3 格） | YAML 可解析；`mode=check` 里探不到不算失败 |
 
 三条纪律落在代码里，接手时别破坏：**未录容量 ≠ 0 座**（`CapacityConflictServiceImpl`）；**缺值不折叠成 0**（简报数值用文字承载）；**只读不写**（两个新接口都不落库、不注入写口）。
 
 ### 13.2 没做 / 本线做不到的（需要下一个 agent 或主线配合）
 
-1. **界面点验**：三条页面（event-calendar、capacity-conflict、query-builder）**未在真机/浏览器点验** ⇒ 按 §9.5 登记 **NOT VERIFIED IN BROWSER**。交接后请点一遍：菜单「AI 辅助」下的三个页、增删改、以及客货检视的"未录容量"分支。
+1. **界面点验**：四条页面（capacity-conflict、query-builder、capability、invocation-log）**未在真机/浏览器点验** ⇒ 按 §9.5 登记 **NOT VERIFIED IN BROWSER**。交接后请点一遍：菜单「AI 辅助」下的四个页、查询构造器的增删改、客货检视的"未录容量"分支、以及能力状态页在"未配置端点"时应显示「未就绪」。
 2. **§6.3 接真实数据（依赖申请）**：平台里**没有"预报量"的存储字段**——真实数据是"车辆核定容量（`transport_vehicle`）+ 订单池/计划量（`transport_order` 系列、`transport_dispatch_plan_item.quantity`）"。要自动带出这两头，需要在 `yudao-module-transport` 新增一个**只读 `api` 包**（该模块目前没有 `api` 包，也没有任何模块依赖它的先例）。当前实现是"页面手工录入 + 服务端确定性判定"，功能闭环但不自动。
 3. **§6.4 定时聚合**：需要"读既有聚合 + 调度器 + 落库位置"，本期只做了**存条件 + 模板排版**。"自然语言"那一层（话→参数）未做，且契约已定**永远不做话→SQL**。
-4. **§7 AI 外壳**：无推理端点（服务器由用户管）。`buspost.ai.enabled` 开关、`application-*.yaml` 的 `buspost.ai.*`、以及"能力未就绪"页面**均未做**；红线：不许用模板文案冒充 AI 输出。
-5. **§9 第 4 条「关掉 AI 仍完整可用」检查**：未做（要等开关真正落地后才有意义）。
+4. **§7 AI 外壳（部分已做）**：开关读取 + `GET /transport/ai/capability/status` + 「能力未就绪」页已落地（用 `@Value` 默认值绕开，**未改 `application-*.yaml`**）。仍缺：主线在 `application-*.yaml` 里补 `buspost.ai.*` 键（本线**没碰 yaml**，属依赖申请）、以及所有真正的模型功能。红线不变：不许用模板文案冒充 AI 输出。
+5. **§9 第 4 条「关掉 AI 仍完整可用」检查**：开关已落地但**无任何模型功能消费它**，所以该检查现在只是"恒真"；等真正的 AI 功能接上后必须重做。
 
-### 13.3 并行写入者：不要顺手合并
+### 13.3 并行写入者：事件日历重复已了结
 
-- 另一条线在 `yudao-module-transport` 里**自带一份**事件日历：表 `transport_town_event_calendar`（`sql/incremental/V037__town_event_calendar.sql`）、菜单 6950–6952、`/transport/town-event`、以及 transport `ErrorCodeConstants` 里的 `TOWN_EVENT_*`。**与本线（`town_event_calendar` / V050 / 菜单 7100–7104）表名与主键都不撞**，但**产品上重复**——留哪一份要人定，不要两边都并。
-- ⚠ **该线的 `scripts/check_business_table_single_owner.py`（工作树内、尚未提交）现在对本线判红**：它把「剥前缀后同名」当同一个业务对象 —— `transport_town_event_calendar`(V037) 与 `town_event_calendar`(V050) 撞、两个 `TownEventCalendarDO` 落在两个模块。**这是必须由人拍板的产品决定**（保留哪一份 / 让 AI 线改用 transport 那份），本线不擅自删表。
-- 该线已陆续提交（如 `c9b11736` transport 事件日历表+写口、`064d66b8` 掩码类补正），**HEAD 会继续前进**。接手前先 `git log` 复核，别把该线的文件当成自己的改动提交。
+- 另一条线在 `yudao-module-transport` 里自带一份乡镇事件日历：表 `transport_town_event_calendar`（`sql/incremental/V037__town_event_calendar.sql`，带 recurrence）、菜单 6950–6952、`/transport/town-event`。
+- 本线原先也建了一份（`town_event_calendar` / 原 `V050__ai_event_calendar.sql` / 菜单 7100–7104）。**经拍板：保留 transport 那份，本线删除重复** —— 已删掉本线的表、`eventcalendar` 模块、前端 `event-calendar` 页；`V050` 改为只建所有 AI 页共用的顶级目录「AI 辅助」(7100)（文件改名 `V050__ai_menu_dir.sql`）。
+- 该线提交的第 14 本静态闸 `scripts/check_business_table_single_owner.py`（`5abba2f9`，队列 #98）因此**已转绿（`rc=0`）**。若将来 AI 侧要用日历，**只读 transport 那份，别再建第二张表**（这正是那本闸要防的）。
+- 该线仍在继续提交（如 `c9b11736`、`064d66b8`）：接手前先 `git log` 复核，别把该线的文件当成自己的改动提交。
 
 ### 13.4 台账与编号（接手前先看这段，防撞）
 
 - 台账 `DECISION_LOG.md` 在 `android-app` **子模块**里（本仓未检出，且 §11.13 时段内禁碰该树）。本线的决定（含 `NOT VERIFIED IN BROWSER`）**只写在提交信息里**，由主线并入台账。
-- 本线已占号：**迁移 `V050`/`V051`/`V052`**；**菜单 7100–7104 / 7110 / 7120–7123**；**错误码 `1_006_001_xxx` / `1_006_002_xxx` / `1_006_003_xxx`**。**`V053` 起、菜单 7130 起仍空闲。**
+- 本线已占号：**迁移 `V050`（仅目录菜单）–`V054`**；**菜单 7100 / 7110 / 7120–7123 / 7130 / 7140**；**错误码 `1_006_002_xxx` / `1_006_003_xxx`**（事件日历已删，故 `1_006_001_xxx` 不再占用）。**`V055` 起、菜单 7150 起仍空闲。**
 
 ### 13.5 本轮验证读数（2026-10-16）
 
-- 13 本静态闸：全部 `rc=0`；且 13 本 `--self-test` 全部 `rc=0`（含 `check_admin_ai_data_mask` 现在真扫到 AI 面三目录）。
-- 前端：SFC 结构扫 5 个 `.vue` 全绿 → `vue-tsc --noEmit` `rc=0`（0 错）→ `eslint src/views/transport src/api/transport` `rc=0`（0 error）→ `vitest` 4 文件 / **54** 用例通过。
-- Java：**本机无 Maven**，三个新用例（`CapacityConflictServiceImplTest`、`AiSavedQueryServiceImplTest`、`OperationalBriefingServiceImplTest`）只能由 CI backend job 出数；**不要把"我改完能编译"当凭证**。
+- 14 本静态闸（两条线合并后的面，2026-10-16 接手时重跑）：全部 `rc=0`；且各本 `--self-test` 全部 `rc=0`（含 `check_admin_ai_data_mask` 现在真扫到 AI 面三目录）。
+  - 第 14 本 `check_business_table_single_owner.py`（该线 `5abba2f9` 提交）：删掉本线重复后**已转绿（`rc=0`）**（见 13.3）。
+- 前端：SFC 结构扫 5 个 `.vue` 全绿 → `vue-tsc --noEmit` `rc=0`（0 错）→ `eslint src/views/transport src/api/transport` `rc=0`（0 error；6 条 warning 全在既有 handover/order/pricingRule，非本线）→ `vitest` 4 文件 / **54** 用例通过。
+- Java：这条已还掉——本机**确实有 Maven**（`/c/Users/袁/apache-maven-3.9.16/bin`）。接手后本地跑 `mvn -B -pl yudao-server -am clean test`：
+  **BUILD SUCCESS**，`yudao-module-ai-assist` 聚合 **Tests run: 19, Failures: 0, Errors: 0**，`yudao-module-transport` 387 条同轮 0 红。
+  ⚠ 另一条读数值得留着：**不带 `clean`** 跑同一条命令时 `OAuth2TokenServiceImplTest.testGetAccessTokenPage` 会报 `expected <1> but was <2>`
+  —— 那是旧 target 状态造成的假失败（上游模块，与本线无关），**归因要用 CI 的确切命令，不能凭手感**。
 - 迁移脚本本身：只做了静态/idempotent 复核，**未连库执行**（走 guarded `check` 只读、`apply` 需人给 `confirm=APPLY`）。

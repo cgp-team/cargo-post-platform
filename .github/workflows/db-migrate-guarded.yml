@@ -136,6 +136,20 @@ jobs:
                     probe "菜单计价规则页(id=6940)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6940 AND deleted = b'0'"
                     probe "菜单计价规则保存(id=6941)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6941 AND deleted = b'0'"
                     probe "6930仍属货物交接" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0'"
+          probe "表transport_town_event_calendarV037" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_town_event_calendar'"
+          probe "菜单事件日历按权限V037" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:town-event:query' AND deleted = b'0'"
+          probe "事件日历角色授权V037" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:town-event:query' AND rm.role_id=1"
+          probe "菜单AI辅助目录(id=7100)V050" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 7100 AND deleted = b'0'"
+          probe "AI辅助目录角色授权V050" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.id=7100 AND rm.role_id=1"
+          probe "表ai_saved_queryV052" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_saved_query'"
+          probe "菜单客货空间检视按权限V051" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:capacity-conflict:query' AND deleted = b'0'"
+          probe "菜单查询构造器按权限V052" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:saved-query:query' AND deleted = b'0'"
+          probe "查询构造器角色授权V052" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:saved-query:query' AND rm.role_id=1"
+          probe "表ai_invocation_logV054" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_invocation_log'"
+          probe "菜单能力状态按权限V053" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:capability:query' AND deleted = b'0'"
+          probe "能力状态角色授权V053" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:capability:query' AND rm.role_id=1"
+          probe "菜单调用日志按权限V054" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:invocation-log:query' AND deleted = b'0'"
+          probe "调用日志角色授权V054" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:invocation-log:query' AND rm.role_id=1"
           probe "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
           echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
@@ -165,14 +179,24 @@ jobs:
                    sql/incremental/V031__wallet_menu.sql sql/incremental/V032__pricing_rule_menu.sql \
                    sql/incremental/V033__station_pickup_attrs.sql sql/incremental/V034__handover_sign_url.sql \
                    sql/incremental/V035__pay_order_request_no.sql \
-                   sql/incremental/V036__pricing_rule_menu_free_ids.sql; do
+                   sql/incremental/V036__pricing_rule_menu_free_ids.sql \
+                   sql/incremental/V037__town_event_calendar.sql \
+                   sql/incremental/V050__ai_menu_dir.sql \
+                   sql/incremental/V051__ai_capacity_conflict_menu.sql \
+                   sql/incremental/V052__ai_saved_query.sql \
+                   sql/incremental/V053__ai_capability_menu.sql \
+                   sql/incremental/V054__ai_invocation_log.sql; do
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
-            # 逐支留凭证：作业绿不够 —— "八支都执行成功了"这句必须由每支自己的退出码与原文支撑（8 = 上面 for 循环里的实数）
+            # 逐支留凭证：作业绿不够 —— "各支都执行成功了"这句必须由每支自己的退出码与原文支撑（14 = 上面 for 循环里的实数）
+            # ⚠ 13 → 14 这一格是**本轮补的漏**：V037（乡镇事件日历）进仓时我只把它写进了迁移目录，
+            #   没加进这份白名单 ⇒ 就算有人按下 apply，云上也不会有那张表，而后台那个页面一打开就是 500。
+            #   "脚本在仓库里"不等于"脚本会被执行"——这条流水线的白名单就是它唯一的执行面。
+            #   入选前按同一口径量过：裸 ALTER 0 次、CREATE TABLE IF NOT EXISTS 2 次、菜单按 permission 判存在 3 次、INSERT IGNORE 2 次。
             errfile="${RUNNER_TEMP:-.}/apply_err.txt"
             if "${MYSQL_EXEC[@]}" "${DB_NAME}" < "${f}" 2>"${errfile}"; then
-              echo "::notice title=APPLY::${f##*/} rc=0 原文=$(head -c 150 "${errfile}" 2>/dev/null | tr -d '\r\n') 后续 15 格读数见 DBSTATE 注解"
+              echo "::notice title=APPLY::${f##*/} rc=0 原文=$(head -c 150 "${errfile}" 2>/dev/null | tr -d '\r\n') 后续 29 格读数见 DBSTATE 注解"
             else
               rc=$?
               echo "::error title=APPLY::${f##*/} rc=${rc} 原文=$(head -c 200 "${errfile}" 2>/dev/null | tr -d '\r\n')"
@@ -193,9 +217,10 @@ jobs:
           MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
-          # 15 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
-          # 六格、本轮把计价那两格换成"按权限 2 + 6940 + 6941 + 6930 归属"四格 ⇒ 数要跟着实跑改，
-          # 否则屏幕上念的格数和真正判的格数就是两个答案（台账 D-133）。
+          # 29 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
+          # 六格、本轮把计价那两格换成"按权限 2 + 6940 + 6941 + 6930 归属"四格，再补 V053/V054 的
+          # 5 格、去掉事件日历 3 格换 7100 目录 2 格 ⇒ 数要跟着实跑改，否则屏幕上念的格数和真正判的格数
+          # 就是两个答案（台账 D-133）。
           echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
           MISSING=0
           probe_strict() {
@@ -223,10 +248,24 @@ jobs:
                     probe_strict "菜单计价规则页(id=6940)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6940 AND deleted = b'0'"
                     probe_strict "菜单计价规则保存(id=6941)" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6941 AND deleted = b'0'"
                     probe_strict "6930仍属货物交接" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 6930 AND permission = 'transport:handover:query' AND deleted = b'0'"
+          probe_strict "表transport_town_event_calendarV037" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_town_event_calendar'"
+          probe_strict "菜单事件日历按权限V037" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:town-event:query' AND deleted = b'0'"
+          probe_strict "事件日历角色授权V037" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:town-event:query' AND rm.role_id=1"
+          probe_strict "菜单AI辅助目录(id=7100)V050" 1 "SELECT COUNT(*) FROM system_menu WHERE id = 7100 AND deleted = b'0'"
+          probe_strict "AI辅助目录角色授权V050" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.id=7100 AND rm.role_id=1"
+          probe_strict "表ai_saved_queryV052" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_saved_query'"
+          probe_strict "菜单客货空间检视按权限V051" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:capacity-conflict:query' AND deleted = b'0'"
+          probe_strict "菜单查询构造器按权限V052" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:saved-query:query' AND deleted = b'0'"
+          probe_strict "查询构造器角色授权V052" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:saved-query:query' AND rm.role_id=1"
+          probe_strict "表ai_invocation_logV054" 1 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ai_invocation_log'"
+          probe_strict "菜单能力状态按权限V053" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:capability:query' AND deleted = b'0'"
+          probe_strict "能力状态角色授权V053" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:capability:query' AND rm.role_id=1"
+          probe_strict "菜单调用日志按权限V054" 1 "SELECT COUNT(*) FROM system_menu WHERE permission='transport:ai:invocation-log:query' AND deleted = b'0'"
+          probe_strict "调用日志角色授权V054" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:invocation-log:query' AND rm.role_id=1"
           probe_strict "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe_strict "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
-          echo "OK: 15 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
+          echo "OK: 29 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
       - name: 归档探测读数（无论成败都留凭证）
         if: always()
