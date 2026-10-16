@@ -7,7 +7,7 @@
 -- 编号归属（契约 §2）：迁移从 V050 起，菜单主键用 7100–7199。本脚本只加一个只读页 7110，
 --   挂在 V050 已建的顶级目录「AI 辅助」(7100) 之下。
 --
--- 幂等：菜单按 permission 判存在 + INSERT IGNORE，可反复执行。
+-- 幂等：菜单按 permission 判存在 + 授权按存在性判重，可反复执行。
 -- ⚠ 本页不含任何写业务数据的按钮（契约 §0），所以只发 query 权限。
 -- =====================================================================
 
@@ -19,6 +19,9 @@ SELECT 7110, '客货空间检视', 'transport:ai:capacity-conflict:query', 2, 2,
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE permission = 'transport:ai:capacity-conflict:query' AND deleted = b'0');
 
--- 角色授权：与基线同一写法（INSERT IGNORE + 按 id 取）
-INSERT IGNORE INTO system_role_menu (role_id, menu_id)
-SELECT 1, id FROM system_menu WHERE id = 7110;
+-- 角色授权：基线那种 INSERT IGNORE 在这张表上挡不住重复 ⇒ 改按存在性判重
+-- 幂等授权：system_role_menu 没有 (role_id, menu_id) 唯一键，INSERT IGNORE 挡不住重复执行（guarded 的 apply 每次都重跑整份白名单）
+INSERT INTO system_role_menu (role_id, menu_id)
+SELECT 1, id FROM system_menu WHERE id = 7110
+  AND NOT EXISTS (SELECT 1 FROM system_role_menu rm
+                  WHERE rm.role_id = 1 AND rm.menu_id = system_menu.id AND rm.deleted = b'0');

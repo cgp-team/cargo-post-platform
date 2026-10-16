@@ -24,9 +24,12 @@ SELECT 6920, '钱包查询', 'transport:wallet:query', 2, 14, 6800, 'wallet', 'e
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6920);
 
--- 角色授权：与基线文件同一条写法（`transport-menu.sql:159-160` 用的就是 INSERT IGNORE + 区间 SELECT）
-INSERT IGNORE INTO system_role_menu (role_id, menu_id)
-SELECT 1, id FROM system_menu WHERE id = 6920;
+-- 角色授权：基线（`transport-menu.sql:159-160`）用 INSERT IGNORE，那张表没唯一键挡不住重复 ⇒ 改按存在性判重
+-- 幂等授权：system_role_menu 没有 (role_id, menu_id) 唯一键，INSERT IGNORE 挡不住重复执行（guarded 的 apply 每次都重跑整份白名单）
+INSERT INTO system_role_menu (role_id, menu_id)
+SELECT 1, id FROM system_menu WHERE id = 6920
+  AND NOT EXISTS (SELECT 1 FROM system_role_menu rm
+                  WHERE rm.role_id = 1 AND rm.menu_id = system_menu.id AND rm.deleted = b'0');
 
 -- ⚠ 这里**不**给 `transport:wallet:adjust`（改钱那个口）配菜单/按钮：
 --   `WalletController.adjustBalance` 没有幂等键，且 amount=0 时什么都不做也返回"调整成功"（台账 D-093）。

@@ -16,7 +16,7 @@
 --   那是重放 `transport-multi-leg-menu.sql` 的事，不在本文件里偷偷做。
 --   所以：这里只补"缺的那一页"，不搬、不删、不猜。
 --
--- 幂等与自检：与 V024/V025/V030/V031/V032 同一套（`WHERE NOT EXISTS` + `INSERT IGNORE`），
+-- 幂等与自检：与 V024/V025/V030/V031/V032 同一套（`WHERE NOT EXISTS` 判存在），
 --   可反复执行；末尾的自检必须读出 2 行，读不满就是没装上 —— 与 V030 的"末尾 3/3 自检"同一条纪律。
 --   ⚠ 主键 6940/6941 是当场量出来的空段，不是挑的吉利数：
 --   `grep -rhoE '\(69[0-9][0-9],' sql/ | sort -u` 现读 6900-6902 / 6910-6915 / 6920 / 6930-6935，6940 起为空。
@@ -37,12 +37,15 @@ SELECT 6941, '计价规则保存', 'transport:pricing-rule:save', 3, 1, 6940, ''
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE permission = 'transport:pricing-rule:save' AND deleted = b'0');
 
--- 角色授权：与基线同一写法（`transport-menu.sql` 用的就是 INSERT IGNORE + 按 id 区间 SELECT）。
+-- 角色授权：基线那种 INSERT IGNORE 在这张表上挡不住重复 ⇒ 改按存在性判重。
 -- 这里按 permission 取 id 而不是写死 6940/6941：万一本库走的是"V032 先跑"那一支（菜单在 6930/6931），
 -- 授权仍然落在真正存在的那两行上，不会给一个不存在的菜单号发权限。
-INSERT IGNORE INTO system_role_menu (role_id, menu_id)
+-- 幂等授权：system_role_menu 没有 (role_id, menu_id) 唯一键，INSERT IGNORE 挡不住重复执行（guarded 的 apply 每次都重跑整份白名单）
+INSERT INTO system_role_menu (role_id, menu_id)
 SELECT 1, id FROM system_menu
-WHERE permission IN ('transport:pricing-rule:query', 'transport:pricing-rule:save') AND deleted = b'0';
+WHERE permission IN ('transport:pricing-rule:query', 'transport:pricing-rule:save') AND deleted = b'0'
+  AND NOT EXISTS (SELECT 1 FROM system_role_menu rm
+                  WHERE rm.role_id = 1 AND rm.menu_id = system_menu.id AND rm.deleted = b'0');
 
 -- 自检：必须是 2（两条都在），少一条就是这一页还是没装上
 SELECT COUNT(*) AS pricing_rule_menus_should_be_2

@@ -5,7 +5,7 @@
 --   （`CargoPricingService` / `DispatchEstimationService` 都在读它），但后台**没有任何页面**能改它
 --   ⇒ 改运价 = 直接改库。这一页把"读当前生效值 + 保存"接上。
 --
--- 写法沿用 V024/V025/V030/V031 的规矩：`WHERE NOT EXISTS` + `INSERT IGNORE`，可安全重复执行。
+-- 写法沿用 V024/V025/V030/V031 的规矩：`WHERE NOT EXISTS` 判存在，可安全重复执行。
 --
 -- ⚠ 主键从 6930/6931 挪到 **6940/6941**（2026-10-16，台账 D-127）：基线种子 `sql/mysql/transport-multi-leg-menu.sql`
 --   自己就占着 6930-6935（6930=货物交接、6931=交接争议处理…），而它的注释写着"本文件使用 6930-6933，避免编号冲突"
@@ -42,5 +42,8 @@ SELECT 6941, '计价规则保存', 'transport:pricing-rule:save', 3, 1, 6940, ''
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE permission = 'transport:pricing-rule:save' AND deleted = b'0');
 
-INSERT IGNORE INTO system_role_menu (role_id, menu_id)
-SELECT 1, id FROM system_menu WHERE id IN (6940, 6941);
+-- 幂等授权：system_role_menu 没有 (role_id, menu_id) 唯一键，INSERT IGNORE 挡不住重复执行（guarded 的 apply 每次都重跑整份白名单）
+INSERT INTO system_role_menu (role_id, menu_id)
+SELECT 1, id FROM system_menu WHERE id IN (6940, 6941)
+  AND NOT EXISTS (SELECT 1 FROM system_role_menu rm
+                  WHERE rm.role_id = 1 AND rm.menu_id = system_menu.id AND rm.deleted = b'0');
