@@ -2,6 +2,9 @@
 import { computed, defineComponent, unref } from 'vue'
 import { useAppStore } from '@/store/modules/app'
 import { Backtop } from '@/components/Backtop'
+// 悬浮 AI 助手挂在这里（与 Backtop 同一层）；组件本身放在 views/transport/ai 下面是**故意的**：
+// 第 13 本静态闸的 AI 面扫描根就是 `views/transport/ai/**`，搬进 src/components 会让那本闸看不见它。
+import AiAssistantFab from '@/views/transport/ai/assist/AiAssistantFab.vue'
 import { Setting } from '@/layout/components/Setting'
 import { useRenderLayout } from './components/useRenderLayout'
 import { useDesign } from '@/hooks/web/useDesign'
@@ -66,6 +69,8 @@ export default defineComponent({
         {renderLayout()}
 
         <Backtop></Backtop>
+
+        <AiAssistantFab></AiAssistantFab>
 
         <Setting></Setting>
       </section>
