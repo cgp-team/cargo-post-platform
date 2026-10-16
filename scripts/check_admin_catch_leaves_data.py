@@ -17,6 +17,7 @@
 · 候选数为 0 ⇒ 退出码 2：**"一处都没数到"不能读成"失败都有出口"**。
 
 用法：python3 scripts/check_admin_catch_leaves_data.py [扫描根]
+      python3 scripts/check_admin_catch_leaves_data.py --self-test    # 九把刀各占一个目录
 退出码：0 = 未达标处**全部在册**（见文件顶部 KNOWN_UNFIXED）；
         1 = 出现新文件、某文件计数上涨、或有文件降了却没改在册表（"修好了不登记"同样红）；
         2 = 扫描根不存在 / 候选数为 0。
@@ -120,8 +121,11 @@ def scan(path):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--report-only"]
-    report_only = "--report-only" in sys.argv[1:]
+    argv = sys.argv[1:]
+    if "--self-test" in argv:
+        return run_self_test()
+    args = [a for a in argv if a != "--report-only"]
+    report_only = "--report-only" in argv
     root = args[0] if args else DEFAULT_ROOT
     if not os.path.isdir(root):
         sys.stderr.write("扫描根不存在：%s\n" % root)
@@ -178,6 +182,154 @@ def main():
     print("✅ 未达标全部在册（%d 处 / %d 个文件，另有 %d 处读接口失败已留可见出口）"
           % (KNOWN_TOTAL, len(KNOWN_UNFIXED), total - KNOWN_TOTAL))
     return 0
+
+
+# ---------------- 自检（九把刀，一条一个目录） ----------------
+# 这本判的是"失败之后页面留没留下一格真话"，五种坏法各对一把：没 catch、catch 什么都不做、
+# 把写口当读口数、把注释里的读口数成候选，以及最阴的一种——修好了却不改在册表（数字停在旧值没人发现）。
+
+def _vue(body):
+    return "<template><div>x</div></template>\n<script setup lang=\"ts\">\n%s</script>\n" % body
+
+
+FX_NO_CATCH = _vue("""
+const load = async () => {
+  try {
+    rows.value = await OrderApi.getOrderPage(query)
+  } finally {
+    loading.value = false
+  }
+}
+""")
+FX_ERROR_STATE = _vue("""
+const load = async () => {
+  try {
+    rows.value = await OrderApi.getOrderPage(query)
+  } catch (e) {
+    rows.value = []
+    listError.value = '列表没读到：' + e.message
+  }
+}
+""")
+FX_CLEAR_ONLY = _vue("""
+const load = async () => {
+  try {
+    detail.value = await OrderApi.getOrder(id)
+  } catch (e) {
+    detail.value = null
+  }
+}
+""")
+FX_COMMENT_ONLY = _vue("""
+const load = async () => {
+  try {
+    // await OrderApi.getOrderPage(query)   这行早已注释掉
+    const r = await otherLocalThing()
+  } catch (e) {
+  }
+}
+""")
+FX_WRITE_CALL = _vue("""
+const submit = async () => {
+  try {
+    await OrderApi.createOrder(form)
+  } catch (e) {
+    message.error('失败了')
+  }
+}
+""")
+
+
+def _write(tmp, name, body):
+    d = os.path.join(tmp, name)
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "a.vue")
+    with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body)
+    return d, p
+
+
+def run_self_test():
+    import shutil
+    import tempfile
+
+    rc = 0
+    tmp = tempfile.mkdtemp(prefix="catchld-")
+    cases = [
+        ("K1 只有 try/finally、没有 catch 的读口必须被数到", FX_NO_CATCH, 1, 1),
+        ("K2 catch 写了错误态就达标", FX_ERROR_STATE, 1, 0),
+        ("K3 catch 只清数据也算达标", FX_CLEAR_ONLY, 1, 0),
+        ("K4 注释里的读口不算候选（否则判据数的是假形状）", FX_COMMENT_ONLY, 0, 0),
+        ("K5 写口的 catch 不归这本管", FX_WRITE_CALL, 0, 0),
+    ]
+    try:
+        for i, (name, body, want_c, want_b) in enumerate(cases):
+            _d, p = _write(tmp, "k%d" % (i + 1), body)
+            c, b = scan(p)
+            if c != want_c or len(b) != want_b:
+                print("✘ %s：候选 %d/%d、未达标 %d/%d（%s）"
+                      % (name, c, want_c, len(b), want_b, [x[1][:24] for x in b]))
+                rc = 1
+            else:
+                print("✔ %s（候选 %d / 未达标 %d）" % (name, c, len(b)))
+
+        argv_bak = list(sys.argv)
+        ledger_bak = dict(KNOWN_UNFIXED)
+        total_bak = KNOWN_TOTAL
+
+        def run_main(root_arg, ledger, ledger_total):
+            sys.argv = ["x", root_arg]
+            KNOWN_UNFIXED.clear()
+            KNOWN_UNFIXED.update(ledger)
+            globals()["KNOWN_TOTAL"] = ledger_total
+            try:
+                return main()
+            finally:
+                sys.argv = list(argv_bak)
+                KNOWN_UNFIXED.clear()
+                KNOWN_UNFIXED.update(ledger_bak)
+                globals()["KNOWN_TOTAL"] = total_bak
+
+        # K6 修好了却不改在册表：表里写着 1 处，树上是 0 处 ⇒ 必须红
+        d6, _ = _write(tmp, "k6", FX_ERROR_STATE)
+        got6 = run_main(d6, {"a.vue": 1}, 1)
+        if got6 != 1:
+            print("✘ K6 在册表停在旧值却 rc=%d（期望 1：数字变小必须同轮改表）" % got6)
+            rc = 1
+        else:
+            print("✔ K6「修好了不登记」红")
+        # K7 新出现的未达标文件不在册 ⇒ 红
+        d7, _ = _write(tmp, "k7", FX_NO_CATCH)
+        got7 = run_main(d7, {}, 0)
+        if got7 != 1:
+            print("✘ K7 新的未达标文件 rc=%d（期望 1）" % got7)
+            rc = 1
+        else:
+            print("✔ K7 新增未达标即红（不在册就不许混过去）")
+        # K8 一个候选都没数到 ⇒ rc=2，不许读成"失败都有出口"
+        d8 = os.path.join(tmp, "k8")
+        os.makedirs(d8, exist_ok=True)
+        with io.open(os.path.join(d8, "a.vue"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("<template><div>只读展示</div></template>\n")
+        got8 = run_main(d8, {}, 0)
+        if got8 != 2:
+            print("✘ K8 无候选 rc=%d（期望 2）" % got8)
+            rc = 1
+        else:
+            print("✔ K8 候选数为 0 走 rc=2 出口")
+        # K9 真树：在册表与读数必须还互相对得上
+        if os.path.isdir(DEFAULT_ROOT):
+            got9 = run_main(DEFAULT_ROOT, ledger_bak, total_bak)
+            if got9 != 0:
+                print("✘ K9 真树 rc=%d" % got9)
+                rc = 1
+            else:
+                print("✔ K9 真树在册对齐（见上一行读数）")
+        else:
+            print("! K9 跳过：不在仓库根运行")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return rc
 
 
 if __name__ == "__main__":

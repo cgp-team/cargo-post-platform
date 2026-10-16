@@ -22,6 +22,7 @@
 
 用法：
     python3 scripts/check_admin_write_button_guard.py [--report-only] [扫描根]
+    python3 scripts/check_admin_write_button_guard.py --self-test    # 九把刀各占一个目录
 退出码：0 = 全部达标；1 = 有未达标（逐条列 文件:行）；2 = 扫描根不存在 / 一个写按钮都没数到（判据没跑起来）。
 """
 
@@ -86,8 +87,11 @@ def scan(path):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--report-only"]
-    report_only = "--report-only" in sys.argv[1:]
+    argv = sys.argv[1:]
+    if "--self-test" in argv:
+        return run_self_test()
+    args = [a for a in argv if a != "--report-only"]
+    report_only = "--report-only" in argv
     root = args[0] if args else DEFAULT_ROOT
     if not os.path.isdir(root):
         sys.stderr.write("扫描根不存在：%s\n" % root)
@@ -120,6 +124,115 @@ def main():
         print("✅ %d 个写按钮都在飞保护里，且没有孤儿 Loading 变量" % counted)
         return 0
     return 0 if report_only else 1
+
+
+# ---------------- 自检（九把刀，一条一个目录） ----------------
+# 这的一本的历史 bug 在 K6：模板里有内层 `<template #default>` 列插槽时，
+# 按 `split("</template>")[0]` 取模板会把页面截断在半路 —— 真问题扫不出来，闸永远绿。
+
+FX_NO_GUARD = '''<template>
+  <Dialog title="发送通知">
+    <el-button type="primary" @click="submitSend">发送</el-button>
+  </Dialog>
+</template>
+<script setup lang="ts">
+const submitSend = async () => {}
+</script>
+'''
+
+FX_LOADING_BOUND = FX_NO_GUARD.replace('@click="submitSend"', '@click="submitSend" :loading="sendLoading"')
+FX_DISABLED_BOUND = FX_NO_GUARD.replace('@click="submitSend"', '@click="submitSend" :disabled="sendLoading"')
+FX_FAKE_GUARD = FX_NO_GUARD.replace('@click="submitSend"', '@click="submitSend" :disabled="collectDisabled"')
+FX_DEAD_VAR = FX_NO_GUARD.replace('@click="submitSend"', '@click="submitSend" :loading="sendLoading"').replace(
+    "const submitSend = async () => {}",
+    "const sendLoading = ref(false)\nconst submitSend = async () => { sendLoading.value = true }")
+# K6 的 fixture 把按钮**放进列插槽里**（页面上多出一个内层 `</template>`）：
+# 旧写法 `text.split("</template>")[0]` 会在这里把模板截断，按钮直接消失，闸永远绿。
+FX_SLOT = FX_NO_GUARD.replace(
+    '<el-button type="primary" @click="submitSend">发送</el-button>',
+    '<el-table-column label="操作"><template #default="scope">\n'
+    '      <el-button type="primary" @click="submitSend">发送</el-button>\n'
+    '    </template></el-table-column>')
+FX_READONLY = FX_NO_GUARD.replace('type="primary" @click="submitSend"', '@click="getList"')
+
+
+def run_self_test():
+    import shutil
+    import tempfile
+
+    rc = 0
+    tmp = tempfile.mkdtemp(prefix="btn-")
+    # (名字, fixture, 期望的按钮违规数, 期望数到的写按钮数, 期望的死变量数)
+    cases = [
+        ("K1 写按钮没绑在飞标志必须被数到", FX_NO_GUARD, 1, 1, 0),
+        ("K2 绑了 :loading 达标", FX_LOADING_BOUND, 0, 1, 0),
+        ("K3 绑了 :disabled=\"xLoading\" 同样达标", FX_DISABLED_BOUND, 0, 1, 0),
+        ("K4 只绑一个按行数禁用的 :disabled 仍算没保护（本仓真那一格）", FX_FAKE_GUARD, 1, 1, 0),
+        ("K5 Loading 绑上了就不算死变量；绑与没绑两条各数一次", FX_DEAD_VAR, 0, 1, 0),
+        ("K6 按钮在内层列插槽里也必须被数到（历史截断 bug）", FX_SLOT, 1, 1, 0),
+        ("K7 非写动词的按钮不计入", FX_READONLY, 0, 0, 0),
+    ]
+    try:
+        for i, (name, body, want_bad, want_counted, want_dead) in enumerate(cases):
+            d = os.path.join(tmp, "k%d" % (i + 1))
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, "a.vue")
+            with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            b, dead, counted = scan(p)
+            if len(b) != want_bad or counted != want_counted or len(dead) != want_dead:
+                print("✘ %s：按钮违规 %d/%d、写按钮 %d/%d、死变量 %d/%d"
+                      % (name, len(b), want_bad, counted, want_counted, len(dead), want_dead))
+                rc = 1
+            else:
+                print("✔ %s（违规 %d 处 / 写按钮 %d 个 / 死变量 %d 个）" % (name, len(b), counted, len(dead)))
+        # K5b 死变量那一格单独一条：声明了 sendLoading 但按钮没绑 ⇒ 必须数到 1 个死变量
+        d5b = os.path.join(tmp, "k5b")
+        os.makedirs(d5b, exist_ok=True)
+        p5b = os.path.join(d5b, "a.vue")
+        with io.open(p5b, "w", encoding="utf-8", newline="\n") as f:
+            f.write(FX_NO_GUARD.replace(
+                "const submitSend = async () => {}",
+                "const sendLoading = ref(false)\nconst submitSend = async () => { sendLoading.value = true }"))
+        b5, dead5, c5 = scan(p5b)
+        if len(dead5) != 1 or len(b5) != 1:
+            print("✘ K5b 声明了却没绑：死变量 %d（期望 1）、按钮违规 %d（期望 1）%s" % (len(dead5), len(b5), dead5))
+            rc = 1
+        else:
+            print("✔ K5b Loading 声明了但模板从没绑 ⇒ 死变量数到（%s）" % ",".join(dead5))
+        # K8 一个写按钮都没数到 ⇒ main 必须 rc=2，不许读成"全部有保护"
+        d8 = os.path.join(tmp, "k8")
+        os.makedirs(d8, exist_ok=True)
+        with io.open(os.path.join(d8, "a.vue"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("<template><div>只读页</div></template>\n")
+        argv_bak = sys.argv
+        sys.argv = ["x", d8]
+        try:
+            got8 = main()
+        finally:
+            sys.argv = argv_bak
+        if got8 != 2:
+            print("✘ K8 空样本 rc=%d（期望 2）" % got8)
+            rc = 1
+        else:
+            print("✔ K8 无写按钮走 rc=2 出口")
+        # K9 真树
+        if os.path.isdir(DEFAULT_ROOT):
+            sys.argv = ["x"]
+            try:
+                got9 = main()
+            finally:
+                sys.argv = argv_bak
+            if got9 != 0:
+                print("✘ K9 真树 rc=%d" % got9)
+                rc = 1
+            else:
+                print("✔ K9 真树达标（见上一行读数）")
+        else:
+            print("! K9 跳过：不在仓库根运行")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return rc
 
 
 if __name__ == "__main__":

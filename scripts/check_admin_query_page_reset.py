@@ -18,6 +18,7 @@
 用法：
     python3 scripts/check_admin_query_page_reset.py                # 扫默认根
     python3 scripts/check_admin_query_page_reset.py --report-only  # 只点名，不判红
+    python3 scripts/check_admin_query_page_reset.py --self-test    # 八把刀各占一个目录
 退出码：0 = 全部达标；1 = 有未达标页面（逐条列出 文件:行 与函数名）；
         2 = 扫描根不存在 / 一个搜索入口都没数到（"数到 0"绝不能读成"没有问题"）。
 """
@@ -133,8 +134,11 @@ def scan_file(path):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--report-only"]
-    report_only = "--report-only" in sys.argv[1:]
+    argv = sys.argv[1:]
+    if "--self-test" in argv:
+        return run_self_test()
+    args = [a for a in argv if a != "--report-only"]
+    report_only = "--report-only" in argv
     root = args[0] if args else DEFAULT_ROOT
     if not os.path.isdir(root):
         sys.stderr.write("扫描根不存在：%s\n" % root)
@@ -167,6 +171,115 @@ def main():
         print("× %s:%d  @%s=%s —— %s" % (rel, ln, kind, name, why))
     print("❌ %d 处搜索入口带着旧页码发请求（共 %d 处）" % (len(bad), entries))
     return 0 if report_only else 1
+
+
+# ---------------- 自检（八把刀，一条一个目录：同目录放多条 fixture 会让读数互相顶包） ----------------
+# 每把刀对的是这本的一个具体坏法，不是"跑一下没报错"。
+
+FX_BAD = '''<template>
+  <Pagination v-model:page="query.pageNo" :page-size="10" />
+  <el-button type="primary" @click="handleSearch"><Icon icon="ep:search" />搜索</el-button>
+</template>
+<script setup lang="ts">
+const query = reactive({ pageNo: 1, keyword: "" })
+const handleSearch = async () => {
+  await Api.page(query)
+}
+</script>
+'''
+
+FX_GOOD = FX_BAD.replace("  await Api.page(query)", "  query.pageNo = 1\n  await Api.page(query)")
+
+FX_MULTI = FX_BAD.replace(
+    '<el-button type="primary" @click="handleSearch"><Icon icon="ep:search" />搜索</el-button>',
+    '<el-button type="primary" @click="handleSearch">\n    <Icon icon="ep:search" />\n    搜索\n  </el-button>')
+
+FX_ONELINE = FX_GOOD.replace(
+    'const handleSearch = async () => {\n  query.pageNo = 1\n  await Api.page(query)\n}',
+    'const handleSearch = async () => { query.pageNo = 1; await Api.page(query) }')
+
+FX_ENTER_SUBMIT = '''<template>
+  <Pagination v-model:page="q.pageNo" />
+  <el-input v-model="q.keyword" @keyup.enter="doSearch" />
+  <el-form @submit.prevent="doSubmit">
+    <el-button type="primary"><Icon icon="ep:search" /></el-button>
+  </el-form>
+</template>
+<script setup lang="ts">
+const q = reactive({ pageNo: 1, keyword: "" })
+const doSearch = () => { fetch(q) }
+const doSubmit = () => { fetch(q) }
+</script>
+'''
+
+FX_NOPAGING = FX_BAD.replace('<Pagination v-model:page="query.pageNo" :page-size="10" />\n  ', "")
+
+
+def run_self_test():
+    import shutil
+    import tempfile
+
+    rc = 0
+    tmp = tempfile.mkdtemp(prefix="qpres-")
+    cases = [
+        ("K1 带旧页码的搜索入口必须被数到", FX_BAD, 1),
+        ("K2 复位的写法不算违规", FX_GOOD, 0),
+        ("K3 回车与表单提交两条路径都要查（只做按钮=窄化）", FX_ENTER_SUBMIT, 2),
+        ("K4 跨行按钮（图标在子节点）仍认得出搜索入口", FX_MULTI, 1),
+        ("K5 函数体收在同一行也要取出来（别误报成找不到定义）", FX_ONELINE, 0),
+        ("K6 没有分页的页面不参与（免得闸做成误红）", FX_NOPAGING, 0),
+    ]
+    try:
+        for i, (name, body, want) in enumerate(cases):
+            d = os.path.join(tmp, "k%d" % (i + 1))
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, "a.vue")
+            with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            hits = scan_file(p)
+            n = 0 if hits is None else len(hits)
+            if hits is None and want == 0 and name.startswith("K6"):
+                print("✔ %s（该页无分页，整页不参与）" % name)
+                continue
+            if n != want:
+                print("✘ %s：期望 %d 处，实得 %d（%s）" % (name, want, n, [h[3][:28] for h in (hits or [])]))
+                rc = 1
+            else:
+                print("✔ %s（%d 处）" % (name, n))
+        # K7 扫描面里一个入口都没有 ⇒ main 必须走 rc=2，不许读成"全部达标"
+        d7 = os.path.join(tmp, "k7")
+        os.makedirs(d7, exist_ok=True)
+        with io.open(os.path.join(d7, "b.vue"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("<template><div>没有分页也没有搜索</div></template>\n")
+        argv_bak = sys.argv
+        sys.argv = ["x", d7]
+        try:
+            got7 = main()
+        finally:
+            sys.argv = argv_bak
+        if got7 != 2:
+            print("✘ K7 空样本 rc=%d（期望 2：数到 0 不是达标）" % got7)
+            rc = 1
+        else:
+            print("✔ K7 空样本走 rc=2 出口")
+        # K8 真树：必须 rc=0 且对照数>0（这条把"自检过了"钉在真产物上）
+        if os.path.isdir(DEFAULT_ROOT):
+            argv_bak = sys.argv
+            sys.argv = ["x"]
+            try:
+                got8 = main()
+            finally:
+                sys.argv = argv_bak
+            if got8 != 0:
+                print("✘ K8 真树 rc=%d" % got8)
+                rc = 1
+            else:
+                print("✔ K8 真树达标（见上一行读数）")
+        else:
+            print("! K8 跳过：不在仓库根运行")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return rc
 
 
 if __name__ == "__main__":

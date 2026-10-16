@@ -16,6 +16,7 @@ CI 一片绿 —— 少东西比红难发现得多，所以这一格必须静态
 用法：
     python scripts/check_menu_id_collisions.py [扫描根，默认 sql/]
     python scripts/check_menu_id_collisions.py --report-only   # 只打表，不判红
+    python scripts/check_menu_id_collisions.py --self-test     # 七把刀各占一个目录
 退出码：0 = 没有跨文件撞号；1 = 有撞号（逐条列出）；2 = 扫描根不存在或一个候选都没数到
         （"数到 0 个"绝不能读成"没有问题"，那是判据没跑起来的形态）。
 """
@@ -49,8 +50,11 @@ def kt_files(root):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != '--report-only']
-    report_only = '--report-only' in sys.argv[1:]
+    argv = sys.argv[1:]
+    if '--self-test' in argv:
+        return run_self_test()
+    args = [a for a in argv if a != '--report-only']
+    report_only = '--report-only' in argv
     root = args[0] if args else 'sql'
     if not os.path.isdir(root):
         sys.stderr.write('扫描根不存在：%s\n' % root)
@@ -102,6 +106,82 @@ def main():
         return 0
     print('❌ %d 个 id 被两个以上文件认领' % bad)
     return 0 if report_only else 1
+
+
+# ---------------- 自检（七把刀，一条一个目录） ----------------
+# 这本的历史坏法就是"两边各自都不报错、先落地的赢"，所以刀口对着**判据自己的两种写法**：
+# VALUES 里的 `(<id>, ...` 与幂等脚本里的 `SELECT <id>, ...` 必须都认，只认一种就等于没认。
+
+V_FORM = "INSERT INTO system_menu (id, name, permission) VALUES\n  (%s, '甲页', '%s');\n"
+S_FORM = "INSERT INTO system_menu (id, name, permission)\nSELECT %s, '甲页', '%s' FROM dual;\n"
+
+
+def _run(root):
+    argv_bak = list(sys.argv)
+    sys.argv = ['x', root]
+    try:
+        return main()
+    finally:
+        sys.argv = argv_bak
+
+
+def run_self_test():
+    import shutil
+    import tempfile
+
+    rc = 0
+    tmp = tempfile.mkdtemp(prefix='menuid-')
+    cases = [
+        ('K1 两个文件用同一种写法认领同 id、permission 不同 ⇒ 判撞号',
+         [V_FORM % ('6930', 'transport:a:query'), V_FORM % ('6930', 'transport:b:query')], 1),
+        ('K2 同一文件内把同 id 写两遍不判撞号（那是它自己的事）',
+         [V_FORM % ('6931', 'transport:a:query') + V_FORM % ('6931', 'transport:b:query')], 0),
+        ('K3 跨文件同 id 且 permission 相同 ⇒ 复制粘贴，不判撞号',
+         [V_FORM % ('6932', 'transport:a:query'), S_FORM % ('6932', 'transport:a:query')], 0),
+        ('K4 两种写法各认一种就必须红（VALUES × SELECT 混着写也算撞号）',
+         [V_FORM % ('6933', 'transport:a:query'), S_FORM % ('6933', 'transport:b:query')], 1),
+        ('K5 VALUES 续行 `, (<id>, ...` 这一形也被认（漏了它候选数会少一片）',
+         ['INSERT INTO system_menu (id, name, permission) VALUES\n  (6934, %s),\n  , (6935, %s);\n'
+          % ("'甲', 'transport:a:query'", "'乙', 'transport:b:query'"),
+          V_FORM % ('6935', 'transport:c:query')], 1),
+    ]
+    try:
+        for i, (name, files, want) in enumerate(cases):
+            d = os.path.join(tmp, 'k%d' % (i + 1))
+            os.makedirs(d, exist_ok=True)
+            for j, body in enumerate(files):
+                with io.open(os.path.join(d, 'f%d.sql' % (j + 1)), 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(body)
+            got = _run(d)
+            if got != want:
+                print('✘ %s：rc=%d（期望 %d）' % (name, got, want))
+                rc = 1
+            else:
+                print('✔ %s（rc=%d）' % (name, got))
+        # K6 一个主键声明都没数到 ⇒ rc=2，不许读成"没有撞号"
+        d6 = os.path.join(tmp, 'k6')
+        os.makedirs(d6, exist_ok=True)
+        with io.open(os.path.join(d6, 'a.sql'), 'w', encoding='utf-8', newline='\n') as f:
+            f.write('-- 这个脚本不插菜单\nSELECT 1;\n')
+        got6 = _run(d6)
+        if got6 != 2:
+            print('✘ K6 空样本 rc=%d（期望 2）' % got6)
+            rc = 1
+        else:
+            print('✔ K6 数到 0 条主键声明走 rc=2 出口')
+        # K7 真树
+        if os.path.isdir('sql'):
+            got7 = _run('sql')
+            if got7 != 0:
+                print('✘ K7 真树 rc=%d' % got7)
+                rc = 1
+            else:
+                print('✔ K7 真树没有跨文件撞号（见上一行读数）')
+        else:
+            print('! K7 跳过：不在仓库根运行')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return rc
 
 
 if __name__ == '__main__':
