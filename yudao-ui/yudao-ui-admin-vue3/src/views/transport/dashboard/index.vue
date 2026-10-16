@@ -253,12 +253,15 @@ const initSettleRange = () => {
 
 const quickLinks = [
   { label: '实时监控', path: '/transport/monitoring/map', icon: 'ep:map-location' },
-  { label: '站点管理', path: '/transport/station', icon: 'ep:location' },
-  { label: '车辆管理', path: '/transport/vehicle', icon: 'ep:van' },
-  { label: '线路管理', path: '/transport/route', icon: 'ep:guide' },
-  { label: '司机管理', path: '/transport/driver', icon: 'ep:user' },
-  { label: '班次管理', path: '/transport/shift', icon: 'ep:clock' },
-  { label: '订单管理', path: '/transport/order', icon: 'ep:document' }
+  // 六个管理入口必须指到**带组件的叶子**（`system_menu` 里 type=2）：
+  // `/transport/station` 那一档是目录节点（type=1、component=NULL），指过去只有一具空 Layout，
+  // 页面不报错、也不弹提示 —— 六个按钮六个空。真正的叶子 path 在菜单里是 `.../list`。
+  { label: '站点管理', path: '/transport/station/list', icon: 'ep:location' },
+  { label: '车辆管理', path: '/transport/vehicle/list', icon: 'ep:van' },
+  { label: '线路管理', path: '/transport/route/list', icon: 'ep:guide' },
+  { label: '司机管理', path: '/transport/driver/list', icon: 'ep:user' },
+  { label: '班次管理', path: '/transport/shift/list', icon: 'ep:clock' },
+  { label: '订单管理', path: '/transport/order/list', icon: 'ep:document' }
 ]
 
 const fmtAmount = (value?: number) => Number(value ?? 0).toFixed(2)

@@ -245,5 +245,9 @@ jobs:
       # 下一个 PR 把直连接口加回来是最常见的回归，而"改完站点别的页面还在念旧表"是正确性问题
       - name: Static check admin station-dict sharing
         run: python3 scripts/check_admin_station_dict_sharing.py
+      # 写死的跳转必须落在有组件的菜单叶子上（队列 #63 / 台账 D-130）：
+      # 指向目录节点（type=1、component=NULL）不报错，只给一具空 Layout
+      - name: Static check admin hardcoded routes
+        run: python3 scripts/check_admin_dashboard_routes.py
       - name: Check generated-file drift
         run: git diff --exit-code
