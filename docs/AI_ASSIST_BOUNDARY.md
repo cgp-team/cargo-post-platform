@@ -122,14 +122,36 @@ create_time   datetime
 
 ## 7. 需要模型的部分，以及需要你提供的东西
 
+> **2026-10-16 更新：这一节的代码部分已经做完**（落点见 13.1 的 `AiGateway` / `AiTasks` / `AiTaskService` 三行）。
+> 现在只剩一件事需要人给：**一个可用的推理端点**。配置口只有一处 ——
+> `yudao-server/src/main/resources/application.yaml` 末尾的 `buspost.ai.*`（默认 `enabled: false`、密钥留空
+> ⇒ 全系统天然"未就绪"，后台其余页面零变化）。
+
 真正需要模型的只有：工单语义分类与照片是否支撑描述（视觉）、口语上报的同义归并、
 反馈的主题聚类、以及把上面四项的输出**润色成文字**。前提条件三件，缺一不可：
 
 1. 一个可用的推理端点（内网自建或外部服务）+ 出网策略，配在云上那台机器 —— **服务器我管不到**，
    密钥一律不进仓库、不进日志、不进台账；
-2. `application-*.yaml` 里加 `buspost.ai.base-url / api-key(走环境变量) / model / timeout`；
+2. `application.yaml` 里的 `buspost.ai.*`。请求体走 **OpenAI 兼容的 `/chat/completions`**、不引任何厂商 SDK，
+   所以**云上 API 与自部署只改三个值**（`base-url` / `api-key` / `model`）：
+
+   | 端点形态 | `base-url` | `model` | `vision-model` |
+   |---|---|---|---|
+   | 云上 · DashScope 兼容模式 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | `qwen-vl-plus` |
+   | 云上 · OpenAI 兼容 | `https://api.openai.com/v1` | 自定 | 自定 |
+   | 自部署 · vLLM / 内网网关 | `http://<内网IP>:8000/v1` | 部署时给的模型名 | 有视觉模型才填 |
+   | 自部署 · Ollama openai 层 | `http://127.0.0.1:11434/v1` | `qwen2.5:7b-instruct` | `qwen2.5vl:7b` |
+
+   `api-key` **只从环境变量 `BUSPOST_AI_API_KEY` 注入**（yaml 里写的是 `${BUSPOST_AI_API_KEY:}`，仓库里永远看不到真值）；
+   `timeout-ms`（默认 8000）真的传给 HTTP 客户端（connect + request 两处），`max-input-chars`（默认 4000）
+   是送出去之前的截断上限，截了会在提示里写明"原长 N 字"。
 3. 一句可验收的口径：拿不到端点时，页面显示"能力未就绪"，**不许用模板文案冒充 AI 输出**
-   （本仓红线：不许演示形态、不许假能力）。
+   （本仓红线：不许演示形态、不许假能力）。这条现在**有用例钉着**：`AiTaskServiceTest` 第 1 个用例
+   断言开关关掉时五个任务的 `ready/parsed=false`、`suggestion/basis/rawText` 全为 null，
+   并与第 4 个用例（端点齐备时真发一次、解析成草稿、明文手机号没出网）配成一对正负对照。
+
+⚠ `vision-model` 留空 ⇒ "照片是否支撑描述"这一项**直接报未就绪且一次外呼都不发**，
+不退化成"只看文字猜照片"（`AiTaskService#checkPhotoSupport`，同文件第 6 个用例钉着）。
 
 ## 8. 明确不做 / 待前置
 
@@ -205,6 +227,11 @@ create_time   datetime
 
 > 本节由 AI 辅助线（队列 #93）在实现 §6 时追加。上面 §0–§12 是主线写的契约，**不改动**；
 > 这一节只登记"落地读数 / 没做的 / 依赖申请"，让接手的人不用重新考古。
+>
+> ⚠ **本条规矩在 2026-10-16 破了一次，破在哪要说清**：§7 被就地改写了（原文那三件前提里的第 2 件
+> "需要你在 `application-*.yaml` 里加键"已经做完了，留着就是假账）。改动只做了两件事：
+> 把"要你提供什么"改成**一个配置口 + 云上/自部署各改哪三个值**，并把"不许用模板文案冒充 AI 输出"
+> 那条口径指到钉它的用例上。§0–§6、§8–§12 一字未动。
 
 ### 13.1 已落地（均可被仓内判据复核）
 
@@ -214,17 +241,23 @@ create_time   datetime
 | §6 第 4 项 查询构造器+简报 | 表 `ai_saved_query`（`V052`，菜单 7120–7123）+ CRUD `/transport/ai/saved-query/*`；模板排版 `POST /transport/ai/briefing/render`；`views/transport/ai/query-builder/**` | 同上 |
 | §7 AI 外壳（开关 + 能力未就绪） | `buspost.ai.*` 用 `@Value` 读（**默认 off/空 ⇒ 天然"未就绪"，不改任何 yaml**）；`GET /transport/ai/capability/status`（菜单 7130，`V053`）；`views/transport/ai/capability/**` | 见 13.5 读数 |
 | §5 调用日志（契约里唯一新增的表） | 表 `ai_invocation_log`（`V054`，菜单 7140，**只读页**）；`AiInvocationLogServiceImpl#record` 为**旁路**（落库失败不抛、但记 error 级日志）；`GET /transport/ai/invocation-log/page`；`views/transport/ai/invocation-log/**` | 同上 |
-| 云端迁移通道 | `V050`–`V054` 已进 `db-migrate-guarded.yml` 的 apply 白名单（`V050` 现仅建所有 AI 页共用的顶级目录 7100），并补了 14 格 `probe`/`probe_strict`（check 只读、apply 需 `confirm=APPLY`；格数 15→29，含主线 V037 那 3 格） | YAML 可解析；`mode=check` 里探不到不算失败 |
+| 云端迁移通道 | `V050`–`V055` 已进 `db-migrate-guarded.yml` 的 apply 白名单（`V050` 现仅建所有 AI 页共用的顶级目录 7100；白名单共 **15 支** = `V028`、`V030`–`V037`、`V050`–`V055`，`V029` 明确排除），并补了探针（check 只读、apply 需 `confirm=APPLY`；`probe`/`probe_strict` 各 **32 格**，含主线 V037 那 3 格） | YAML 可解析；**白名单在本机 MySQL 上跑两遍零漂移、32 格探针对得上**（见 13.5 第 16 本） |
+| **§7 五个模型任务 + 一条规则提示**（2026-10-16 补） | `core/AiGateway`（**唯一外呼口**：JDK `HttpClient` 打 OpenAI 兼容 `/chat/completions`，非 2xx→`http_error`、2xx 无正文→`empty`、未就绪→`not_ready`，**每次都写 `ai_invocation_log`** 且留痕是旁路）；`core/AiTasks`（纯函数：提示词 + 严格解析 + "数字没被改"的集合比对）；`service/task/AiTaskService`（5 个模型任务 + **不依赖模型**的 `scenarioHints`，只读 transport 那份日历）；`POST /transport/ai/task/{classify,photo-support,merge,cluster,polish}` + `GET /transport/ai/task/scenario-hints`；`views/transport/ai/assist/index.vue` | 见 13.5 读数 |
+| **§7 配置口（云上 / 自部署只改三个值）**（2026-10-16 补） | `application.yaml` 末尾新增 `buspost.ai.*` 一段（纯 CRLF 追加，9 条配置行；文件 4 个 YAML 文档均无 profile 守卫 ⇒ 默认生效）；`AiAssistProperties#endpointReady/visionReady/chatCompletionsUrl` | `yaml.safe_load_all` 4 文档、doc3 读到该段；`enabled:false` + 密钥空 ⇒ 能力页念未就绪 |
+| **菜单 `V055`**（2026-10-16 补） | 7150「AI 辅助工作台」（`transport:ai:scenario:query`，组件 `transport/ai/assist/index`）+ 7151 按钮权限（`transport:ai:task:run`）；按权限串判存在 + `INSERT IGNORE` 授角色 ⇒ 幂等 | 第 1 本闸（menu_id_collisions）76 条主键 / 73 个不同 id，`rc=0` |
+| **§4 脱敏收进唯一出口**（2026-10-16 补） | `transport/util/SensitiveDataMask#maskEmbeddedMobiles`（**出口内部再自检一次**，掩不干净就抛）；AI 侧不再自写手机号正则 —— `AiTaskService#mask` 调出口 + `AiTasks#assertNoPlainMobile` 二次断言 | 第 13 本闸"AI 面命中 0 处"；出口自测 +2 用例（transport 387→389） |
+| **第 15 本静态闸**（2026-10-16 补） | `scripts/check_ai_assist_boundaries.py`：A1 任务目录里不许出现业务写口 / A2 只有 `AiGateway` 能做 HTTP / A3 日志生产者 ≥1 / A4 密钥只与 `Authorization` 同现 / A5 返回只能是 `Draft`；K1–K6 刀口 + K7 真树读数 | `rc=0`；`--self-test rc=0`（K6 证明"密钥出现在没有 Authorization 的文件里"会红） |
+| **第 12 本闸的扫描根补齐**（2026-10-16 补，队列 #99） | `check_admin_write_idempotency.py`：`MODULE_ADMIN` 加 ai-assist=(10,1)，并加 `MUST_COVER_OWNER` + `demand` 过滤 ⇒ **模块还没落地时大声跳过，而不是把"端点被删了"念成合规**；K8/K9 两把刀专门钉这本闸自己的覆盖面 | `rc=0`（写口 10 / 在册 10 / 自带幂等键 1）；`--self-test rc=0` |
 
 三条纪律落在代码里，接手时别破坏：**未录容量 ≠ 0 座**（`CapacityConflictServiceImpl`）；**缺值不折叠成 0**（简报数值用文字承载）；**只读不写**（两个新接口都不落库、不注入写口）。
 
 ### 13.2 没做 / 本线做不到的（需要下一个 agent 或主线配合）
 
-1. **界面点验**：四条页面（capacity-conflict、query-builder、capability、invocation-log）**未在真机/浏览器点验** ⇒ 按 §9.5 登记 **NOT VERIFIED IN BROWSER**。交接后请点一遍：菜单「AI 辅助」下的四个页、查询构造器的增删改、客货检视的"未录容量"分支、以及能力状态页在"未配置端点"时应显示「未就绪」。
+1. **界面点验**：五条页面（capacity-conflict、query-builder、capability、invocation-log、**assist**）**未在真机/浏览器点验** ⇒ 按 §9.5 登记 **NOT VERIFIED IN BROWSER**。交接后请点一遍：菜单「AI 辅助」下的五个页、查询构造器的增删改、客货检视的"未录容量"分支、能力状态页在"未配置端点"时应显示「未就绪」，以及 **assist 页在默认配置（开关关）下六格全部念「未就绪 / 没有产生任何 AI 输出」而不是空白或假忙**。
 2. **§6.3 接真实数据（依赖申请）**：平台里**没有"预报量"的存储字段**——真实数据是"车辆核定容量（`transport_vehicle`）+ 订单池/计划量（`transport_order` 系列、`transport_dispatch_plan_item.quantity`）"。要自动带出这两头，需要在 `yudao-module-transport` 新增一个**只读 `api` 包**（该模块目前没有 `api` 包，也没有任何模块依赖它的先例）。当前实现是"页面手工录入 + 服务端确定性判定"，功能闭环但不自动。
 3. **§6.4 定时聚合**：需要"读既有聚合 + 调度器 + 落库位置"，本期只做了**存条件 + 模板排版**。"自然语言"那一层（话→参数）未做，且契约已定**永远不做话→SQL**。
-4. **§7 AI 外壳（部分已做）**：开关读取 + `GET /transport/ai/capability/status` + 「能力未就绪」页已落地（用 `@Value` 默认值绕开，**未改 `application-*.yaml`**）。仍缺：主线在 `application-*.yaml` 里补 `buspost.ai.*` 键（本线**没碰 yaml**，属依赖申请）、以及所有真正的模型功能。红线不变：不许用模板文案冒充 AI 输出。
-5. **§9 第 4 条「关掉 AI 仍完整可用」检查**：开关已落地但**无任何模型功能消费它**，所以该检查现在只是"恒真"；等真正的 AI 功能接上后必须重做。
+4. **§7 AI 功能（2026-10-16 已补齐代码，只剩端点）**：开关 + `GET /transport/ai/capability/status` + 「能力未就绪」页 + **五个模型任务与一条规则提示**都已落地；`application.yaml` 里的 `buspost.ai.*` 也由本线补上了（原先是"依赖申请"）。**仍缺的只有一件：一个真实可用的推理端点**（`base-url` + `BUSPOST_AI_API_KEY` + `model`）—— 这要配在云上那台机器上，**服务器由用户管，谁都不要直接连**。在端点配好之前，assist 页六格一律念「未就绪」，这是设计行为不是缺陷。红线不变：不许用模板文案冒充 AI 输出。
+5. **§9 第 4 条「关掉 AI 仍完整可用」检查**：现在有了真消费者，因此这条不再是"恒真"。已落地的部分是**用例级**的：`AiTaskServiceTest` 断言开关关掉时五个任务只回未就绪（`suggestion/basis/rawText` 全 null、恰好 4 条 `not_ready` 留痕），而不依赖模型的 `scenarioHints` 照样 `ready=true` 且 0 次外呼。**仍缺"页面集合级"的对照**：把 `enabled` 在 true/false 之间切换后，比对既有 transport 页面的路由集合与 15 本闸读数是否一字不变 —— 这一步需要在浏览器里点，与第 1 条一起做。
 
 ### 13.3 并行写入者：事件日历重复已了结
 
@@ -236,7 +269,7 @@ create_time   datetime
 ### 13.4 台账与编号（接手前先看这段，防撞）
 
 - 台账 `DECISION_LOG.md` 在 `android-app` **子模块**里（本仓未检出，且 §11.13 时段内禁碰该树）。本线的决定（含 `NOT VERIFIED IN BROWSER`）**只写在提交信息里**，由主线并入台账。
-- 本线已占号：**迁移 `V050`（仅目录菜单）–`V054`**；**菜单 7100 / 7110 / 7120–7123 / 7130 / 7140**；**错误码 `1_006_002_xxx` / `1_006_003_xxx`**（事件日历已删，故 `1_006_001_xxx` 不再占用）。**`V055` 起、菜单 7150 起仍空闲。**
+- 本线已占号：**迁移 `V050`（仅目录菜单）–`V055`**；**菜单 7100 / 7110 / 7120–7123 / 7130 / 7140 / 7150–7151**；**错误码 `1_006_002_xxx` / `1_006_003_xxx`**（事件日历已删，故 `1_006_001_xxx` 不再占用）。**`V056` 起、菜单 7160 起仍空闲。**
 
 ### 13.5 本轮验证读数（2026-10-16）
 
@@ -248,3 +281,38 @@ create_time   datetime
   ⚠ 另一条读数值得留着：**不带 `clean`** 跑同一条命令时 `OAuth2TokenServiceImplTest.testGetAccessTokenPage` 会报 `expected <1> but was <2>`
   —— 那是旧 target 状态造成的假失败（上游模块，与本线无关），**归因要用 CI 的确切命令，不能凭手感**。
 - 迁移脚本本身：只做了静态/idempotent 复核，**未连库执行**（走 guarded `check` 只读、`apply` 需人给 `confirm=APPLY`）。
+
+### 13.6 第二轮验证读数（2026-10-16 晚：§7 五个模型任务 + 配置口落地之后）
+
+- **Java**：`mvn -B -pl yudao-module-ai-assist -am clean test` ⇒ `MVN_RC=0` / `BUILD SUCCESS`；
+  `yudao-module-ai-assist` 聚合 **19 → 47**（新增 `AiTasksTest` 13 + `AiGatewayTest` 7 + **`AiTaskServiceTest` 8**），
+  `yudao-module-transport` **387 → 389**（脱敏出口那两个新用例），同轮 0 红 0 错。
+  ⚠ 这一轮我自己踩的一枪：`AiTaskService` 里遗留了一行 `private static final Pattern MOBILE`
+  （掩码收进唯一出口之后它就没人用了）⇒ 编译 `找不到符号 Pattern`。**处理是删掉那行死码，不是补 import**。
+- **前端**（照 CI frontend job 的步骤名与顺序跑，逐步读 rc）：
+  `build:prod` **rc=0**，产物 **`dist-prod/` 373 个文件**（`.env.prod: VITE_OUT_DIR=dist-prod`），
+  其中 `dist-prod/assets/assist-qeKOAw9D.js` 同时命中 `TransportAiAssist` 与页面里那句"这一格没有产生任何 AI 输出"
+  ⇒ 新页真进了产物。⚠ 我第一遍按 `dist/` 数，数到 **0** —— **探错目录会被读成"构建没产出"**，
+  已在跑手脚本里改成读 `VITE_OUT_DIR`；`vue-tsc --noEmit`（不带 `--incremental`，比 CI 严）**rc=0 / 0 错**；
+  `vitest run` **4 文件 / 54 用例**全过；`eslint src/views/transport` **rc=0**（0 error / 7 warning，均在既有页）；
+  SFC 结构扫（`vue/compiler-sfc` 的 parse + compileTemplate + compileScript）：`views/transport` **43 只全绿**，
+  其中 `views/transport/ai/**` **6 只**（含新的 `assist/index.vue`）。
+- **15 本静态闸**：全部 `rc=0`。本轮相关的四本 `--self-test` 全绿（`check_ai_assist_boundaries` K1–K7、
+  `check_admin_write_idempotency` K0–K9、`check_admin_ai_data_mask` K1–K7、`check_business_table_single_owner` K1–K7）。
+  一处**读数变化要留档**：`check_sql_function_arity` 107 → **108**（V037 新增的 `IF(@idx_exists=0,…)`）；
+  这本闸验的是每个 IF 的实参数目、不是总数，所以仍是绿 —— 记在这里免得下一个人把它当漂移。
+- **第 16 本判据（本机专用，不进 CI）**：`scripts/check_migration_idempotency.py` ⇒ `rc=0`，
+  **白名单 15 支跑两遍、逐表零漂移、32 格 `probe_strict` 全对**；`--self-test` K1–K7 全绿
+  （K4 非幂等 fixture 必须被数出来、K5 幂等 fixture 是配对正对照、K7 找不到 mysql 客户端 ⇒ `rc=2` 拒判）。
+  **改之前在同一台机器上的实测**：第 2 遍 `V037` 直接 `ERROR 1061 Duplicate key name 'idx_town_lookup'` 中断
+  （它后面那三条菜单授权因此根本跑不到），`system_role_menu` **466 → 481（+15 行）**，
+  **6 格探针从 1 变 2**（钱包 / V050 / V052 / V053 / V054 / V055）。
+  根因：`system_role_menu` 只有自增主键、**没有 `(role_id, menu_id)` 唯一键**（`sql/mysql/ruoyi-vue-pro.sql:3695`），
+  所以基线那种 `INSERT IGNORE` 挡不住重复；而 guarded 的 apply **每次都重跑整份白名单**。
+  ⇒ 10 支脚本的授权改成 `NOT EXISTS` 判重、V037 的裸 `CREATE INDEX` 换成 V024 那套 `information_schema + PREPARE`；
+  **同行替换**（行数与行尾一律不动 ⇒ 台账/工作流里按行号的锚点不受影响），
+  并把 10 处还在声称"INSERT IGNORE 可安全重复执行"的注释一并改掉（跑手最后会把这些行全打出来核，剩 0 条）。
+  ⚠ 这批脚本在改之前**从没被任何库执行过一次**（V037/V050–V055 都没上过云），
+  所以修掉的是"用户第一次点 apply 就会踩"的坑，不是历史脏数据。
+- **仍未做**：连**云**库执行（只能走 guarded `check` 只读 / `apply` 需人给 `confirm=APPLY`）；
+  以及 13.2 第 1 条那五条页面的浏览器点验（含新的 assist 页）。

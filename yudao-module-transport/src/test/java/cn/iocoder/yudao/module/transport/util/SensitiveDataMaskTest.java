@@ -51,4 +51,20 @@ class SensitiveDataMaskTest {
         assertTrue(SensitiveDataMask.tail4("123").endsWith("***"), SensitiveDataMask.tail4("123"));
         assertFalse(SensitiveDataMask.tail4("123").contains("12"), SensitiveDataMask.tail4("123"));
     }
+
+    /** 整段文本里内嵌的号码也要掩 —— AI 侧送出去的是这种文本，不是单独的 mobile 字段。 */
+    @Test
+    void 内嵌手机号逐个掩掉且不留残值() {
+        String out = SensitiveDataMask.maskEmbeddedMobiles("司机 13800138000 说路断了，联系 13912345678");
+        assertTrue(out.contains("138****8000"), out);
+        assertTrue(out.contains("139****5678"), out);
+        assertFalse(java.util.regex.Pattern.compile("1[3-9]\\d{9}").matcher(out).find(), "掩完仍残留明文：" + out);
+    }
+
+    /** 空白进空白出：把"没给"掩成 "***" 会被读成"有一个但被屏蔽了"（与金额缺值同一种病）。 */
+    @Test
+    void 空文本不被掩成占位串() {
+        assertNull(SensitiveDataMask.maskEmbeddedMobiles(null));
+        assertEquals("", SensitiveDataMask.maskEmbeddedMobiles(""));
+    }
 }

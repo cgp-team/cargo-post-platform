@@ -70,7 +70,12 @@ MODULE_ADMIN[ADMIN_ROOT] = (PIN_ADMIN_WRITES, PIN_COVERED)
 # POST /transport/ai/capacity-conflict/check、POST /transport/ai/briefing/render ⇒ 写口 5。
 # 名册只钉 create 一个：check / render 是**只算不写**的口（读实现确认过：一个走约束校验返回冲突点，
 # 一个把已聚合的数据排成简报），update / delete 重复=同结果 —— 按同一口径都不钉。
-PIN_AI_WRITES, PIN_AI_COVERED = 5, 1
+# 5 → 10（同日，接手后加 AI 辅助任务口）：新增 5 个 POST ——
+#   /task/classify-report、/task/photo-support、/task/merge-reports、/task/cluster-feedback、/task/polish-briefing。
+#   五个**都不钉键**，按同一口径逐条读过：它们只出草稿、不写业务表，重复执行的唯一副作用是多一条
+#   ai_invocation_log（审计记录本来就该一次一条）；钉上 10 秒键反而会让值班员"再问一次"直接失败。
+#   （/task/scenario-hints 是 GET，不计入写口。）
+PIN_AI_WRITES, PIN_AI_COVERED = 10, 1
 MODULE_ADMIN[AI_ROOT] = (PIN_AI_WRITES, PIN_AI_COVERED)
 # 明确划成"不在本闸范围"的上游模块（现读：system 106 / infra 30 / member 16 个写口，0 个带键）。
 # 为什么不管而不是"顺手一起钉"：这三个是 RuoYi-Vue-Pro 上游重新引入的业务面（用户/角色/文件/会员），

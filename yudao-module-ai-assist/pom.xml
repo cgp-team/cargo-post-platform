@@ -26,6 +26,15 @@
             <artifactId>yudao-spring-boot-starter-biz-tenant</artifactId>
         </dependency>
 
+        <!-- 只读复用主线那一份乡镇事件日历与唯一脱敏出口（契约 §6.1 / §4）：
+             方向是 ai-assist → transport，单向；transport 不认得本模块，所以不会有环。
+             ⚠ 不许在这里再建第二张日历表 —— 第 14 本闸（check_business_table_single_owner）就是拦这个的。 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-module-transport</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
         <!-- Web 与权限：管理端接口继续经过项目统一认证授权 -->
         <dependency>
             <groupId>cn.iocoder.boot</groupId>

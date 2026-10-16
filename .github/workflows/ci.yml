@@ -118,6 +118,11 @@ jobs:
       - name: Install dependencies
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm install --frozen-lockfile
+      # SFC 结构扫（契约 docs/AI_ASSIST_BOUNDARY.md §9.1）：`vite build` 只报第一个错、`vue-tsc` 只报每文件第一个错，
+      # 这一本把每只 .vue 的 parse + compileTemplate + compileScript 一次列全（本机现读 241 只 / 0 失败；`--self-test` 四把刀）
+      - name: SFC structure sweep
+        if: steps.frontend.outputs.ready == 'true'
+        run: node ../../scripts/check_sfc.mjs src
       # 先构建：unplugin-auto-import / unplugin-vue-components 在构建时生成
       # src/types/auto-*.d.ts，ts:check 依赖这些声明文件
       - name: Build
@@ -318,5 +323,10 @@ jobs:
         run: |
           python3 scripts/check_business_table_single_owner.py --self-test
           python3 scripts/check_business_table_single_owner.py
+      # AI 那条链的四条结构约束（第 15 本；契约 §0/§4/§5/§7）：只出草稿、唯一外呼口、留痕有生产者、密钥不外流
+      - name: Static check AI assist boundaries
+        run: |
+          python3 scripts/check_ai_assist_boundaries.py --self-test
+          python3 scripts/check_ai_assist_boundaries.py
       - name: Check generated-file drift
         run: git diff --exit-code
