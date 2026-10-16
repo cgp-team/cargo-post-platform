@@ -43,6 +43,13 @@
             <version>${revision}</version>
         </dependency>
 
+        <!-- AI 辅助模块（队列 #93 / docs/AI_ASSIST_BOUNDARY.md）：独立 module，不改 transport 的 Service -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-module-ai-assist</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
         <!-- 其余上游业务模块（report/bpm/pay/mp/mall/crm/erp/ai/iot/mes/wms/im）已从仓库移除，
              需要时从上游 RuoYi-Vue-Pro 重新引入 -->
 

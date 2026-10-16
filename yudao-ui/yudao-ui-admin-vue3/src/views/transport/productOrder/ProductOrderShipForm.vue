@@ -58,8 +58,10 @@ import * as VehicleApi from '@/api/transport/vehicle'
 import * as ShiftApi from '@/api/transport/shift'
 import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const formLoading = ref(false)
 const dialogVisible = ref(false)
 const formRef = ref()
@@ -79,15 +81,17 @@ const shiftLabel = (s: ShiftApi.ShiftVO) =>
   s.plannedDepartureTime ? `${s.shiftCode} ${s.plannedDepartureTime}` : s.shiftCode
 
 const loadOptions = async () => {
-  try {
-    vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
-  } catch (e) { /* ignore */ }
-  try {
-    shiftOptions.value = await ShiftApi.getSimpleShiftList()
-  } catch (e) { /* ignore */ }
-  try {
-    stationOptions.value = await StationApi.getSimpleStationList()
-  } catch (e) { /* ignore */ }
+  // 三个字典彼此独立：串成链等于三个 RTT 之和，而且第一个抛错时后面两个根本不执行
+  // —— 那一格就永远空着，读起来像"没有可选的车辆/班次"。并发跑，失败的那一格留空，
+  // 错误仍由请求层提示，不替后端宣布"没有"。
+  const [veh, shift, station] = await Promise.allSettled([
+    VehicleApi.getSimpleVehicleList(),
+    ShiftApi.getSimpleShiftList(),
+    stationDict.load()
+  ])
+  if (veh.status === 'fulfilled') vehicleOptions.value = veh.value
+  if (shift.status === 'fulfilled') shiftOptions.value = shift.value
+  if (station.status === 'fulfilled') stationOptions.value = station.value
 }
 
 const open = (id: number) => {

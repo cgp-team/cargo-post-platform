@@ -9,7 +9,8 @@
 --
 -- 写法沿用 V024/V025/V030：逐列查 information_schema + PREPARE/EXECUTE ⇒ **可安全重复执行**。
 --   基线 `sql/mysql/transport-menu.sql`/`transport-schema.sql` 是裸 INSERT/CREATE，
---   而 `deploy-dev.yml` 每次 push master 无条件重放白名单脚本 ⇒ 不幂等的脚本进白名单就会红在迁移步。
+--   而白名单脚本会被反复重放（`deploy-dev.yml` 要仓库变量 `AUTO_DB_MIGRATE=1`，`db-migrate-guarded.yml` 每次 apply）
+--   ⇒ 不幂等的脚本进白名单就会红在迁移步。
 --
 -- ⚠ 三条部署前置（都在本文件解决范围之外）：
 --   1) 本文件**不在** `deploy-dev.yml` 的迁移白名单里（白名单现读 V018/V019/V021/V022/V024/V025）⇒ 需人工执行一次；

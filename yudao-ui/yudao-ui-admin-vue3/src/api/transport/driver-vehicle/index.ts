@@ -27,7 +27,3 @@ export const getDriverVehiclePage = (params: PageParam & Partial<DriverVehicleVO
   return request.get({ url: '/transport/driver-vehicle/page', params })
 }
 
-/** 查询司机全部绑定记录 */
-export const getDriverVehicleListByDriver = (driverId: number) => {
-  return request.get({ url: '/transport/driver-vehicle/list-by-driver', params: { driverId } })
-}

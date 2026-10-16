@@ -5,7 +5,7 @@
         <el-input-number v-model="userId" :min="1" :controls="false" placeholder="输入用户 ID" style="width: 180px" />
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" :disabled="!userId" @click="query">
+        <el-button type="primary" :loading="accLoading" :disabled="!userId" @click="query">
           <Icon icon="ep:search" />查询
         </el-button>
       </el-form-item>
@@ -17,7 +17,7 @@
       :closable="false"
       class="mb-12px"
       title="这一页只提供查询，不提供改账"
-      description="后端确实有 POST /transport/wallet/adjust-balance，但它没有幂等键（重复点击就重复加/扣钱），且金额为 0 时两条分支都不走、照样返回「调整成功」。这两条补齐之前，后台不暴露该操作。"
+      description="后端确实有 POST /transport/wallet/adjust-balance。原来拦着不让接的两条（没有幂等键、金额为 0 时两条分支都不走却照样返回「调整成功」）都已补齐：现在有 10 秒的用户级幂等键，0 元直接报错而不是假装调过。这一页仍然只读，因为改账是动了就是真钱的写口——要不要在后台开这个口留给运营拍板，不由页面自己决定。"
     />
 
     <el-card shadow="never" class="mb-12px">

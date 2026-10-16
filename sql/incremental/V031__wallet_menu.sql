@@ -3,8 +3,8 @@
 --
 -- 为什么单独一个文件而不是往 `sql/mysql/transport-menu.sql` 里加一行：
 --   那份基线文件用的是**裸 `INSERT INTO system_menu ... VALUES`**（`transport-menu.sql:130-146`），
---   固定主键重复执行会 `Duplicate entry`；而部署流水线每次 push master 都会无条件重放白名单脚本
---   （`.github/workflows/deploy-dev.yml:200` 的 `for f in ... transport-menu ...`）
+--   固定主键重复执行会 `Duplicate entry`；而白名单脚本会被反复重放（`deploy-dev.yml` 在仓库变量
+--   `AUTO_DB_MIGRATE=1` 时整段重放，`db-migrate-guarded.yml` 每次 apply 也重跑）
 --   ⇒ 追加进基线文件等于把"第二次部署"变成一次红。这里用 `WHERE NOT EXISTS` 写成可安全重复执行的形态
 --   （沿用 V024/V025/V030 的规矩：**进白名单的脚本必须能重跑**）。
 --
@@ -24,9 +24,12 @@ SELECT 6920, '钱包查询', 'transport:wallet:query', 2, 14, 6800, 'wallet', 'e
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM system_menu WHERE id = 6920);
 
--- 角色授权：与基线文件同一条写法（`transport-menu.sql:159-160` 用的就是 INSERT IGNORE + 区间 SELECT）
-INSERT IGNORE INTO system_role_menu (role_id, menu_id)
-SELECT 1, id FROM system_menu WHERE id = 6920;
+-- 角色授权：基线（`transport-menu.sql:159-160`）用 INSERT IGNORE，那张表没唯一键挡不住重复 ⇒ 改按存在性判重
+-- 幂等授权：system_role_menu 没有 (role_id, menu_id) 唯一键，INSERT IGNORE 挡不住重复执行（guarded 的 apply 每次都重跑整份白名单）
+INSERT INTO system_role_menu (role_id, menu_id)
+SELECT 1, id FROM system_menu WHERE id = 6920
+  AND NOT EXISTS (SELECT 1 FROM system_role_menu rm
+                  WHERE rm.role_id = 1 AND rm.menu_id = system_menu.id AND rm.deleted = b'0');
 
 -- ⚠ 这里**不**给 `transport:wallet:adjust`（改钱那个口）配菜单/按钮：
 --   `WalletController.adjustBalance` 没有幂等键，且 amount=0 时什么都不做也返回"调整成功"（台账 D-093）。

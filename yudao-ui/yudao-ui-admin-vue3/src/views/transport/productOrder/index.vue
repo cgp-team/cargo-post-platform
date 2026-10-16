@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="商品订单管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="订单号">
-          <el-input v-model="queryParams.orderNo" placeholder="请输入业务订单号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.orderNo" placeholder="请输入业务订单号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="全部" clearable style="width: 130px">
@@ -11,17 +11,25 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
     </ContentWrap>
     <ContentWrap>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="订单号" prop="orderNo" align="center" min-width="180" />
         <el-table-column label="购买手机号" prop="userMobile" align="center" width="130" />
         <el-table-column label="金额" align="center" width="100">
-          <template #default="scope">¥{{ scope.row.totalAmount }}</template>
+          <template #default="scope">{{ moneyText(scope.row.totalAmount) }}</template>
         </el-table-column>
         <el-table-column label="状态" align="center" width="100">
           <template #default="scope">
@@ -95,7 +103,8 @@ import * as ProductOrderApi from '@/api/transport/productOrder'
 import {
   PRODUCT_ORDER_STATUS_LABELS,
   productOrderStatusLabel,
-  productOrderStatusTag
+  productOrderStatusTag,
+  moneyText
 } from '../constants'
 import ProductOrderDetail from './ProductOrderDetail.vue'
 import ProductOrderShipForm from './ProductOrderShipForm.vue'
@@ -104,6 +113,7 @@ defineOptions({ name: 'TransportProductOrder' })
 
 const message = useMessage()
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref([])
 const detailRef = ref()
@@ -125,8 +135,15 @@ const getList = async () => {
     const res = await ProductOrderApi.getProductOrderPage(queryParams)
     list.value = res.list
     total.value = res.total
+  } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
   } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderNo: '', status: undefined }); getList() }
 
 const openDetail = (id: number) => detailRef.value?.open(id)

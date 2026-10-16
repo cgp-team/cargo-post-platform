@@ -3,7 +3,25 @@
     <!-- 订单池（WEB-24: 去掉内层卡片，改分节标题，避免卡片套卡片） -->
     <section class="dispatch-section">
       <h3 class="dispatch-section-title">订单池</h3>
-      <el-form :inline="true" :model="poolQuery" @submit.prevent="getPoolList">
+      <el-alert
+        v-if="simpleListsError"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="simpleListsError"
+        description="站点/车辆是下拉的数据源：这一格失败会让「选车」「选站」看起来像没有资源，实际是没取到。"
+        style="margin-bottom:12px"
+      />
+      <el-alert
+        v-if="poolError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="poolError"
+        description="这张空表只说明这次请求没成功；「订单池暂无订单」不是业务结论。"
+        style="margin-bottom:12px"
+      />
+      <el-form :inline="true" :model="poolQuery" @submit.prevent="handlePoolQuery">
         <el-form-item label="订单状态">
           <el-select v-model="poolQuery.status" placeholder="请选择" clearable style="width:140px">
             <!-- 订单池按后端定义只含「待入池/已入池」：审核通过还没归集的、以及已归集待调度的 -->
@@ -19,11 +37,11 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getPoolList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handlePoolQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetPoolQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
-      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :disabled="collectDisabled" @click="submitCollectBySelection">
+      <el-button type="primary" v-hasPermi="['transport:dispatch:collect']" :loading="collectLoading" :disabled="collectDisabled" @click="submitCollectBySelection">
         <Icon icon="ep:download" />归集入池
       </el-button>
       <!-- 手动取消：只取消勾选的订单，其它订单不受影响（已分配/在途的单不会被取消） -->
@@ -104,7 +122,10 @@
         </el-table-column>
       
         <template #empty>
-          <el-empty :image-size="60" description="订单池暂无订单——审核通过的订单归集后会出现在这里" />
+          <el-empty
+            :image-size="60"
+            :description="poolError ? '这一格这次没读到（上面那条红字写了原因），不是「池里没有单」' : '订单池暂无订单——审核通过的订单归集后会出现在这里'"
+          />
         </template>
         </el-table>
       <Pagination :total="poolTotal" v-model:page="poolQuery.pageNo" v-model:limit="poolQuery.pageSize" @pagination="getPoolList" />
@@ -113,7 +134,16 @@
     <!-- 调度方案 -->
     <section class="dispatch-section" style="margin-top:16px">
       <h3 class="dispatch-section-title">调度方案</h3>
-      <el-form :inline="true" :model="planQuery" @submit.prevent="getPlanList">
+      <el-alert
+        v-if="planError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="planError"
+        description="这张空表只说明这次请求没成功；「暂无派单方案」不是业务结论。"
+        style="margin-bottom:12px"
+      />
+      <el-form :inline="true" :model="planQuery" @submit.prevent="handlePlanQuery">
         <el-form-item label="方案状态">
           <!-- WEB-09: 选项从 constants.ts 生成，与标签显示同源 -->
           <el-select v-model="planQuery.status" placeholder="请选择" clearable style="width:140px">
@@ -126,7 +156,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getPlanList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handlePlanQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetPlanQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -170,7 +200,10 @@
         </el-table-column>
       
         <template #empty>
-          <el-empty :image-size="60" description="暂无派单方案，手工派单或智能派单后生成" />
+          <el-empty
+            :image-size="60"
+            :description="planError ? '这一格这次没读到（上面那条红字写了原因），不是「没有派单方案」' : '暂无派单方案，手工派单或智能派单后生成'"
+          />
         </template>
         </el-table>
       <Pagination :total="planTotal" v-model:page="planQuery.pageNo" v-model:limit="planQuery.pageSize" @pagination="getPlanList" />
@@ -211,15 +244,29 @@
     <div v-show="smartStep === 0" v-loading="smartLoading">
       <!-- 一键智能派单：不选站点、不选车辆、不填参数 -->
       <el-descriptions :column="2" border size="small" style="margin-bottom:14px">
-        <el-descriptions-item label="待调度订单">{{ poolCount }} 单</el-descriptions-item>
+        <el-descriptions-item label="待调度订单">{{ poolPendingText }}</el-descriptions-item>
         <el-descriptions-item label="当前可用车辆">{{ vehicleList.length }} 台</el-descriptions-item>
         <el-descriptions-item label="候选站点">自动（按订单分布推导）</el-descriptions-item>
         <el-descriptions-item label="算法">HACO-CPS v1.4.1</el-descriptions-item>
       </el-descriptions>
 
-      <el-steps v-if="autoRunning" :active="autoProgress" finish-status="process" align-center style="margin-bottom:12px">
-        <el-step v-for="stage in autoStages" :key="stage" :title="stage" />
-      </el-steps>
+      <!-- 这里以前是一条墙钟进度条配五个假阶段名（分析订单 / 检查运力 / 选站点 / 跑 HACO-CPS / 生成方案），
+           每 900ms 自己走一格，算法卡住它照样走完 —— 界面报的是"算法跑到哪一步"，实际报的是"过了多久"。
+           现在只念后端真给出来的那句话（第 N 套方案、正在调度 M 单），没得念就只说"调度中"。 -->
+      <div v-show="autoRunning" class="text-gray-500" style="margin-bottom:12px">
+        <Icon icon="ep:loading" /> {{ autoStage || '调度中…' }}
+      </div>
+
+      <!-- 一键调度失败那一格：不清掉就只剩"调度中…"卡住，会被读成"算法说没有可行解" -->
+      <el-alert
+        v-if="autoError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="autoError"
+        description="订单仍在订单池里；这一轮没有生成方案，也没有占用车辆。"
+        style="margin-bottom:12px"
+      />
 
       <el-alert
         v-if="autoResult"
@@ -413,6 +460,14 @@
 
   <!-- 发车核验弹窗 -->
   <Dialog title="发车核验" v-model="checkVisible" width="480px">
+    <el-alert
+      v-if="checkError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="checkError"
+      style="margin-bottom:12px"
+    />
     <el-form ref="checkFormRef" :model="checkForm" :rules="checkRules" label-width="120px" v-loading="checkLoading">
       <el-form-item label="车辆" prop="vehicleId">
         <el-select v-model="checkForm.vehicleId" placeholder="请选择车辆" style="width:100%">
@@ -437,6 +492,14 @@
 
   <!-- 方案详情弹窗 -->
   <Dialog :title="`方案详情(方案号:${detail?.id ?? '-'})`" v-model="detailVisible" width="720px">
+    <el-alert
+      v-if="detailError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="detailError"
+      style="margin-bottom:12px"
+    />
     <el-descriptions v-if="detail" :column="4" border size="small" style="margin-bottom:12px">
       <el-descriptions-item label="总里程">{{ totalDistanceText(detail.totalDistance) }} km</el-descriptions-item>
       <el-descriptions-item label="预计耗时">
@@ -498,12 +561,14 @@ import {
   PLAN_STATUS_LABELS,
   DISPATCH_MODE_LABELS
 } from '../constants'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 defineOptions({ name: 'TransportDispatch' })
 
 const message = useMessage()
 
 // 调度结果可视化：一键智能派单后就地展开（任务段时间线 + 地图路线 + ▶播放）
+const stationDict = useStationDictStore()
 const visualVisible = ref(false)
 const visualPlanIds = ref<number[]>([])
 const openVisual = (planIds: number[]) => {
@@ -540,17 +605,32 @@ const vehicleName = (id?: number) => {
   // 带上绑定司机：一眼看到"这车谁开"，司机端就用这个账号登录
   return v.driverName ? `${v.plateNo}（${v.driverName}）` : v.plateNo
 }
+const simpleListsError = ref('')
+/** 站点/车辆两份下拉各自念失败原因（队列 #68）：原来两个 catch 都是空的 ignore，
+ *  读失败 ⇒ 下拉是空的 ⇒ 界面念成「没有站点/没有车」，而真实原因可能是权限、网络或后端 500。 */
 const loadSimpleLists = async () => {
+  simpleListsError.value = ''
+  const missed: string[] = []
   try {
-    stationList.value = await StationApi.getSimpleStationList()
-  } catch (e) { /* ignore */ }
+    stationList.value = await stationDict.load()
+  } catch (e: any) {
+    stationList.value = []
+    missed.push(`站点（${e?.msg || e?.message || '未知原因'}）`)
+  }
   try {
     vehicleList.value = await VehicleApi.getSimpleVehicleList()
-  } catch (e) { /* ignore */ }
+  } catch (e: any) {
+    vehicleList.value = []
+    missed.push(`车辆（${e?.msg || e?.message || '未知原因'}）`)
+  }
+  if (missed.length) {
+    simpleListsError.value = `${missed.join('、')}没读到 —— 下拉里的空白是"没取到"，不是"库里没有"`
+  }
 }
 
 /** 订单池 */
 const poolLoading = ref(true)
+const poolError = ref('')
 const poolTotal = ref(0)
 const poolList = ref<DispatchApi.DispatchOrderVO[]>([])
 const selectedOrders = ref<DispatchApi.DispatchOrderVO[]>([])
@@ -568,14 +648,21 @@ const poolQuery = reactive<PoolQueryParams>({ pageNo: 1, pageSize: 10, status: u
 
 const getPoolList = async () => {
   poolLoading.value = true
+  poolError.value = ''
   try {
     const res = await DispatchApi.getDispatchPoolPage(poolQuery)
     poolList.value = res.list
     poolTotal.value = res.total
+  } catch (e: any) {
+    // 失败先清再留字：不清就是"换个筛选条件还在念上一次那批单"（队列 #68 / 台账 D-134）
+    poolList.value = []
+    poolTotal.value = 0
+    poolError.value = '订单池没读到：' + (e?.msg || e?.message || '未知原因（这不是「池里没有单」）')
   } finally {
     poolLoading.value = false
   }
 }
+const handlePoolQuery = () => { poolQuery.pageNo = 1; getPoolList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetPoolQuery = () => {
   Object.assign(poolQuery, { pageNo: 1, pageSize: 10, status: undefined, orderType: undefined })
   getPoolList()
@@ -592,6 +679,7 @@ const manualSelected = computed(() => selectedOrders.value.filter((o) => o.statu
 const routeProviderLabel = (p?: string) =>
   p === 'FORMAL_ROAD' ? '路网正式' : p === 'STRAIGHT_ESTIMATE' ? '直线估算' : '—'
 const planLoading = ref(true)
+const planError = ref('')
 const planTotal = ref(0)
 const planList = ref<DispatchApi.DispatchPlanVO[]>([])
 
@@ -605,14 +693,20 @@ const planQuery = reactive<PlanQueryParams>({ pageNo: 1, pageSize: 10, status: u
 
 const getPlanList = async () => {
   planLoading.value = true
+  planError.value = ''
   try {
     const res = await DispatchApi.getDispatchPlanPage(planQuery)
     planList.value = res.list
     planTotal.value = res.total
+  } catch (e: any) {
+    planList.value = []
+    planTotal.value = 0
+    planError.value = '调度方案没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有方案」）')
   } finally {
     planLoading.value = false
   }
 }
+const handlePlanQuery = () => { planQuery.pageNo = 1; getPlanList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetPlanQuery = () => {
   Object.assign(planQuery, { pageNo: 1, pageSize: 10, status: undefined, mode: undefined })
   getPlanList()
@@ -760,11 +854,34 @@ const validateResult = ref<DispatchApi.DispatchValidateRespVO>()
 /** 一键智能派单：进度阶段 / 结果摘要（默认路径，管理员无需任何选择） */
 const smartAdvanced = ref<string[]>([])
 const autoRunning = ref(false)
-const autoProgress = ref(0)
-const autoStages = ['分析订单与约束', '检查车辆运力', '选择调度站点', '运行 HACO-CPS', '生成调度方案']
+/** 进度那一行只念后端真给的话（第 N 套方案、正在调度 M 单）；没有可念的就说"调度中" */
+const autoStage = ref('')
+/** 一键调度失败那一格：不清掉就只剩一句卡住的"调度中…"，会被读成"算法说没有可行解" */
+const autoError = ref('')
 const autoResult = ref<DispatchApi.DispatchPlanRespVO>()
-/** 订单池中"待调度"（已入池 status=1）数量，供一键弹窗展示 */
-const poolCount = computed(() => poolList.value.filter((o) => o.status === 1).length || poolTotal.value)
+/**
+ * 订单池里"已入池(待调度)"的数量。
+ * 这里原来写的是「当前页 status===1 的条数，为 0 时兜 poolTotal（**全状态**总数）」——
+ * 同一页 `:844` 那里已经有一条正确算法（用 `status:1` 单独查 total），于是"待调度单数"
+ * 在一个页面上有两个答案，而且第二个答案在筛选页里必然偏大。
+ * 现在两处都走同一个后端读数（`pooledTotal()`）：null = 还没读到（界面念"读取中"，不拿别的数冒充）。
+ */
+const poolPending = ref<number | null>(null)
+const poolPendingError = ref(false)
+const poolPendingText = computed(() => {
+  if (poolPendingError.value) return '没读到（不拿别的数冒充）'
+  return poolPending.value === null ? '读取中…' : `${poolPending.value} 单`
+})
+const refreshPoolPending = async () => {
+  poolPendingError.value = false
+  try {
+    poolPending.value = await pooledTotal()
+  } catch (e) {
+    // 读失败就念"没读到"，不许退回"当前页有几条"或"全状态总数"（那就是第二个答案）
+    poolPending.value = null
+    poolPendingError.value = true
+  }
+}
 const acoForm = reactive<Record<string, number | undefined>>({
   ant_count: undefined,
   max_iterations: undefined,
@@ -778,7 +895,9 @@ const openSmart = () => {
   smartForm.value = { depotStationId: undefined, vehicleIds: [] }
   validateResult.value = undefined
   smartStep.value = 0
+  autoResult.value = undefined
   Object.keys(acoForm).forEach((k) => (acoForm[k] = undefined))
+  refreshPoolPending()
   smartVisible.value = true
 }
 /** 第 1 步：约束校验 / 运力预警 */
@@ -832,7 +951,7 @@ const submitSmart = async () => {
 
 /**
  * 一键智能派单：后端自动选站点 + 自动挑候选车辆 + 算法默认参数，前端只点一次。
- * 进度条按阶段展示（真实耗时为算法调用），完成后展示方案摘要并支持"查看方案"。
+ * 进度那一行只念后端真实取数（还剩几单、第几套方案），完成后展示方案摘要并支持"查看方案"。
  */
 /** 一键调度最多连出几套方案（订单池里可能有多个片区，跨片区订单分批出方案） */
 const MAX_AUTO_ROUNDS = 4
@@ -882,33 +1001,37 @@ const runAutoSmart = async () => {
   }
   smartLoading.value = true
   autoRunning.value = true
-  autoProgress.value = 0
+  autoStage.value = '正在校验约束与运力…'
   autoResult.value = undefined
-  const timer = window.setInterval(() => {
-    if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1
-  }, 900)
   try {
     // 1) 约束校验（auto=true：后端自动推导站点与候选车辆）
     const validated = await DispatchApi.validateDispatch({ auto: true })
     validateResult.value = validated
     if (validated.capacityCheck?.overCapacity) {
-      autoProgress.value = 1
       message.warning('运力不足：算法会自动增加车辆或给出不可行原因，可继续提交')
     }
-    // 2) 智能派单（按片区分批，算法决定实际使用几辆车）
-    const planIds = await runAutoPlans()
+    // 2) 智能派单（按片区分批，算法决定实际使用几辆车）——阶段文案由每轮真实剩余单数给出
+    const planIds = await runAutoPlans((text) => {
+      autoStage.value = text
+    })
     // 3) 读取方案摘要（订单数/车辆数/里程/算法版本）
+    autoStage.value = '正在读取方案摘要…'
     const plan = await DispatchApi.getDispatchPlan(planIds[0])
     autoResult.value = plan
-    autoProgress.value = autoStages.length
     message.success(`智能派单完成，共 ${planIds.length} 套方案：${planIds.map((id) => '#' + id).join('、')}`)
     getPlanList()
+    refreshPoolPending()
     // 4) 就地展开调度结果可视化（任务段时间线 + 地图路线 + 播放）
     smartVisible.value = false
     openVisual(planIds)
+  } catch (e: any) {
+    // 这一轮没跑成必须留字：原来异常直接飞出 try/finally，弹窗只剩一句卡住的"调度中…"，
+    // 而订单其实**还在池里**——不留字就会被读成"算法说没有可行解"（队列 #68）
+    autoError.value =
+      '这一轮没跑成：' + (e?.msg || e?.message || '未知原因') + '（方案没生成，订单仍在订单池里，没有丢）'
   } finally {
-    window.clearInterval(timer)
     autoRunning.value = false
+    autoStage.value = ''
     smartLoading.value = false
   }
 }
@@ -968,6 +1091,22 @@ const openReview = (row: DispatchApi.DispatchPlanVO) => {
 const submitReview = async () => {
   const valid = await reviewFormRef.value?.validate().catch(() => false)
   if (!valid) return
+  // 二次确认（队列 #67）：审核这一格两条支路都是撤不回的动作，而同页其他写口早就有确认，
+  // 这里原来是点下去直接执行（DispatchServiceImpl.reviewPlan 实测）：
+  //   通过 ⇒ 方案置「已下发」，事务提交后给方案内每个订单的用户推「运输方案已下发」、并通知司机；
+  //   驳回 ⇒ 方案置「作废」，方案内订单退回订单池等重新派单（这版方案不再存在）。
+  const approve = reviewForm.value.approve
+  try {
+    await ElMessageBox.confirm(
+      approve
+        ? `确认通过方案 #${reviewForm.value.planId}？通过即置为「已下发」，并给方案内订单的用户与司机发出通知——通知发出后撤不回。`
+        : `确认驳回方案 #${reviewForm.value.planId}？驳回即置为「作废」，方案内订单退回订单池等待重新派单。`,
+      approve ? '通过并下发' : '驳回方案',
+      { type: 'warning', confirmButtonText: approve ? '确认通过' : '确认驳回', cancelButtonText: '再看看' }
+    )
+  } catch (e) {
+    return
+  }
   reviewLoading.value = true
   try {
     await DispatchApi.reviewDispatchPlan(reviewForm.value)
@@ -982,6 +1121,7 @@ const submitReview = async () => {
 /** 发车核验 */
 const checkVisible = ref(false)
 const checkLoading = ref(false)
+const checkError = ref('')
 const checkFormRef = ref()
 const checkForm = ref<{ planId: number; vehicleId?: number; pass: boolean; remark: string }>({
   planId: 0,
@@ -999,6 +1139,7 @@ const checkRules = reactive({
 const openCheck = async (row: DispatchApi.DispatchPlanVO) => {
   checkForm.value = { planId: row.id!, vehicleId: undefined, pass: true, remark: '' }
   checkVehicleIds.value = []
+  checkError.value = ''
   checkVisible.value = true
   checkLoading.value = true
   try {
@@ -1008,6 +1149,9 @@ const openCheck = async (row: DispatchApi.DispatchPlanVO) => {
       .filter((id): id is number => id !== undefined)
     checkVehicleIds.value = [...new Set(ids)]
     if (checkVehicleIds.value.length === 1) checkForm.value.vehicleId = checkVehicleIds.value[0]
+  } catch (e: any) {
+    // 明细没读到时下拉是空的 —— 那句"请选择车辆"旁边必须点名"是没读到，不是这个方案没有车"
+    checkError.value = '方案明细没读到：' + (e?.msg || e?.message || '未知原因') + '（车辆下拉是空的 ≠ 这一版方案没有车）'
   } finally {
     checkLoading.value = false
   }
@@ -1015,6 +1159,22 @@ const openCheck = async (row: DispatchApi.DispatchPlanVO) => {
 const submitCheck = async () => {
   const valid = await checkFormRef.value?.validate().catch(() => false)
   if (!valid) return
+  // 二次确认（队列 #67）：两条支路的后果不一样，句子也必须不一样（DispatchServiceImpl.departureCheck 实测）：
+  //   通过 ⇒ 方案从「已下发」转「执行中」，该车那批订单置为「已发车」；
+  //   不通过 ⇒ 只落一条「核验不通过」的记录，方案状态与订单都不动。
+  // 另外这个口每次调用都 insert 一行、后端没有幂等键 ⇒ 同一辆车重复提交会留下多条核验记录。
+  const pass = checkForm.value.pass
+  try {
+    await ElMessageBox.confirm(
+      pass
+        ? `确认发车核验通过？方案 #${checkForm.value.planId} 会转入「执行中」，该车那批订单置为「已发车」，司机侧随之开始执行。`
+        : `确认登记「发车核验不通过」？后端只落一条不通过的核验记录，方案状态与订单都不变。`,
+      pass ? '发车核验通过' : '发车核验不通过',
+      { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '再看看' }
+    )
+  } catch (e) {
+    return
+  }
   checkLoading.value = true
   try {
     await DispatchApi.checkDeparture({
@@ -1034,6 +1194,7 @@ const submitCheck = async () => {
 /** 方案详情 */
 const detailVisible = ref(false)
 const detailLoading = ref(false)
+const detailError = ref('')
 const detail = ref<DispatchApi.DispatchPlanRespVO>()
 // 经停序列按 visitSequence 排序
 const detailItems = computed(() =>
@@ -1041,10 +1202,14 @@ const detailItems = computed(() =>
 )
 const openDetail = async (row: DispatchApi.DispatchPlanVO) => {
   detail.value = undefined
+  detailError.value = ''
   detailVisible.value = true
   detailLoading.value = true
   try {
     detail.value = await DispatchApi.getDispatchPlan(row.id!)
+  } catch (e: any) {
+    // 标题那格会念成"方案号:-"、明细表念"暂无方案明细" ⇒ 必须点名是没读到，不是方案是空的
+    detailError.value = '方案详情没读到：' + (e?.msg || e?.message || '未知原因') + '（下面那张空表不是"这个方案没有明细"）'
   } finally {
     detailLoading.value = false
   }

@@ -36,6 +36,8 @@
 
         <module>yudao-module-member</module>
 
+        <module>yudao-module-ai-assist</module>
+
         <!-- 其余上游模块（ai/bpm/crm/erp/im/iot/mall/mes/mp/pay/report/wms）已从仓库移除，
 
              需要时从上游 RuoYi-Vue-Pro 重新引入并在 yudao-server 中挂载 -->

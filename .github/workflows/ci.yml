@@ -31,18 +31,32 @@ jobs:
       - name: Detect changed areas
         id: detect
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
-            RANGE="origin/${{ github.base_ref }}...HEAD"
-          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            RANGE="${{ github.event.before }}..${{ github.event.after }}"
+          # 事件字段一律经 env 传入，不写进脚本正文：runner 会先把双花括号表达式替换成字面量再交给 bash，
+          #   分支名里带一个引号或分号就变成别人执行的代码（GitHub 官方点名的高危写法）。
+          #   注释里也不能留那种写法 —— 它同样在替换范围内，所以这段说明本身不提它。
+          # env 只解决"不被当脚本文本执行"；它仍是外部输入，用之前先验形状。
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            case "$BASE_REF" in
+              "" ) echo "::error::pull_request 事件却没有 base_ref（探测不能静默退成 HEAD~1）"; exit 1 ;;
+              *[!A-Za-z0-9._/-]* ) echo "::error::base_ref 含非预期字符，拒绝当参数用"; exit 1 ;;
+            esac
+            git fetch --depth=1 origin "$BASE_REF" >/dev/null 2>&1 || true
+            RANGE="origin/${BASE_REF}...HEAD"
+          elif [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ && "$AFTER_SHA" =~ ^[0-9a-f]{40}$ \
+                 && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="${BEFORE_SHA}..${AFTER_SHA}"
           else
             RANGE="HEAD~1..HEAD"
           fi
           echo "diff range: ${RANGE}"
-          CHANGED=$(git diff --name-only ${RANGE} || echo '')
+          CHANGED=$(git diff --name-only "${RANGE}" || echo '')
           echo "${CHANGED}"
           has() { printf '%s\n' "${CHANGED}" | grep -qE "$1" && echo true || echo false; }
           # 后端：任意 java 模块、构建文件、SQL
@@ -104,6 +118,11 @@ jobs:
       - name: Install dependencies
         if: steps.frontend.outputs.ready == 'true'
         run: pnpm install --frozen-lockfile
+      # SFC 结构扫（契约 docs/AI_ASSIST_BOUNDARY.md §9.1）：`vite build` 只报第一个错、`vue-tsc` 只报每文件第一个错，
+      # 这一本把每只 .vue 的 parse + compileTemplate + compileScript 一次列全（本机现读 241 只 / 0 失败；`--self-test` 四把刀）
+      - name: SFC structure sweep
+        if: steps.frontend.outputs.ready == 'true'
+        run: node ../../scripts/check_sfc.mjs src
       # 先构建：unplugin-auto-import / unplugin-vue-components 在构建时生成
       # src/types/auto-*.d.ts，ts:check 依赖这些声明文件
       - name: Build
@@ -225,5 +244,89 @@ jobs:
           test -f algorithm/app/main.py
           test -f deploy/docker-compose.yml
           test -f sql/mysql/transport-schema.sql
+      # 两条静态 SQL 闸（台账 D-127）：都是"全绿而库里少一页/整条作业跑不动"那种坏的形态，
+      # 只能静态查 —— 等部署时才发现，代价是让共享库当试验品。
+      # · 菜单主键撞号：计价规则与货物交接都认领 6930，先落地的赢，另一页永远不存在。
+      # · IF()/IFNULL() 参数量：探测步骤一 1064，写库的 apply 步骤根本轮不到执行。
+      - name: Static check SQL gates (menu id collisions, function arity)
+        run: |
+          python3 scripts/check_menu_id_collisions.py --self-test
+          python3 scripts/check_menu_id_collisions.py
+          python3 scripts/check_sql_function_arity.py --self-test
+      # 后台列表页"搜索先回第 1 页"（队列 #74 / 台账 D-128）：不重置页码不会报错，
+      # 只会让运营翻到第 N 页后改筛选看见"暂无数据"，读成"这个条件下没有单"
+      - name: Static check admin query-page reset
+        run: |
+          python3 scripts/check_admin_query_page_reset.py --self-test
+          python3 scripts/check_admin_query_page_reset.py
+      # 后台写按钮的"在飞保护"（队列 #75 / 台账 D-128）：这 40 个写接口后端零幂等键，
+      # 双击就是两条真记录；而"声明了 xxxLoading 却没绑进模板"是静默的——代码看着有保护，按钮照样能点
+      - name: Static check admin write-button guard
+        run: |
+          python3 scripts/check_admin_write_button_guard.py --self-test
+          python3 scripts/check_admin_write_button_guard.py
+      # 站点全量字典只从共享缓存走，且站点写口必须带失效（队列 #75 / 台账 D-128）：
+      # 下一个 PR 把直连接口加回来是最常见的回归，而"改完站点别的页面还在念旧表"是正确性问题
+      - name: Static check admin station-dict sharing
+        run: python3 scripts/check_admin_station_dict_sharing.py
+      # 写死的跳转必须落在有组件的菜单叶子上（队列 #63 / 台账 D-130）：
+      # 指向目录节点（type=1、component=NULL）不报错，只给一具空 Layout
+      - name: Static check admin hardcoded routes
+        run: python3 scripts/check_admin_dashboard_routes.py
+      # 读接口失败必须留"这次没读到"那一格（队列 #65 / 台账 D-130）：
+      # 数据不清 = 继续念上一次的结果；只弹 toast = 空白旁边写着"暂无"，把没取到说成没有
+      - name: Static check admin catch keeps a visible failure state
+        run: |
+          python3 scripts/check_admin_catch_leaves_data.py --self-test
+          python3 scripts/check_admin_catch_leaves_data.py
+      # 墙钟定时器不许替后端报进度（队列 #66 / 台账 D-132）：调度页原来那条进度条按 900ms 自增、
+      # 配五个假阶段名，算法卡住它照样走完 —— 界面念"算法跑到哪一步"，实际念"过了多久"。
+      # 带上 --self-test：判据自己也要被"塞回真文件的旧代码"咬一次，否则它只会认形状不认现状。
+      - name: Static check admin no wall-clock-driven progress
+        run: |
+          python3 scripts/check_admin_no_wallclock_progress.py --self-test
+          python3 scripts/check_admin_no_wallclock_progress.py
+      # 不可逆写口必须先给用户看见后果（队列 #67 / 台账 D-133）：这 5 个口点下去没有撤销入口，
+      # 而 controller/admin/** 那 40 个写接口零 @Idempotent ⇒ "点错了"在后端不被拦，前端确认是唯一的闸
+      - name: Static check admin irreversible writes ask first
+        run: |
+          python3 scripts/check_admin_irreversible_write_confirm.py --self-test
+          python3 scripts/check_admin_irreversible_write_confirm.py
+      # api 层不许留"看着接好了其实没人调"的死导出，也不许同一个端点有两个包装（改了 A、页面用 B ⇒ 契约两处漂移）
+      # —— 实测过一例：notification 里的 getOrderEventTimeline 与 orderEvent 里的 getOrderEvents 打同一个 url（队列 #68）
+      - name: Static check admin api dead and duplicate exports
+        run: |
+          python3 scripts/check_admin_api_dead_exports.py --self-test
+          python3 scripts/check_admin_api_dead_exports.py
+      # 金额与里程的"没给"不许折叠成 0.00：0 是业务结论，缺值必须念"没给"（队列 #68 / 台账 D-134）
+      - name: Static check admin money absence is not folded to zero
+        run: |
+          python3 scripts/check_admin_money_absence.py --self-test
+          python3 scripts/check_admin_money_absence.py
+      # 12 个后台写口的服务端幂等键（队列 #89 / 台账 D-136）：前端在飞锁只在同一个页签里有效
+      - name: Static check admin write endpoints carry idempotency keys
+        run: |
+          python3 scripts/check_admin_write_idempotency.py --self-test
+          python3 scripts/check_admin_write_idempotency.py
+
+      # 敏感字段掩码的唯一出口（队列 #93 / 契约 docs/AI_ASSIST_BOUNDARY.md §4）：
+      # AI 那条线要用的是同一个掩码，不是各写一份；出口找不到时这本闸拒判（rc=2）
+      - name: Static check admin sensitive-data mask is the single exit
+        run: |
+          python3 scripts/check_admin_ai_data_mask.py --self-test
+          python3 scripts/check_admin_ai_data_mask.py
+      # 同一个业务对象不许两张表 / 两个同名 DO（队列 #98 / 台账 D-136）：
+      # 表名不撞、菜单主键不撞，check_menu_id_collisions 判绿 —— 它认的是户口不是业务身份。
+      # 真树现读（HEAD 干净导出）90 条 CREATE TABLE / 85 个表名 / 跨模块重名 0 ⇒ 这本闸今天是绿的，
+      # 一旦两条线各建一套就红（2026-10-16 真发生过：V037 的 transport_town_event_calendar 与 V050 的 town_event_calendar）
+      - name: Static check one business table has a single owner
+        run: |
+          python3 scripts/check_business_table_single_owner.py --self-test
+          python3 scripts/check_business_table_single_owner.py
+      # AI 那条链的四条结构约束（第 15 本；契约 §0/§4/§5/§7）：只出草稿、唯一外呼口、留痕有生产者、密钥不外流
+      - name: Static check AI assist boundaries
+        run: |
+          python3 scripts/check_ai_assist_boundaries.py --self-test
+          python3 scripts/check_ai_assist_boundaries.py
       - name: Check generated-file drift
         run: git diff --exit-code

@@ -1,5 +1,8 @@
 package cn.iocoder.yudao.module.transport.controller.admin.transport.feedback;
 
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;

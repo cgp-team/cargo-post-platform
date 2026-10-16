@@ -1,7 +1,7 @@
 <template>
   <ContentWrap title="人车绑定">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="司机">
           <el-select v-model="queryParams.driverId" placeholder="请选择司机" clearable filterable style="width:180px">
             <el-option v-for="d in driverOptions" :key="d.id" :label="d.name" :value="d.id!" />
@@ -14,7 +14,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -23,6 +23,14 @@
       <el-button type="primary" v-hasPermi="['transport:driver:update']" @click="openBind">
         <Icon icon="ep:link" />绑定车辆
       </el-button>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="司机姓名" prop="driverName" align="center" width="120" />
         <el-table-column label="车牌号" prop="plateNo" align="center" width="140" />
@@ -85,6 +93,7 @@ import { dateFormatter, formatDate } from '@/utils/formatTime'
 defineOptions({ name: 'TransportDriverVehicle' })
 const message = useMessage()
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref<DriverVehicleVO[]>([])
 
@@ -94,8 +103,14 @@ const queryParams = reactive<QueryParams>({ pageNo: 1, pageSize: 10, driverId: u
 const driverOptions = ref<DriverVO[]>([])
 const vehicleOptions = ref<VehicleVO[]>([])
 const loadOptions = async () => {
-  driverOptions.value = await DriverApi.getSimpleDriverList()
-  vehicleOptions.value = await VehicleApi.getSimpleVehicleList()
+  // 司机与班次两张字典互不依赖：串成链 = 两个 RTT 之和，且司机那一个抛错时车辆根本不取。
+  // 并发跑，失败的那一格留空（错误由请求层提示），不替后端宣布"没有"。
+  const [d, v] = await Promise.allSettled([
+    DriverApi.getSimpleDriverList(),
+    VehicleApi.getSimpleVehicleList()
+  ])
+  if (d.status === 'fulfilled') driverOptions.value = d.value
+  if (v.status === 'fulfilled') vehicleOptions.value = v.value
 }
 
 const getList = async () => {
@@ -104,10 +119,17 @@ const getList = async () => {
     const res = await DriverVehicleApi.getDriverVehiclePage(queryParams)
     list.value = res.list
     total.value = res.total
+  } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
   } finally {
     loading.value = false
   }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, driverId: undefined, status: undefined }); getList() }
 
 // 绑定
@@ -131,6 +153,21 @@ const submitBind = async () => {
   if (driverId == null || vehicleId == null) {
     message.error('请选择司机与车辆')
     return
+  }
+  // 二次确认（队列 #67）：这个口不是"加一条绑定"这么简单 —— 后端 bind() 会先把
+  // 该司机现有的有效绑定、以及该车现有的有效绑定**双双置为已解绑**，再 insert 新的一条
+  // （DriverVehicleServiceImpl.bind，一司机一车 / 一车一司机）。
+  // 也就是说管理员点一次就可能拆掉另一对正在用的人车关系，而且没有撤销入口 ⇒ 必须先念出被拆的是谁。
+  const driverName = driverOptions.value.find((d) => d.id === driverId)?.name || `#${driverId}`
+  const plateNo = vehicleOptions.value.find((v) => v.id === vehicleId)?.plateNo || `#${vehicleId}`
+  try {
+    await message.confirm(
+      `确认把司机「${driverName}」与车辆「${plateNo}」绑定？` +
+        '后端会先解掉这名司机现有的车、以及这辆车现有的司机（一司机一车），原有绑定会直接变成「已解绑」，无法在这里撤销。',
+      '绑定车辆'
+    )
+  } catch (e) {
+    return // 用户取消：什么都没发生
   }
   bindLoading.value = true
   try {

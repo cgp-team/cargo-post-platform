@@ -1,5 +1,13 @@
 <template>
   <Dialog :title="dialogTitle" v-model="dialogVisible" width="720px">
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="loadError"
+      style="margin-bottom:12px"
+    />
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="120px" v-loading="formLoading">
       <el-form-item label="订单类型" prop="orderType">
         <el-select v-model="formData.orderType" placeholder="请选择订单类型" style="width:100%" @change="onOrderTypeChange">
@@ -99,8 +107,10 @@
 import * as OrderApi from '@/api/transport/order'
 import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const formLoading = ref(false)
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -225,8 +235,10 @@ const onOrderTypeChange = (type: number) => {
   formRef.value?.clearValidate()
 }
 
+const loadError = ref('')
 const open = async (type: string, id?: number) => {
   dialogVisible.value = true
+  loadError.value = ''
   dialogTitle.value = type === 'create' ? '新增订单' : '编辑订单'
   formType.value = type
   resetForm()
@@ -236,6 +248,10 @@ const open = async (type: string, id?: number) => {
     try {
       const data = await OrderApi.getOrder(id)
       formData.value = { ...formData.value, ...data }
+    } catch (e: any) {
+      // 这一格坏法是静默的：库里的原值没落进表单，界面仍是默认值 ⇒ 直接保存会把真实内容抹掉
+      loadError.value =
+        '这张单的原值没读到：' + (e?.msg || e?.message || '未知原因') + '（表单里现在是默认值，别直接保存）'
     } finally {
       formLoading.value = false
     }
@@ -243,7 +259,12 @@ const open = async (type: string, id?: number) => {
 }
 
 const loadStationList = async () => {
-  try { stationList.value = await StationApi.getSimpleStationList() } catch (e) { /* ignore */ }
+  try {
+    stationList.value = await stationDict.load()
+  } catch (e: any) {
+    stationList.value = []
+    loadError.value = (loadError.value ? loadError.value + '；' : '') + '站点下拉没读到：' + (e?.msg || e?.message || '未知原因')
+  }
 }
 
 defineExpose({ open })

@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="订单管理">
     <div>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="订单号">
-          <el-input v-model="queryParams.orderNo" placeholder="请输入订单号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.orderNo" placeholder="请输入订单号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="订单类型">
           <el-select v-model="queryParams.orderType" placeholder="请选择" clearable style="width:140px">
@@ -13,7 +13,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -22,6 +22,14 @@
       <el-button type="primary" v-hasPermi="['transport:order:create']" @click="openForm('create')">
         <Icon icon="ep:plus" />新增订单
       </el-button>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="订单号" prop="orderNo" align="center" width="200" />
         <el-table-column label="订单类型" prop="orderType" align="center" width="80">
@@ -188,6 +196,14 @@
 
   <!-- 订单详情：寄货全链路（用户位置 → 交接服务站 → 货物规格 → 收件信息 → 图片凭证） -->
   <Dialog v-model="detailVisible" :title="`订单详情 ${detail?.orderNo || ''}`" width="720px" v-loading="detailLoading">
+    <el-alert
+      v-if="detailError"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="detailError"
+      style="margin-bottom:12px"
+    />
     <el-descriptions v-if="detail" :column="2" border size="small">
       <el-descriptions-item label="订单类型">{{ orderTypeLabel(detail.orderType!) }}</el-descriptions-item>
       <el-descriptions-item label="订单状态">
@@ -243,7 +259,7 @@
 
     <!-- 事件时间线：读 /transport/order-event/list-by-order（权限复用 transport:order:query）。
          ⚠ 三格必须分开念：读到 N 条 / 后端确实说没有 / 这一格没读到（失败原因照实显示）。 -->
-    <div class="mt-16px">
+    <div class="mt-16px" v-loading="eventsLoading">
       <div class="mb-8px font-bold">事件时间线</div>
       <el-alert v-if="eventsError" type="warning" :closable="false" show-icon
                 :title="`事件流没读到：${eventsError}`"
@@ -257,9 +273,23 @@
           <span class="font-bold">{{ ev.eventTypeName || ev.eventType || '后端没给类型名' }}</span>
           <span v-if="ev.operator" class="text-gray-500"> · {{ ev.operator }}</span>
           <div v-if="ev.detail" class="text-gray-600">{{ ev.detail }}</div>
+          <!-- 司机上报异常时那张现场照片：记在事件的 extraData.photoUrl（队列 #60）。
+               有就画、没有就不画、读不出要明说 —— 不留"看着像没有附件"的第三种解释 -->
+          <el-image
+            v-if="eventPhotoState(ev.extraData).url"
+            :src="eventPhotoState(ev.extraData).url"
+            :preview-src-list="[eventPhotoState(ev.extraData).url]"
+            preview-teleported
+            fit="cover"
+            style="width:96px;height:96px;margin-top:6px;border-radius:6px"
+          />
+          <span v-else-if="eventPhotoState(ev.extraData).unreadable" class="text-gray-500">
+            附件读不出：这一格 extraData 不是合法 JSON
+          </span>
         </el-timeline-item>
       </el-timeline>
-      <span v-else class="text-gray-500">后端说这单没有事件记录（接口正常返回空列表，不是读取失败）</span>
+      <!-- 还在飞的时候不许念"后端说没有"：那等于替后端宣布了一个它还没给的结论 -->
+      <span v-else-if="!eventsLoading" class="text-gray-500">后端说这单没有事件记录（接口正常返回空列表，不是读取失败）</span>
     </div>
     <template #footer>
       <el-button @click="detailVisible = false">关 闭</el-button>
@@ -279,14 +309,18 @@ import {
   orderStatusTag,
   serviceModeLabel,
   serviceModeTag,
-  reviewStatusLabel
+  reviewStatusLabel,
+  eventPhotoState
 } from '../constants'
 import OrderForm from './OrderForm.vue'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 defineOptions({ name: 'TransportOrder' })
 
 const message = useMessage()
+const stationDict = useStationDictStore()
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref([])
 
@@ -305,7 +339,7 @@ const stations = ref<StationApi.StationVO[]>([])
 const stationName = (id?: number) => (id == null ? '' : stations.value.find((s) => s.id === id)?.stationName || '')
 const loadStations = async () => {
   try {
-    stations.value = await StationApi.getSimpleStationList()
+    stations.value = await stationDict.load()
   } catch (e) {
     // WEB-10: 兜底数据失败也要可见提示（不影响订单列表主流程）
     message.error('站点信息加载失败，下单地址可能不完整')
@@ -318,8 +352,15 @@ const getList = async () => {
     const res = await OrderApi.getOrderPage(queryParams)
     list.value = res.list
     total.value = res.total
+  } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
   } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, orderNo: '', orderType: undefined }); getList() }
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {
@@ -370,6 +411,7 @@ const submitAudit = async (pass: boolean) => {
 /** 订单详情：单独拉一条（含子表全字段），复核后可直接给老师看"用户位置 → 交接站" */
 const detailVisible = ref(false)
 const detailLoading = ref(false)
+const detailError = ref('')
 const detail = ref<OrderApi.OrderVO>({})
 /** 事件流三格：events（读到的）/ eventsError（没读到的原因）/ 两者都空 = 后端确实说没有 */
 const events = ref<OrderEventApi.OrderEventVO[]>([])
@@ -393,11 +435,17 @@ const loadEvents = async (orderId: number) => {
 
 const openDetail = async (row: OrderApi.OrderVO) => {
   detail.value = row // 先用列表数据渲染，避免白屏
+  detailError.value = ''
   detailVisible.value = true
   detailLoading.value = true
   loadEvents(row.id!)
   try {
     detail.value = await OrderApi.getOrder(row.id!)
+  } catch (e: any) {
+    // 这一格特殊：失败时屏幕上**不是空白**，而是列表那一行 —— 那也是数据，但不是后端刚给的那份。
+    // 不点名就会被读成"详情就是这样"（队列 #68 / 台账 D-134）
+    detailError.value =
+      '详情没读到：' + (e?.msg || e?.message || '未知原因') + '（下面念的是列表里那一行的字段，不是后端此刻的状态）'
   } finally {
     detailLoading.value = false
   }

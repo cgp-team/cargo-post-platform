@@ -202,3 +202,28 @@ yudao:
     end-code: 999999 # 生产验证码区间上限
 
 debug: false
+
+# ========== AI 辅助（yudao-module-ai-assist）的唯一配置口 ==========
+# 这一层是「可配置的推理端点」，不是「某家厂商的 SDK」：请求体走 OpenAI 兼容的 /chat/completions，
+# 所以云上 API 与自部署网关都只改下面这几个值，Java 代码一行都不用动：
+#
+#   云上 · DashScope 兼容模式   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+#                              model: qwen-plus          vision-model: qwen-vl-plus
+#   云上 · OpenAI 兼容          base-url: https://api.openai.com/v1
+#   自部署 · vLLM / 内网网关     base-url: http://10.0.0.21:8000/v1
+#                              model: qwen2.5-7b-instruct  vision-model: qwen2.5-vl-7b-instruct
+#   自部署 · Ollama openai 层   base-url: http://127.0.0.1:11434/v1
+#
+# 三条纪律（都被静态闸钉着，不是注释里的愿望）：
+#   1. api-key 只从环境变量 BUSPOST_AI_API_KEY 注入，这里一律留空：仓库、日志、接口回显都不许出现它；
+#   2. enabled=false 或「开关+基址+密钥」不齐 ⇒ 能力页念「未就绪」，后台其余页面零变化（红线）；
+#   3. vision-model 留空 ⇒ 「照片是否支撑描述」这一项直接未就绪，不退化成只看文字猜照片。
+buspost:
+  ai:
+    enabled: false
+    base-url: ''
+    api-key: ${BUSPOST_AI_API_KEY:}
+    model: ''
+    vision-model: ''
+    timeout-ms: 8000
+    max-input-chars: 4000

@@ -15,7 +15,7 @@ public class AppDriverLegActionReqVO {
     @NotNull(message = "运输段编号不能为空")
     private Long legId;
 
-    @Schema(description = "交接照片URL（交接确认用）")
+    @Schema(description = "照片URL（交接确认=凭证照片；异常上报=现场照片，两者都写进订单事件的 extra_data）")
     private String photoUrl;
 
     @Schema(description = "备注（异常/争议原因）")

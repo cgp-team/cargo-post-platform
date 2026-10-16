@@ -267,8 +267,6 @@ import {
 } from '@/components/Map/src/utils'
 import {
   getBigScreenOverview,
-  getBigScreenMapData,
-  getBigScreenVehicles,
   getBigScreenDistricts,
   type BigScreenOverviewVO,
   type BigScreenShiftVO,
@@ -276,7 +274,13 @@ import {
 } from '@/api/transport/bigscreen'
 import { getDriverExpiringList, type DriverVO } from '@/api/transport/driver'
 import { getHandoverPage } from '@/api/transport/handover'
-import type { MonitoringMapDataVO, MonitoringVehicleVO } from '@/api/transport/monitoring'
+// 地图图层与车辆位置走 monitoring 那一条出口：同一端点不再留第二个包装（队列 #68）
+import {
+  getMonitoringMapData,
+  getMonitoringVehicles,
+  type MonitoringMapDataVO,
+  type MonitoringVehicleVO
+} from '@/api/transport/monitoring'
 
 defineOptions({ name: 'TransportBigScreen' })
 
@@ -683,7 +687,7 @@ const retryMap = () => {
 
 const fetchMapData = async () => {
   try {
-    cachedMapData = await getBigScreenMapData()
+    cachedMapData = await getMonitoringMapData()
     mapStale.value = 0
     if (mapReady) renderMapData()
   } catch {
@@ -1142,7 +1146,7 @@ const setMapType = (type: 'vector' | 'satellite') => {
 
 const fetchVehicles = async () => {
   try {
-    const list: MonitoringVehicleVO[] = await getBigScreenVehicles()
+    const list: MonitoringVehicleVO[] = await getMonitoringVehicles()
     cachedVehicles = list
     vehicles.value = list
     vehicleStale.value = 0

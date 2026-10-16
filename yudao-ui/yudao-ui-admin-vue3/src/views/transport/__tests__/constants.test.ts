@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   DISPATCH_MODE_LABELS,
+  HANDOVER_DISPUTE_BLOCKED_STATUS,
+  HANDOVER_STATUS_LABELS,
+  HANDOVER_STATUS_TAGS,
   ORDER_STATUS_LABELS,
   ORDER_STATUS_TAGS,
   ORDER_TYPE_LABELS,
@@ -20,6 +23,8 @@ import {
   VEHICLE_STATUS_LABELS,
   VEHICLE_STATUS_TAGS,
   dispatchModeLabel,
+  handoverStatusLabel,
+  handoverStatusTag,
   labelOf,
   orderStatusLabel,
   planStatusLabel,
@@ -31,7 +36,11 @@ import {
   tagOf,
   vehicleRealtimeStatusLabel,
   vehicleStatusLabel,
-  type TagType
+  type TagType,
+  moneyText,
+  distanceText,
+  eventPhotoState
+
 } from '../constants'
 
 /**
@@ -51,7 +60,8 @@ const PAIRED_TABLES: Array<[Record<number, string>, Record<number, TagType>, str
   [VEHICLE_STATUS_LABELS, VEHICLE_STATUS_TAGS, '车辆状态'],
   [VEHICLE_REALTIME_STATUS_LABELS, VEHICLE_REALTIME_STATUS_TAGS, '车辆实时状态'],
   [PRODUCT_ORDER_STATUS_LABELS, PRODUCT_ORDER_STATUS_TAGS, '商品订单状态'],
-  [SHIFT_STATUS_LABELS, SHIFT_STATUS_TAGS, '班次状态']
+  [SHIFT_STATUS_LABELS, SHIFT_STATUS_TAGS, '班次状态'],
+  [HANDOVER_STATUS_LABELS, HANDOVER_STATUS_TAGS, '交接状态']
 ]
 
 describe('transport 枚举契约（单一来源）', () => {
@@ -96,6 +106,38 @@ describe('transport 枚举契约（单一来源）', () => {
 
   it('承运审核结果覆盖 0-4', () => {
     expect(Object.keys(REVIEW_STATUS_LABELS).map(Number).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('WEB-1 回归：交接状态与后端 TransportHandoverStatusEnum 的 0-7 全名逐字一致', () => {
+    // 页面上那三个自造码（待确认0/已确认1/有争议2）曾让筛"有争议"拿到的是"接收方待接"的单，
+    // 而 7=异常（标记争议真正落到的状态）永远筛不到 —— 全名锁定，改枚举必须同时改这里
+    expect(HANDOVER_STATUS_LABELS).toEqual({
+      0: '等待交接',
+      1: '前序已到达',
+      2: '接收方待接',
+      3: '交接中',
+      4: '交接完成',
+      5: '交接超时',
+      6: '已取消',
+      7: '异常'
+    })
+  })
+
+  it('WEB-1 回归：标记争议只对后端肯接的状态露出（后端只拦 COMPLETED=4）', () => {
+    expect(HANDOVER_DISPUTE_BLOCKED_STATUS).toBe(4)
+    // 这一格是"界面别承诺做不到的动作"与"别藏掉后端肯接的动作"两条线的交点：
+    // 4 必须能被筛到，否则按钮的隐藏条件与枚举脱钩
+    expect(HANDOVER_STATUS_LABELS[HANDOVER_DISPUTE_BLOCKED_STATUS]).toBe('交接完成')
+    expect(HANDOVER_STATUS_LABELS[2]).toBe('接收方待接')
+    expect(HANDOVER_STATUS_LABELS[7]).toBe('异常')
+  })
+
+  it('交接状态念不出来时必须露出码值，不许静默兜成"未知"', () => {
+    // 后端加了枚举而前端没跟，症状本来是隐形的（一片"未知"）；这里要求把码值念出来
+    expect(handoverStatusLabel(8)).toContain('8')
+    expect(handoverStatusLabel(undefined)).toBe('-')
+    expect(handoverStatusTag(4)).toBe('success')
+    expect(handoverStatusTag(7)).toBe('danger')
   })
 })
 
@@ -157,5 +199,48 @@ describe('具名取值函数', () => {
   it('dispatchModeLabel 空值兜底', () => {
     expect(dispatchModeLabel(1)).toBe('智能')
     expect(dispatchModeLabel(null)).toBe('-')
+  })
+})
+
+// ── 金额/里程缺值渲染（队列 #68 / 台账 D-134）：真零与"没给"必须是两格 ──
+describe('moneyText / distanceText（缺值不折叠成 0）', () => {
+  it('真零照念 ¥0.00 —— 0 是业务结论，不能被吞进"没给"那一格', () => {
+    expect(moneyText(0)).toBe('¥0.00')
+    expect(distanceText(0)).toBe('0.00')
+  })
+  it('null / undefined / 空串都念"没给"，不替后端说"今天是 0 元"', () => {
+    expect(moneyText(null)).toBe('没给')
+    expect(moneyText(undefined)).toBe('没给')
+    expect(moneyText('')).toBe('没给')
+    expect(distanceText(null)).toBe('没给')
+  })
+  it('字符串数额同样格式化（后端 BigDecimal 序列化可能是串）', () => {
+    expect(moneyText('12.5')).toBe('¥12.50')
+    expect(distanceText('7.125')).toBe('7.13')
+  })
+  it('不是数的值点名，不静默变 NaN 或 0.00', () => {
+    expect(moneyText('abc')).toBe('没给（值不是数：abc）')
+    expect(distanceText('abc')).toBe('没给（值不是数：abc）')
+  })
+  it('单位只在调用方念一次（表头已写 km 的格子不再追加）', () => {
+    expect(distanceText(3.5, 'km')).toBe('3.50 km')
+    expect(distanceText(3.5)).toBe('3.50')
+  })
+})
+
+// ── 事件现场照片的三态（队列 #60 / 台账 D-135）：没有 / 读不出 / 有地址 ──
+describe('eventPhotoState（extraData 里的现场照片）', () => {
+  it('没有 extraData 就是"没有附件"，不报"读不出"', () => {
+    expect(eventPhotoState(undefined)).toEqual({ url: '', unreadable: false })
+    expect(eventPhotoState('')).toEqual({ url: '', unreadable: false })
+  })
+  it('合法 JSON 但没有 photoUrl 键：算"没有附件"，不算读不出（别的事件也往这一格写别的键）', () => {
+    expect(eventPhotoState('{"foo":1}')).toEqual({ url: '', unreadable: false })
+  })
+  it('photoUrl 是个串就念出来（后台要点开看）', () => {
+    expect(eventPhotoState('{"photoUrl":"https://x/a.jpg"}').url).toBe('https://x/a.jpg')
+  })
+  it('JSON 坏了必须明说"读不出"，不能塌成"这单没拍照"', () => {
+    expect(eventPhotoState('{"photoUrl":')).toEqual({ url: '', unreadable: true })
   })
 })

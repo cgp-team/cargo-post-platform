@@ -376,6 +376,7 @@ interface RouteView {
   plateNo?: string
 }
 
+const stationDict = useStationDictStore()
 const loading = ref(false)
 const plans = ref<DispatchApi.DispatchPlanRespVO[]>([])
 const activePlanId = ref(0)
@@ -444,6 +445,7 @@ const roadmapSegments = ref<Map<string, { provider: string; points: { lng: numbe
 // WEB-09: 经停动作映射统一消费 constants.ts（与后端 DispatchPlanItemDO.actionType 权威口径一致）
 import { stopActionLabel } from '../constants'
 import { gcj02ToBd09 } from '@/components/Map'
+import { useStationDictStore } from '@/store/modules/stationDict'
 
 const actionLabel = (action?: number) => stopActionLabel(action)
 const actionClass = (action?: number) =>
@@ -1591,7 +1593,7 @@ const load = async () => {
   resetMap()
   try {
     const [stationList, vehicleList, driverList] = await Promise.all([
-      StationApi.getSimpleStationList().catch(() => []),
+      stationDict.load().catch(() => []),
       VehicleApi.getSimpleVehicleList().catch(() => []),
       DriverApi.getSimpleDriverList().catch(() => [])
     ])

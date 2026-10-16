@@ -82,16 +82,17 @@ const isDanger = (date?: string) => {
 const getList = async () => {
   driverLoading.value = true
   vehicleLoading.value = true
-  try {
-    driverList.value = await DriverApi.getDriverExpiringList(days.value)
-  } finally {
-    driverLoading.value = false
-  }
-  try {
-    vehicleList.value = await VehicleApi.getVehicleExpiringList(days.value)
-  } finally {
-    vehicleLoading.value = false
-  }
+  // 两份到期清单各查各的：串成链等于两个 RTT 之和，而且司机那一个抛错时车辆清单根本不取，
+  // 第二个页签会停在"空"上，读起来像"没有即将到期的车辆"。并发跑，失败的那格维持原样，
+  // 错误仍由请求层提示。
+  const [d, v] = await Promise.allSettled([
+    DriverApi.getDriverExpiringList(days.value),
+    VehicleApi.getVehicleExpiringList(days.value)
+  ])
+  if (d.status === 'fulfilled') driverList.value = d.value
+  if (v.status === 'fulfilled') vehicleList.value = v.value
+  driverLoading.value = false
+  vehicleLoading.value = false
 }
 onMounted(getList)
 </script>

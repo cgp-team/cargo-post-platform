@@ -1,5 +1,8 @@
 package cn.iocoder.yudao.module.transport.controller.admin.transport.order;
 
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
@@ -43,6 +46,8 @@ public class TransportOrderController {
     @PostMapping("/create")
     @Operation(summary = "创建订单")
     @PreAuthorize("@ss.hasPermission('transport:order:create')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这张运单正在创建中，请勿重复提交（重复提交会生成两张单）")
     public CommonResult<Long> create(@Valid @RequestBody TransportOrderCreateReqVO reqVO) {
         return success(orderService.create(reqVO));
     }

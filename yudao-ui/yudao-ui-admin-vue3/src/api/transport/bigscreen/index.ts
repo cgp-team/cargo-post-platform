@@ -1,8 +1,6 @@
 import request from '@/config/axios'
-import type {
-  MonitoringMapDataVO,
-  MonitoringVehicleVO
-} from '@/api/transport/monitoring'
+// 大屏页需要的 MonitoringMapDataVO / MonitoringVehicleVO 类型直接从 '@/api/transport/monitoring' 引：
+// 这里原来靠两个别名包装顺带导出它们，包装删掉后这两个具名类型就没有使用者了（队列 #68）。
 
 /** 大屏 · 24 小时趋势点 */
 export interface BigScreenTrendPointVO {
@@ -83,12 +81,6 @@ export const getBigScreenDistricts = (): Promise<BigScreenDistrictsVO> => {
   return request.get({ url: '/transport/bigscreen/districts' })
 }
 
-/** 大屏地图图层数据（T1 层，5min 轮询） */
-export const getBigScreenMapData = (): Promise<MonitoringMapDataVO> => {
-  return request.get({ url: '/transport/monitoring/map-data' })
-}
-
-/** 大屏车辆实时位置（T3 层，15s 轮询；后端缓存 12s） */
-export const getBigScreenVehicles = (): Promise<MonitoringVehicleVO[]> => {
-  return request.get({ url: '/transport/monitoring/vehicles' })
-}
+// 大屏的「T1 地图图层」与「T3 车辆位置」直接消费 api/transport/monitoring 的
+// getMonitoringMapData / getMonitoringVehicles：这里原来各有一个别名包装打同一个端点，
+// 等于同一份契约两处维护（队列 #68 / 台账 D-134）。

@@ -1,9 +1,9 @@
 <template>
   <ContentWrap title="车辆管理">
     <ContentWrap>
-      <el-form :inline="true" :model="queryParams" @submit.prevent="getList">
+      <el-form :inline="true" :model="queryParams" @submit.prevent="handleQuery">
         <el-form-item label="车牌号">
-          <el-input v-model="queryParams.plateNo" placeholder="请输入车牌号" clearable @keyup.enter="getList" />
+          <el-input v-model="queryParams.plateNo" placeholder="请输入车牌号" clearable @keyup.enter="handleQuery" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="queryParams.status" placeholder="请选择" clearable style="width:120px">
@@ -12,7 +12,7 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="getList"><Icon icon="ep:search" />搜索</el-button>
+          <el-button type="primary" @click="handleQuery"><Icon icon="ep:search" />搜索</el-button>
           <el-button @click="resetQuery"><Icon icon="ep:refresh" />重置</el-button>
         </el-form-item>
       </el-form>
@@ -21,6 +21,14 @@
       <el-button type="primary" v-hasPermi="['transport:vehicle:create']" @click="openForm('create')">
         <Icon icon="ep:plus" />新增车辆
       </el-button>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="车牌号" prop="plateNo" align="center" />
         <el-table-column label="车辆类型" prop="vehicleType" align="center" />
@@ -74,6 +82,7 @@ defineOptions({ name: 'TransportVehicle' })
 const message = useMessage()
 // WEB-09: 车辆状态/实时状态映射统一消费 constants.ts（本地映射已删）
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref([])
 type VehicleQueryParams = {
@@ -92,8 +101,15 @@ const queryParams = reactive<VehicleQueryParams>({
 const formRef = ref()
 const getList = async () => {
   loading.value = true
-  try { const res = await VehicleApi.getVehiclePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false }
+  try { const res = await VehicleApi.getVehiclePage(queryParams); list.value = res.list; total.value = res.total } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
+  } finally { loading.value = false }
 }
+const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, plateNo: '', status: undefined }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)
 const handleDelete = async (id: number) => {

@@ -197,6 +197,23 @@ public class UserNotificationServiceImpl implements UserNotificationService {
     }
 
     @Override
+    public java.util.Map<String, Long> getAdminUnreadCount() {
+        // 一次把未处理的行取回来在内存里分档：count 发三条的话，"总数 ≠ 各档之和"这种不一致永远查不出来
+        java.util.List<TransportUserNotificationDO> rows = notificationMapper.selectListUnreadByAdmin();
+        java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
+        out.put("total", (long) rows.size());
+        for (NotificationLevelEnum lv : NotificationLevelEnum.values()) {
+            out.put(lv.name(), rows.stream().filter(r -> lv.name().equals(r.getLevel())).count());
+        }
+        return out;
+    }
+
+    @Override
+    public void markAdminRead(Long notificationId) {
+        markAsRead(notificationId, NotificationRecipientTypeEnum.ADMIN, ADMIN_RECIPIENT_ID);
+    }
+
+    @Override
     public void markAllAsRead(Long userId, Long orderId) {
         if (userId == null) {
             return;

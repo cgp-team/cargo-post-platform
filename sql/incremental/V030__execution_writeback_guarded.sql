@@ -4,8 +4,10 @@
 -- 为什么要多这一支，而不是直接把 V029 丢进自动迁移：
 --   V029 (`V029__execution_writeback.sql:20-26`) 是两段**裸 `ALTER TABLE ADD COLUMN`**，
 --   没有存在性判断 ⇒ 第二次执行必然 `Duplicate column name` 报错。而部署流水线里那条
---   `Run database migration`（`cargo-post-platform/.github/workflows/deploy-dev.yml:154`）
---   每次 push master 都会**无条件**把白名单里的脚本再打一遍 ⇒ 裸 ALTER 一旦进白名单，
+--   `Run database migration` 与 `执行幂等迁移` 两个步骤（`.github/workflows/deploy-dev.yml`、
+--   `.github/workflows/db-migrate-guarded.yml`，按步骤名认，别锚行号）会把白名单里的脚本**反复重放**
+--   （deploy-dev 在仓库变量 AUTO_DB_MIGRATE=1 时整段重放；guarded 每次 mode=apply 也都重跑本文件）
+--   ⇒ 裸 ALTER 一旦进白名单，
 --   第二次部署就会把整条流水线红掉（红在迁移步，后面 jar 重启与发布都不会发生）。
 --   所以进白名单的版本必须逐列判存在性——沿用本仓已有的写法（`V024__key_indexes_and_unique_keys.sql:11-16`
 --   的 `information_schema` + PREPARE/EXECUTE 形状，V024/V025 因此才可安全重复）。

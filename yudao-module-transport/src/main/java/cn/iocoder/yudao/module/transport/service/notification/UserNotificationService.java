@@ -45,6 +45,16 @@ public interface UserNotificationService {
     /** 标记单条通知已读（校验归属：同时比对接收方类型与编号，司机 id 与会员 id 同空间，只比 id 会串） */
     void markAsRead(Long notificationId, NotificationRecipientTypeEnum recipientType, Long recipientId);
 
+    /**
+     * #92 管理员未处理告警分档：`total` + 每个 level 的条数。
+     * ⚠ 这里是**查询结果**，不是"没有告警"——查失败要抛出去让页面说"没读到"，
+     *   不许在服务层把异常吞成空 Map（那一格一旦被折叠成 0，运营读到的就是"今天很干净"）。
+     */
+    java.util.Map<String, Long> getAdminUnreadCount();
+
+    /** #92 后台把一条管理员告警标为已处理：只认 recipientType=ADMIN 那一格，记下 readTime（表里没有操作人列，不假装有） */
+    void markAdminRead(Long notificationId);
+
     /** 批量标记已读：orderId 为空时标记该用户全部未读 */
     void markAllAsRead(Long userId, Long orderId);
 

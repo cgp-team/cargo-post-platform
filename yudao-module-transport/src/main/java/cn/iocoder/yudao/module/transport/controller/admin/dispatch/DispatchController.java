@@ -2,6 +2,8 @@ package cn.iocoder.yudao.module.transport.controller.admin.dispatch;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
 import cn.iocoder.yudao.module.transport.controller.admin.dispatch.vo.*;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.TransportOrderDO;
@@ -11,6 +13,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
+import java.util.concurrent.TimeUnit;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -57,6 +60,8 @@ public class DispatchController {
     @PostMapping("/plan/manual")
     @Operation(summary = "手工派单")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:manual-plan')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "手工派单正在提交中，请勿重复提交（重复提交会把同一批订单派两次）")
     public CommonResult<Long> createManualPlan(@Valid @RequestBody DispatchManualPlanReqVO reqVO) {
         return success(dispatchService.createManualPlan(reqVO));
     }
@@ -64,6 +69,8 @@ public class DispatchController {
     @PostMapping("/plan/smart")
     @Operation(summary = "智能派单")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:smart-plan')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这一轮智能调度正在跑，请勿重复提交（重复提交会生成第二个方案）")
     public CommonResult<Long> createSmartPlan(@Valid @RequestBody DispatchSmartPlanReqVO reqVO) {
         return success(dispatchService.createSmartPlan(reqVO));
     }
@@ -113,6 +120,8 @@ public class DispatchController {
     @PostMapping("/plan/prefetch-road")
     @Operation(summary = "预热订单池/今日方案的真实道路轨迹（高德配额恢复后调用一次，落库后可视化不再出现两点直线）")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:query')")
+    @Idempotent(timeout = 60, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "轨迹预热正在跑，请勿重复提交（会重复消耗高德配额）")
     public CommonResult<Integer> prefetchRoad() {
         return success(dispatchService.prefetchRoadGeometry());
     }
@@ -128,6 +137,8 @@ public class DispatchController {
     @PostMapping("/departure-check")
     @Operation(summary = "发车核验")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:check')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这次发车核验正在处理，请勿重复提交")
     public CommonResult<Boolean> departureCheck(@Valid @RequestBody DispatchCheckReqVO reqVO) {
         dispatchService.departureCheck(reqVO);
         return success(true);

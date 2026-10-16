@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>cn.iocoder.boot</groupId>
+        <artifactId>yudao</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>yudao-module-ai-assist</artifactId>
+    <packaging>jar</packaging>
+
+    <name>${project.artifactId}</name>
+    <description>
+        AI 智能辅助业务模块（队列 #93 / docs/AI_ASSIST_BOUNDARY.md）。
+        独立 module：不改 yudao-module-transport 的 Service/Controller，只做"不接 AI 也能交付"的数据地基与只读外壳。
+    </description>
+
+    <dependencies>
+        <!-- 业务组件：沿用项目已有多租户能力 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-biz-tenant</artifactId>
+        </dependency>
+
+        <!-- 只读复用主线那一份乡镇事件日历与唯一脱敏出口（契约 §6.1 / §4）：
+             方向是 ai-assist → transport，单向；transport 不认得本模块，所以不会有环。
+             ⚠ 不许在这里再建第二张日历表 —— 第 14 本闸（check_business_table_single_owner）就是拦这个的。 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-module-transport</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
+        <!-- Web 与权限：管理端接口继续经过项目统一认证授权 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- 保护能力：@Idempotent 幂等 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-protection</artifactId>
+        </dependency>
+
+        <!-- 数据访问 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-mybatis</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Test 测试相关 -->
+        <dependency>
+            <groupId>cn.iocoder.boot</groupId>
+            <artifactId>yudao-spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

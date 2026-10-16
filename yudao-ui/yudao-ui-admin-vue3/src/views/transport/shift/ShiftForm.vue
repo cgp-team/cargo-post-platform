@@ -1,5 +1,13 @@
 <template>
   <Dialog :title="dialogTitle" v-model="dialogVisible" width="480px">
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="loadError"
+      style="margin-bottom:12px"
+    />
     <el-form ref="formRef" :model="formData" :rules="formRules" label-width="120px" v-loading="formLoading">
       <el-form-item label="班次编码" prop="shiftCode">
         <el-input v-model="formData.shiftCode" placeholder="请输入班次编码" />
@@ -54,20 +62,35 @@ const resetForm = () => {
   formRef.value?.resetFields()
 }
 
-const open = (type: string, id?: number) => {
+const loadError = ref('')
+const open = async (type: string, id?: number) => {
   dialogVisible.value = true
+  loadError.value = ''
   dialogTitle.value = type === 'create' ? '新增班次' : '编辑班次'
   formType.value = type
   resetForm()
   loadRouteList()
   if (id) {
     formLoading.value = true
-    ShiftApi.getShift(id).then((data) => { formData.value = { ...formData.value, ...data }; formLoading.value = false })
+    try {
+      const data = await ShiftApi.getShift(id)
+      formData.value = { ...formData.value, ...data }
+    } catch (e: any) {
+      // 原来是 .then 且没有 reject 出口：读失败时表单停在默认值上，保存就把库里那行改掉
+      loadError.value = '这条班次没读到：' + (e?.msg || e?.message || '未知原因') + '（表单里是默认值，别直接保存）'
+    } finally {
+      formLoading.value = false
+    }
   }
 }
 
 const loadRouteList = async () => {
-  try { routeList.value = await RouteApi.getSimpleRouteList() } catch (e) { /* ignore */ }
+  try {
+    routeList.value = await RouteApi.getSimpleRouteList()
+  } catch (e: any) {
+    routeList.value = []
+    loadError.value = (loadError.value ? loadError.value + '；' : '') + '线路下拉没读到：' + (e?.msg || e?.message || '未知原因') + '（下拉空 ≠ 库里没有线路）'
+  }
 }
 
 defineExpose({ open })

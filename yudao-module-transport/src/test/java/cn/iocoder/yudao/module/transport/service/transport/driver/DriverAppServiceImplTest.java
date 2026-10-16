@@ -7,6 +7,7 @@ import cn.iocoder.yudao.module.member.api.user.MemberUserApi;
 import cn.iocoder.yudao.module.member.api.user.dto.MemberUserRespDTO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverArriveReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverDepartReqVO;
+import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverLegActionReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverLocationReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverOrderActionReqVO;
 import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppDriverPickupRespVO;
@@ -14,6 +15,7 @@ import cn.iocoder.yudao.module.transport.controller.app.transport.driver.vo.AppD
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanItemDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.DispatchPlanLogDO;
+import cn.iocoder.yudao.module.transport.dal.dataobject.dispatch.TransportLegDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.driver.DriverVehicleDO;
 import cn.iocoder.yudao.module.transport.dal.dataobject.order.PostalOrderDO;
@@ -43,6 +45,8 @@ import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleLocationTrackM
 import cn.iocoder.yudao.module.transport.dal.mysql.vehicle.VehicleMapper;
 import cn.iocoder.yudao.module.transport.enums.dispatch.DispatchPlanStatusEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TaskItemStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportLegStatusEnum;
+import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderEventTypeEnum;
 import cn.iocoder.yudao.module.transport.enums.dispatch.TransportOrderStatusEnum;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -1070,5 +1074,58 @@ class DriverAppServiceImplTest {
 
         verify(productOrderService).driverLoad(DRIVER_ID, 7L, 900L, "http://file/load.jpg");
         verify(productOrderService).driverDeliver(DRIVER_ID, 7L, 900L, "http://file/load.jpg");
+    }
+
+    // ==================== 段异常上报的现场照片（队列 #60 / 台账 D-135） ====================
+    // 断的不是"有没有报错"，是**凭证落在哪一格**：photoUrl 只能记进订单事件的 extra_data。
+    // 少一条断言就会放过两种坏法：① 参数收下了却没写库（司机的照片又变回没人接）；
+    // ② 没带照片也写一个空串（事后读起来像"司机传了张空照片"，而真相是他没传）。
+
+    private AppDriverLegActionReqVO legActionReq(String photoUrl, String remark) {
+        AppDriverLegActionReqVO reqVO = new AppDriverLegActionReqVO();
+        reqVO.setDriverId(DRIVER_ID);
+        reqVO.setLegId(501L);
+        reqVO.setPhotoUrl(photoUrl);
+        reqVO.setRemark(remark);
+        return reqVO;
+    }
+
+    private void stubLegOwnedByDriver() {
+        when(multiLegService.getLeg(501L)).thenReturn(TransportLegDO.builder()
+                .id(501L).orderId(700L).legSequence(2).driverId(DRIVER_ID)
+                .status(TransportLegStatusEnum.IN_TRANSIT.getStatus()).build());
+        when(transportOrderMapper.selectById(700L)).thenReturn(
+                TransportOrderDO.builder().id(700L).status(TransportOrderStatusEnum.IN_TRANSIT.getStatus()).build());
+    }
+
+    @Test
+    void legAction_exception_writes_photoUrl_into_order_event_extra_data() {
+        loginMember();
+        stubLoginDriver();
+        stubLegOwnedByDriver();
+
+        driverAppService.legAction("exception", legActionReq("https://file/exception-501.jpg", "车辆故障：爆胎"));
+
+        ArgumentCaptor<String> extra = ArgumentCaptor.forClass(String.class);
+        verify(orderEventService).record(eq(700L), eq(TransportOrderEventTypeEnum.ORDER_EXCEPTION),
+                eq("第 2 段异常：车辆故障：爆胎"), extra.capture());
+        // 钉的是**语义**而不是序列化字节（Hutool 改个空格不该把用例弄红）：这一格里只有 photoUrl，且就是那个地址
+        cn.hutool.json.JSONObject json = cn.hutool.json.JSONUtil.parseObj(extra.getValue());
+        assertEquals(1, json.size());
+        assertEquals("https://file/exception-501.jpg", json.getStr("photoUrl"));
+        verify(multiLegService).forceLegStatus(501L, TransportLegStatusEnum.EXCEPTION, "车辆故障：爆胎");
+    }
+
+    @Test
+    void legAction_exception_without_photo_leaves_extra_data_null_instead_of_an_empty_url() {
+        loginMember();
+        stubLoginDriver();
+        stubLegOwnedByDriver();
+
+        driverAppService.legAction("exception", legActionReq("  ", "道路中断"));
+
+        // 空白串同样算"没给"：写进去就是一条指向空地址的凭证
+        verify(orderEventService).record(eq(700L), eq(TransportOrderEventTypeEnum.ORDER_EXCEPTION),
+                eq("第 2 段异常：道路中断"), isNull());
     }
 }

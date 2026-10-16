@@ -32,7 +32,21 @@
 - `V021__remove_simulation.sql`：移除模拟运营子系统与开发者中心——删除 4 张模拟运行时表（`simulation_run` 等）及相关菜单/授权（幂等）。
 - `V022__member_menu.sql`：新增「会员中心」顶级目录与「会员列表」菜单（幂等）。
 
-另：`sql/mysql/transport-schema-incremental.sql` 为幂等的增量列补齐脚本（给已存在的老表补新列），已纳入 CI 迁移步骤，在 `transport-schema.sql` 之后自动执行。
+> ⚠ 上面这份逐版清单**停在 `V022`**（2026-09 之后就没再逐条补，别再把它当成最新版号）。V023 及以后以两处为准：
+> ① `.github/workflows/db-migrate-guarded.yml` 的 apply 白名单 —— 允许在云上跑的那 **15 支**（`V028`、`V030`–`V037`、`V050`–`V055`；`V029` 明确排除）；
+> ② 每支脚本自己的文件头注释（编号归属、幂等写法、以及为什么这么写）。
+>
+> 白名单是不是真的能重跑第二遍，由 `scripts/check_migration_idempotency.py` 在本机 MySQL 上**实测**：开一次性库 → 照 `sql/mysql/` 基线建好 → 白名单跑两遍逐表比对行数 → 再把工作流里 32 格 `probe_strict` 的原句跑一遍对期望值 → DROP。它要一个能连的库，**CI 里没有 ⇒ 不进 `ci.yml` 那 15 本静态闸**；连不上/抽不到白名单时 `rc=2` **拒判**，绝不因为「没数到漂移」就报绿。
+
+另：`sql/mysql/transport-schema-incremental.sql` 为幂等的增量列补齐脚本（给已存在的老表补新列）。它**不再每次部署自动执行**：
+自 2026-10-16 起 `deploy-dev.yml` 的迁移步骤要仓库变量 `AUTO_DB_MIGRATE=1` 才跑，常规路径只有
+`.github/workflows/db-migrate-guarded.yml`（`mode=check` 只读探测 / `mode=apply` + `confirm=APPLY` 才写，且只跑幂等白名单）。
+详见 `docs/deployment.md` 的「部署不写库：迁移只有一个入口」。
+
+`V032__pricing_rule_menu.sql` + `V036__pricing_rule_menu_free_ids.sql` 是同一页菜单的两支：前者给全新库，
+后者给「已经跑过旧版 V032、那一页因为主键撞号从来没插进去」的库。两条都按 `permission` 判存在，可反复执行，
+末尾自检必须数到 2 行；主键用 6940/6941（6930/6931 归 `transport-multi-leg-menu.sql` 的货物交接与交接争议处理）。
+撞号由 `scripts/check_menu_id_collisions.py` 静态拦，已挂进 `ci.yml`。
 
 一次性运维脚本：`deploy/scripts/purge-demo-data.sql` 为**一次性手工清库**脚本（清空全部比赛演示业务/资源/会员数据，仅保留 admin 与系统租户），已在 2026-09-21 服务器清库时执行过；危险操作，仅允许备份后手工执行，绝不纳入 CI/自动化。
 
