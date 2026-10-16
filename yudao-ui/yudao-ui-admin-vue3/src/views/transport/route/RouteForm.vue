@@ -78,7 +78,9 @@
 import * as RouteApi from '@/api/transport/route'
 import * as StationApi from '@/api/transport/station'
 import { Dialog } from '@/components/Dialog'
+import { useStationDictStore } from '@/store/modules/stationDict'
 const message = useMessage()
+const stationDict = useStationDictStore()
 const formLoading = ref(false)
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -187,7 +189,7 @@ const saveStations = async () => {
   }
 }
 const loadStationList = async () => {
-  try { stationList.value = await StationApi.getSimpleStationList() } catch (e) { /* ignore */ }
+  try { stationList.value = await stationDict.load() } catch (e) { /* ignore */ }
 }
 defineExpose({ open })
 const submitForm = async () => {
