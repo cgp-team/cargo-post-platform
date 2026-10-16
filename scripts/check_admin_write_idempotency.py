@@ -7,7 +7,7 @@
 5 个不可逆口有确认框 —— 那两个层都只在**同一个浏览器页签**里有效。两个会话、两块屏、
 一个脚本、一次"请求发出去了但回执没收到"的手动重试，前端一句都挡不了。
 
-口径（为什么只钉这 8 个，不给 46 个全覆盖）：
+口径（为什么只钉这 9 个，不给 49 个全覆盖）：
 · 判据只有一条：**重复执行会不会多出第二份东西**。逐个读过实现才定，不看名字猜。
 · 字典类 create（站点/车辆/司机/线路/班次/商品/公告）**故意不钉**：运营连着建两条同名记录是有意的，
   10 秒的键会把正当操作吞掉。
@@ -27,7 +27,7 @@
 · 按行号邻近配对会把上一个方法的注解顶给下一个方法（假阳性）。同一个原因。
 
 用法：python3 scripts/check_admin_write_idempotency.py [--self-test] [仓库根]
-退出码：0 = 在册 8 口全部带合规幂等键且对照数吻合；1 = 有缺/形状不合/在册漂移；2 = 扫描根不存在或一个写口都没数到。
+退出码：0 = 在册 9 口全部带合规幂等键且对照数吻合；1 = 有缺/形状不合/在册漂移；2 = 扫描根不存在或一个写口都没数到。
 """
 
 # 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
@@ -45,11 +45,16 @@ import sys
 
 ADMIN_ROOT = os.path.join("yudao-module-transport", "src", "main", "java", "cn", "iocoder", "yudao",
                           "module", "transport", "controller", "admin")
-PIN_ADMIN_WRITES = 46          # 现读对照数：admin 写口总数，变了要同轮写清原因
+PIN_ADMIN_WRITES = 49          # 现读对照数：admin 写口总数，变了要同轮写清原因
 # 45 → 46（2026-10-16，队列 #92）：新增 `PUT /transport/notification/mark-admin-read`
 #   （把一条管理员告警标为已处理）。这一口**故意不钉幂等键**，按上面的口径：PUT 且重复=同结果，
 #   而且服务层自己已经幂等（`markAsRead` 见已读直接 return，不再写库）。
-PIN_COVERED = 8                # 在册必须带幂等键的口数
+# 46 → 49（同日，队列 #93）：新控制器 TownEventController 一口气带进**三个**写口
+#   （POST create / PUT update / DELETE delete）。我先按 +1 写成 47，被这本闸当场打回（现读 49 ≠ 47）
+#   —— 把这一笔留在这儿是因为它正是这本闸存在的意义：**估的不算数，扫面变了必须重新数**。
+#   三个里只有 create 钉键（属于"重复一次多一条记录"那一类，且服务层的同镇同日查重在并发下会双双通过）；
+#   update / delete 重复=同结果，按上面的口径不钉。
+PIN_COVERED = 9                # 在册必须带幂等键的口数
 
 MAP_RE = re.compile(r"@(Post|Put|Delete|Patch)Mapping\b(?:\s*\(\s*(?:value\s*=\s*)?\"([^\"]*)\")?")
 CLS_RE = re.compile(r"@RequestMapping\(\s*\"([^\"]+)\"")
@@ -69,6 +74,8 @@ MUST_COVER = {
     "POST /transport/order/create": "运单重复创建 = 两张真单，后面每一环都会各跑一遍",
     "POST /transport/topology/replan-leg": "重调度每次都 updateById 换车换司机（legMapper/planMapper 各一处，实读）",
     "POST /transport/wallet/adjust-balance": "调账重复执行 = 同一笔钱调两次（无任何状态守卫，直接 recharge/consume）",
+    "POST /transport/town-event/create": "日历重复登记 = 同一个集日被情景提示数两遍（服务层查重按 start_date，"
+                                         "两次并发提交能同时通过）",
 }
 
 
@@ -241,7 +248,7 @@ def run_self_test():
                 print("✘ K0 真树 rc=%d（期望 0）" % got0)
                 rc = 1
             else:
-                print("✔ K0 真树合规（在册 8 口全带键）")
+                print("✔ K0 真树合规（在册 9 口全带键）")
         else:
             print("! K0 跳过：不在仓库根运行")
         MUST_COVER.clear()
