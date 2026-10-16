@@ -31,6 +31,14 @@
       <el-button type="primary" v-hasPermi="['transport:station:create']" @click="openForm('create')">
         <Icon icon="ep:plus" />新增站点
       </el-button>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="站点编码" prop="stationCode" align="center" />
         <el-table-column label="站点名称" prop="stationName" align="center" />
@@ -111,6 +119,7 @@ defineOptions({ name: 'TransportStation' })
 const message = useMessage()
 const stationDict = useStationDictStore()
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref([])
 type StationQueryParams = {
@@ -141,6 +150,12 @@ const getList = async () => {
     const res = await StationApi.getStationPage(queryParams)
     list.value = res.list
     total.value = res.total
+  } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
   } finally { loading.value = false }
 }
 const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"

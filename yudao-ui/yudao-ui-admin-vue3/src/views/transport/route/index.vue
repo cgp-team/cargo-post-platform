@@ -18,6 +18,14 @@
       <el-button type="primary" v-hasPermi="['transport:route:create']" @click="openForm('create')">
         <Icon icon="ep:plus" />新增线路
       </el-button>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border style="margin-top:16px">
         <el-table-column label="线路编码" prop="routeCode" align="center" />
         <el-table-column label="线路名称" prop="routeName" align="center" show-overflow-tooltip />
@@ -66,6 +74,7 @@ import * as RouteApi from '@/api/transport/route'
 import RouteForm from './RouteForm.vue'
 defineOptions({ name: 'TransportRoute' })
 const message = useMessage(); const loading = ref(true); const total = ref(0); const list = ref([])
+const listError = ref('')
 type RouteQueryParams = {
   pageNo: number
   pageSize: number
@@ -81,7 +90,13 @@ const queryParams = reactive<RouteQueryParams>({
 }); const formRef = ref()
 const serviceText = (t?: string) =>
   t === 'PASSENGER' ? '客运' : (t === 'MIXED' ? '客货邮' : '货运')
-const getList = async () => { loading.value = true; try { const res = await RouteApi.getRoutePage(queryParams); list.value = res.list; total.value = res.total } finally { loading.value = false } }
+const getList = async () => { loading.value = true; try { const res = await RouteApi.getRoutePage(queryParams); list.value = res.list; total.value = res.total } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
+  } finally { loading.value = false } }
 const handleQuery = () => { queryParams.pageNo = 1; getList() }  // 搜索必须先回第 1 页：带着旧页码查新条件，新条件下常常没有第 N 页 ⇒ 表格空、念成"暂无数据"
 const resetQuery = () => { Object.assign(queryParams, { pageNo: 1, pageSize: 10, routeCode: '', routeName: '' }); getList() } // WEB-22: 清空全部查询字段
 const openForm = (type: string, id?: number) => formRef.value?.open(type, id)

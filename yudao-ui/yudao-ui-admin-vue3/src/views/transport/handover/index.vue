@@ -28,6 +28,14 @@
     </ContentWrap>
 
     <ContentWrap>
+      <el-alert
+          v-if="listError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="listError"
+          description="这张空表只说明这次请求没成功；下面的「暂无数据」不是业务结论。"
+      />
       <el-table v-loading="loading" :data="list" stripe border>
         <el-table-column label="交接编号" prop="id" align="center" width="90" />
         <el-table-column label="订单号" prop="orderNo" align="center" width="140" show-overflow-tooltip />
@@ -107,6 +115,7 @@ defineOptions({ name: 'TransportHandover' })
 
 const message = useMessage()
 const loading = ref(true)
+const listError = ref('')
 const total = ref(0)
 const list = ref<HandoverApi.HandoverVO[]>([])
 const queryParams = reactive<{ pageNo: number; pageSize: number; orderId?: number; stationId?: number; status?: number }>({
@@ -126,6 +135,12 @@ const getList = async () => {
     const res = await HandoverApi.getHandoverPage(queryParams)
     list.value = res.list
     total.value = res.total
+  } catch (e: any) {
+    // 失败必须先清数据再留字：清掉是防「还在念上一次」，留字是防「空白被读成没有」
+    // （队列 #68 / 台账 D-134；判据 scripts/check_admin_catch_leaves_data.py）
+    list.value = []
+    total.value = 0
+    listError.value = '列表没读到：' + (e?.msg || e?.message || '未知原因（这不是「没有数据」）')
   } finally {
     loading.value = false
   }
