@@ -248,6 +248,7 @@ create_time   datetime
 | **§4 脱敏收进唯一出口**（2026-10-16 补） | `transport/util/SensitiveDataMask#maskEmbeddedMobiles`（**出口内部再自检一次**，掩不干净就抛）；AI 侧不再自写手机号正则 —— `AiTaskService#mask` 调出口 + `AiTasks#assertNoPlainMobile` 二次断言 | 第 13 本闸"AI 面命中 0 处"；出口自测 +2 用例（transport 387→389） |
 | **第 15 本静态闸**（2026-10-16 补） | `scripts/check_ai_assist_boundaries.py`：A1 任务目录里不许出现业务写口 / A2 只有 `AiGateway` 能做 HTTP / A3 日志生产者 ≥1 / A4 密钥只与 `Authorization` 同现 / A5 返回只能是 `Draft`；K1–K6 刀口 + K7 真树读数 | `rc=0`；`--self-test rc=0`（K6 证明"密钥出现在没有 Authorization 的文件里"会红） |
 | **第 12 本闸的扫描根补齐**（2026-10-16 补，队列 #99） | `check_admin_write_idempotency.py`：`MODULE_ADMIN` 加 ai-assist=(10,1)，并加 `MUST_COVER_OWNER` + `demand` 过滤 ⇒ **模块还没落地时大声跳过，而不是把"端点被删了"念成合规**；K8/K9 两把刀专门钉这本闸自己的覆盖面 | `rc=0`（写口 10 / 在册 10 / 自带幂等键 1）；`--self-test rc=0` |
+| **§7 悬浮助手**（2026-10-17 补，用户拍板"可以"） | 一个 FAB + 抽屉：`views/transport/ai/assist/AiAssistantFab.vue`（`<template v-if="showFab">` + `v-hasPermi` 两条件）+ **六格抽成 `AiTaskPanel.vue` 与路由页共用一份** + `hooks/web/useAiDraft.ts`（共用状态机 + 能力探针全站只问一次）+ `views/transport/ai/aiAssistantGate.ts`（挂载闸纯函数）挂进 `layout/Layout.vue`。**没有新增后端写口、权限位不变、没加全局热键** | vitest `aiAssistantGate.test.ts` 5 条（正反都钉）；浏览器两侧实测见 **13.8** |
 
 三条纪律落在代码里，接手时别破坏：**未录容量 ≠ 0 座**（`CapacityConflictServiceImpl`）；**缺值不折叠成 0**（简报数值用文字承载）；**只读不写**（两个新接口都不落库、不注入写口）。
 
@@ -352,3 +353,29 @@ query-builder（必填校验拦空标题；**create `data=1`、同条件 10 秒�
 town-event（**UI 建成**：杨柳镇/赶集/2026-10-17）。
 跨页正向：日历那条被 assist 读到 ⇒ `杨柳镇：赶集（登记的那一天）→ 建议提前与调度确认留舱量`，
 依据明写 `规则展开，未经模型` —— **"关掉 AI 整套后台仍完整可用"第一次有页面级证据**。
+
+### 13.8 悬浮助手（2026-10-17 · 用户拍板"可以"后的实现与两侧实测）
+
+**形状**（开工前说好、实现时照办的三条）：复用现有六个接口与**同一套六格**（抽成 `AiTaskPanel.vue`，
+路由页只剩壳）、**不新增后端写口 / 权限位不变**、**不加全局热键**（会撞 DENY 清单）。
+
+**红线怎么落的**：`aiAssistantGate.ts` 里一个纯函数 —— `shouldMountAiAssistant(status)` 只认 `ready === true`；
+`AiAssistantFab.vue` 在 `onMounted` 探一次能力（模块级缓存，全站只问一次；失败缓存 false ⇒ **fail closed**），
+未就绪时 `<template v-if="showFab">` 直接不渲染，`v-hasPermi`（两个位任一）作为第二道条件。
+⚠ 组件故意放在 `views/transport/ai/assist/` 而不是 `src/components/`：**第 13 本闸的 AI 面扫描根就是那条路径**，
+搬走会让那本闸看不见它（同队列 #99 那类"扫描根漏掉新码"的坑，这次靠摆放位置避开，代码里也写了这句注释）。
+
+**两侧都真点了**（本机栈 + 本机假的 OpenAI 兼容端点 `127.0.0.1:8899`，密钥 `sk-local-mock` 是**假的**）：
+
+| 情形 | 读数 |
+|---|---|
+| AI 开着（`--buspost.ai.enabled=true --buspost.ai.base-url=http://127.0.0.1:8899/v1 --buspost.ai.model=mock-model`） | 能力接口 `ready=true / model=mock-model` ⇒ **FAB 出现**；点开抽屉是同一套六格；填带手机号的上报描述、点「问一次分类建议」⇒ 抽屉出 **`道路阻断` + `塌方挡住车道，材料里说车过不去`**（真解析出来的草稿）。假端点日志 `[2] path=/v1/chat/completions model=mock-model bearer=Bearer sk-local-mo…`；库 `order-semantic-classify \| ok \| 160`，**明文手机号留痕 0 行、掩码形状 3 行** |
+| AI 关掉（默认配置重启后刷新） | 能力接口 `ready=false` ⇒ **FAB 不存在**、页面上搜不到那句标题，运营概览照常 ⇒ **"关掉 AI 整套后台零变化"在页面上成立** |
+
+配置口也在真 jar 上跑通了（这正是 §7 说的"只改三个值"）。
+⚠ 踩过一次：**`-D` 放在 `-jar` 后面是程序参数、不是 JVM 系统属性** ⇒ 第一版启动后 `enabled` 仍是 false；
+改用 Spring 风格的 `--buspost.ai.enabled=true`（或把 `-D` 放到 `-jar` 前面）才生效。
+
+**读数**：vitest `4→5` 文件 / `54→59` 用例；SFC 扫 68 只 0 失败；`vue-tsc` 0 错；eslint 0 error（7 条既有 warning）；
+`build:prod` rc=0（`dist-prod` **373→377**，assist 与 FAB 文案都在产物里）；15 本静态闸全 `rc=0`
+（页面计数 43→45 = 本轮新增两个 `.vue`，写按钮 21 不变）。
