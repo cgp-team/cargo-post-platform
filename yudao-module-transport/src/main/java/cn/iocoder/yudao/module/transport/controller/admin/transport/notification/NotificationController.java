@@ -48,6 +48,24 @@ public class NotificationController {
         return success(BeanUtils.toBean(userNotificationService.get(id), NotificationRespVO.class));
     }
 
+    // #92：这张表里 USER/DRIVER/ADMIN 三类接收方共用编号空间，原来后台没有任何一格问得出
+    //   "管理员还有几条没处理"，告警写得进去、查不出来，等于没有告警队列。
+    @GetMapping("/admin-unread-count")
+    @Operation(summary = "管理员未处理告警分档计数（total + 每个 level）")
+    @PreAuthorize("@ss.hasPermission('transport:notification:query')")
+    public CommonResult<java.util.Map<String, Long>> adminUnreadCount() {
+        return success(userNotificationService.getAdminUnreadCount());
+    }
+
+    @PutMapping("/mark-admin-read")
+    @Operation(summary = "把一条管理员告警标为已处理（记 readTime；表里没有操作人列，所以不记是谁点的）")
+    @Parameter(name = "id", description = "通知编号", required = true)
+    @PreAuthorize("@ss.hasPermission('transport:notification:send')")
+    public CommonResult<Boolean> markAdminRead(@RequestParam("id") Long id) {
+        userNotificationService.markAdminRead(id);
+        return success(true);
+    }
+
     @PostMapping("/send")
     @Operation(summary = "发送用户通知")
     @PreAuthorize("@ss.hasPermission('transport:notification:send')")

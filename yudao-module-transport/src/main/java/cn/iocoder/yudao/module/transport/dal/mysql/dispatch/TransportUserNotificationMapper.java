@@ -16,6 +16,7 @@ public interface TransportUserNotificationMapper extends BaseMapperX<TransportUs
     default PageResult<TransportUserNotificationDO> selectPage(NotificationPageReqVO reqVO) {
         return selectPage(reqVO, new LambdaQueryWrapperX<TransportUserNotificationDO>()
                 .eqIfPresent(TransportUserNotificationDO::getUserId, reqVO.getUserId())
+                .eqIfPresent(TransportUserNotificationDO::getRecipientType, reqVO.getRecipientType())
                 .eqIfPresent(TransportUserNotificationDO::getEventType, reqVO.getEventType())
                 .eqIfPresent(TransportUserNotificationDO::getOrderId, reqVO.getOrderId())
                 .eqIfPresent(TransportUserNotificationDO::getReadStatus, reqVO.getReadStatus())
@@ -75,6 +76,17 @@ public interface TransportUserNotificationMapper extends BaseMapperX<TransportUs
                 .eq(TransportUserNotificationDO::getUserId, driverId)
                 .eq(TransportUserNotificationDO::getRecipientType, "DRIVER")
                 .eq(TransportUserNotificationDO::getReadStatus, 0));
+    }
+
+    /**
+     * #92 管理员未处理告警：一次把行取回来由服务层按 level 分档，别在这里按档位发三条 count
+     * （那会让"总数 ≠ 各档之和"这种不一致永远查不出来）。
+     */
+    default java.util.List<TransportUserNotificationDO> selectListUnreadByAdmin() {
+        return selectList(new LambdaQueryWrapperX<TransportUserNotificationDO>()
+                .eq(TransportUserNotificationDO::getRecipientType, "ADMIN")
+                .eq(TransportUserNotificationDO::getReadStatus, 0)
+                .orderByDesc(TransportUserNotificationDO::getId));
     }
 
 }

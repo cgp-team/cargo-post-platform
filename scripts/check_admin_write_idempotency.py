@@ -7,7 +7,7 @@
 5 个不可逆口有确认框 —— 那两个层都只在**同一个浏览器页签**里有效。两个会话、两块屏、
 一个脚本、一次"请求发出去了但回执没收到"的手动重试，前端一句都挡不了。
 
-口径（为什么只钉这 8 个，不给 45 个全覆盖）：
+口径（为什么只钉这 8 个，不给 46 个全覆盖）：
 · 判据只有一条：**重复执行会不会多出第二份东西**。逐个读过实现才定，不看名字猜。
 · 字典类 create（站点/车辆/司机/线路/班次/商品/公告）**故意不钉**：运营连着建两条同名记录是有意的，
   10 秒的键会把正当操作吞掉。
@@ -45,7 +45,10 @@ import sys
 
 ADMIN_ROOT = os.path.join("yudao-module-transport", "src", "main", "java", "cn", "iocoder", "yudao",
                           "module", "transport", "controller", "admin")
-PIN_ADMIN_WRITES = 45          # 现读对照数：admin 写口总数，变了要同轮写清原因
+PIN_ADMIN_WRITES = 46          # 现读对照数：admin 写口总数，变了要同轮写清原因
+# 45 → 46（2026-10-16，队列 #92）：新增 `PUT /transport/notification/mark-admin-read`
+#   （把一条管理员告警标为已处理）。这一口**故意不钉幂等键**，按上面的口径：PUT 且重复=同结果，
+#   而且服务层自己已经幂等（`markAsRead` 见已读直接 return，不再写库）。
 PIN_COVERED = 8                # 在册必须带幂等键的口数
 
 MAP_RE = re.compile(r"@(Post|Put|Delete|Patch)Mapping\b(?:\s*\(\s*(?:value\s*=\s*)?\"([^\"]*)\")?")
