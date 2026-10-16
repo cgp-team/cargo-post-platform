@@ -303,5 +303,12 @@ jobs:
         run: |
           python3 scripts/check_admin_write_idempotency.py --self-test
           python3 scripts/check_admin_write_idempotency.py
+
+      # 敏感字段掩码的唯一出口（队列 #93 / 契约 docs/AI_ASSIST_BOUNDARY.md §4）：
+      # AI 那条线要用的是同一个掩码，不是各写一份；出口找不到时这本闸拒判（rc=2）
+      - name: Static check admin sensitive-data mask is the single exit
+        run: |
+          python3 scripts/check_admin_ai_data_mask.py --self-test
+          python3 scripts/check_admin_ai_data_mask.py
       - name: Check generated-file drift
         run: git diff --exit-code

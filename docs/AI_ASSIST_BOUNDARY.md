@@ -42,7 +42,7 @@
 |---|---|---|
 | 限流 | `@RateLimiter`（`yudao-spring-boot-starter-protection`） | 自动装配已注册；transport 模块已依赖该 starter ⇒ 加注解即生效 |
 | 结果缓存 | Redis，`application-local.yaml` 与 `application-dev.yaml` 都配了 | dev 走 `REDIS_HOST` 环境变量，云上同栈 |
-| 幂等 | `@Idempotent` + `UserIdempotentKeyResolver`（key = 方法+参数+userId+userType，异常时删键允许重试，**不需要前端配合**） | 后台写口 45 个 / 已带键 8 个，由 `scripts/check_admin_write_idempotency.py` 钉 |
+| 幂等 | `@Idempotent` + `UserIdempotentKeyResolver`（key = 方法+参数+userId+userType，异常时删键允许重试，**不需要前端配合**） | 后台写口 46 个 / 已带键 8 个（#92 新增的 `mark-admin-read` 按口径不钉键），由 `scripts/check_admin_write_idempotency.py` 钉 |
 | 留痕（业务侧） | 订单事件流 `transport_order_event`，`extra_data` 是 `text`、注释原文"扩展数据JSON" | #60 已用 `JSONUtil.toJsonStr(Map.of("photoUrl", …))` 往这格写过，同族做法有先例 |
 | 文件 | `infra_file` + `/app-api/infra/file/upload` | 云上主配置已切"本地存储"，实测 `code=0` 能落盘 |
 
@@ -52,15 +52,27 @@
 `private String mobile` —— 后台列表接口今天就在回**明文手机号**。这有业务理由（调度要打电话），
 所以不改它；要改的是"AI 拿到的那一份"。
 
-要求：
+已经落地的（主线今天做完，直接用，别再各写一份）：
 
-1. 全工程唯一脱敏出口 `AiDataMask.maskMobile(String)`（Hutool `DesensitizedUtil.mobilePhone` 一类实现，
-   一处定义、别处不许自写正则掩码）。
-2. AI 的输入只能是**聚合摘要 DTO**（新建 `*SummaryVO`），其字段集合里不得出现 `mobile`、`idCard`、
-   完整地址、原始流水列表。判据形状建议：在 `yudao-module-ai-assist` 与 `views/transport/ai/**` 里
-   grep 到 `getMobile(`、`mobile:`、`SELECT.*mobile` 即红。
-3. 判据必须能红：把某个 SummaryVO 加一个 `mobile` 字段 ⇒ 那本闸必须报违规（同一条规则配一条会红的负控，
-   否则它就是一台永远绿的空转判据）。
+1. **唯一出口 = `cn.iocoder.yudao.module.transport.util.SensitiveDataMask`**：
+   `mobile(String)` → `138****8001`，`tail4(String)` → `****7X23`。
+   ⚠ 语义要点：**空值原样返回**（null 进 null 出）——把"后端没给手机号"掩成 `"***"`，
+   读的人就分不清"没给"和"给了被屏蔽"，这与"金额缺值不许念成 0.00"是同一条纪律。
+   不是手机号形状的脏数据（座机、带区号）只留首字符，不猜它的含义。
+2. **判据 = `scripts/check_admin_ai_data_mask.py`**（已挂 ci.yml 第 12 个静态检查步骤）。它钉四件事：
+   出口在（找不到 ⇒ rc=2 拒判）、transport 模块里没有第二处掩码实现、空值守卫恰好 2 处、
+   **AI 面（`yudao-module-ai-assist/**`、`views/transport/ai/**`、`api/transport/ai/**`）里出现
+   `getMobile(` / `.mobile` / `mobile:` 即红**。你现在还没有那些目录，它会打"跳过（目录尚未落地）"——
+   那句跳过不等于这本闸空转，A1–A3 一直活着（自检 K6 专门钉这条）。
+3. 用例 `SensitiveDataMaskTest` 四条，断的是**泄不泄**（中间四位一定不在结果里），
+   不是"星号有几个"——依赖换版本就红一次的判据最后只会被人改成能过。
+
+要你遵守的两条：
+
+1. AI 的输入只能是**聚合摘要 DTO**（你新建 `*SummaryVO`），字段集合里不得出现 `mobile`、`idCard`、
+   完整地址、原始流水列表；地址按业务需要保留到乡镇级（县域调度没有乡镇就无从推理），但**姓名与电话一律掩码**。
+2. 新增 SummaryVO 时顺手加一条会红的检查：把某个 SummaryVO 塞一个 `mobile` 字段 ⇒ 上面那本闸必须红
+   （自检 K4 已经证明了它咬得住，你要做的是别把新目录写成绕过它的形状）。
 
 ## 5. `ai_invocation_log`（唯一需要新增的表）
 
