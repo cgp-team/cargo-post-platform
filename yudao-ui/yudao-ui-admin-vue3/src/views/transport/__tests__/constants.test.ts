@@ -36,7 +36,9 @@ import {
   tagOf,
   vehicleRealtimeStatusLabel,
   vehicleStatusLabel,
-  type TagType
+  type TagType,
+  moneyText,
+  distanceText
 } from '../constants'
 
 /**
@@ -195,5 +197,31 @@ describe('具名取值函数', () => {
   it('dispatchModeLabel 空值兜底', () => {
     expect(dispatchModeLabel(1)).toBe('智能')
     expect(dispatchModeLabel(null)).toBe('-')
+  })
+})
+
+// ── 金额/里程缺值渲染（队列 #68 / 台账 D-134）：真零与"没给"必须是两格 ──
+describe('moneyText / distanceText（缺值不折叠成 0）', () => {
+  it('真零照念 ¥0.00 —— 0 是业务结论，不能被吞进"没给"那一格', () => {
+    expect(moneyText(0)).toBe('¥0.00')
+    expect(distanceText(0)).toBe('0.00')
+  })
+  it('null / undefined / 空串都念"没给"，不替后端说"今天是 0 元"', () => {
+    expect(moneyText(null)).toBe('没给')
+    expect(moneyText(undefined)).toBe('没给')
+    expect(moneyText('')).toBe('没给')
+    expect(distanceText(null)).toBe('没给')
+  })
+  it('字符串数额同样格式化（后端 BigDecimal 序列化可能是串）', () => {
+    expect(moneyText('12.5')).toBe('¥12.50')
+    expect(distanceText('7.125')).toBe('7.13')
+  })
+  it('不是数的值点名，不静默变 NaN 或 0.00', () => {
+    expect(moneyText('abc')).toBe('没给（值不是数：abc）')
+    expect(distanceText('abc')).toBe('没给（值不是数：abc）')
+  })
+  it('单位只在调用方念一次（表头已写 km 的格子不再追加）', () => {
+    expect(distanceText(3.5, 'km')).toBe('3.50 km')
+    expect(distanceText(3.5)).toBe('3.50')
   })
 })

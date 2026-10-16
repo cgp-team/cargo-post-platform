@@ -30,6 +30,3 @@ export const updateProduct = (data: ProductVO) => {
 export const deleteProduct = (id: number) => {
   return request.delete({ url: '/transport/product/delete', params: { id } })
 }
-export const getSimpleProductList = (): Promise<ProductVO[]> => {
-  return request.get({ url: '/transport/product/simple-list' })
-}

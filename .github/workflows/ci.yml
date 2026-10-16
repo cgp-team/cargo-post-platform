@@ -266,5 +266,16 @@ jobs:
         run: |
           python3 scripts/check_admin_irreversible_write_confirm.py --self-test
           python3 scripts/check_admin_irreversible_write_confirm.py
+      # api 层不许留"看着接好了其实没人调"的死导出，也不许同一个端点有两个包装（改了 A、页面用 B ⇒ 契约两处漂移）
+      # —— 实测过一例：notification 里的 getOrderEventTimeline 与 orderEvent 里的 getOrderEvents 打同一个 url（队列 #68）
+      - name: Static check admin api dead and duplicate exports
+        run: |
+          python3 scripts/check_admin_api_dead_exports.py --self-test
+          python3 scripts/check_admin_api_dead_exports.py
+      # 金额与里程的"没给"不许折叠成 0.00：0 是业务结论，缺值必须念"没给"（队列 #68 / 台账 D-134）
+      - name: Static check admin money absence is not folded to zero
+        run: |
+          python3 scripts/check_admin_money_absence.py --self-test
+          python3 scripts/check_admin_money_absence.py
       - name: Check generated-file drift
         run: git diff --exit-code

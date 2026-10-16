@@ -29,7 +29,7 @@
         <el-table-column label="订单号" prop="orderNo" align="center" min-width="180" />
         <el-table-column label="购买手机号" prop="userMobile" align="center" width="130" />
         <el-table-column label="金额" align="center" width="100">
-          <template #default="scope">¥{{ scope.row.totalAmount }}</template>
+          <template #default="scope">{{ moneyText(scope.row.totalAmount) }}</template>
         </el-table-column>
         <el-table-column label="状态" align="center" width="100">
           <template #default="scope">
@@ -103,7 +103,8 @@ import * as ProductOrderApi from '@/api/transport/productOrder'
 import {
   PRODUCT_ORDER_STATUS_LABELS,
   productOrderStatusLabel,
-  productOrderStatusTag
+  productOrderStatusTag,
+  moneyText
 } from '../constants'
 import ProductOrderDetail from './ProductOrderDetail.vue'
 import ProductOrderShipForm from './ProductOrderShipForm.vue'

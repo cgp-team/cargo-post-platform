@@ -138,3 +138,24 @@ export const shiftStatusTag = (status?: number | null) => tagOf(SHIFT_STATUS_TAG
 export const handoverStatusLabel = (status?: number | null) =>
   labelOf(HANDOVER_STATUS_LABELS, status, `后端新状态(${status})`)
 export const handoverStatusTag = (status?: number | null) => tagOf(HANDOVER_STATUS_TAGS, status)
+
+/**
+ * 金额渲染只有一个出口：真零念 `¥0.00`，缺值念"没给"（队列 #68 / 台账 D-134）。
+ * 起因是 `Number(value ?? 0).toFixed(2)` 这一形 —— 它把"后端没给这个键"念成"今天是 0 元"，
+ * 而 0 是一个业务结论。实测契约要说清楚：DashboardController.sumOrderAmount 用的是
+ * `IFNULL(SUM(total_amount), 0)`，buildDailyTrend 还会给空日期补 BigDecimal.ZERO ⇒
+ * **今天**这些键恒发数字，所以这一改是防契约漂移，不是修一条当前错读。
+ */
+export const moneyText = (v?: number | string | null): string => {
+  if (v === undefined || v === null || v === '') return '没给'
+  const n = Number(v)
+  return Number.isFinite(n) ? `¥${n.toFixed(2)}` : `没给（值不是数：${v}）`
+}
+
+/** 里程同理；单位交给调用方（有的表头里已经写了 (km)，不要在两处各念一遍） */
+export const distanceText = (v?: number | string | null, unit = ''): string => {
+  if (v === undefined || v === null || v === '') return '没给'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return `没给（值不是数：${v}）`
+  return unit ? `${n.toFixed(2)} ${unit}` : n.toFixed(2)
+}

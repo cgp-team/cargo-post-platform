@@ -15,7 +15,7 @@
       </el-descriptions-item>
       <el-descriptions-item label="购买手机号">{{ detail.userMobile }}</el-descriptions-item>
       <el-descriptions-item label="下单时间">{{ detail.createTime }}</el-descriptions-item>
-      <el-descriptions-item label="订单金额"><span style="color:var(--el-color-warning);font-weight:600">¥{{ detail.totalAmount }}</span></el-descriptions-item>
+      <el-descriptions-item label="订单金额"><span style="color:var(--el-color-warning);font-weight:600">{{ moneyText(detail.totalAmount) }}</span></el-descriptions-item>
       <el-descriptions-item label="订单备注">{{ detail.remark || '-' }}</el-descriptions-item>
       <el-descriptions-item label="收货人">{{ detail.receiverName }}</el-descriptions-item>
       <el-descriptions-item label="收货电话">{{ detail.receiverMobile }}</el-descriptions-item>
@@ -32,11 +32,11 @@
         </template>
       </el-table-column>
       <el-table-column label="单价" align="center" width="100">
-        <template #default="scope">¥{{ scope.row.productPrice }}</template>
+        <template #default="scope">{{ moneyText(scope.row.productPrice) }}</template>
       </el-table-column>
       <el-table-column label="数量" prop="quantity" align="center" width="80" />
       <el-table-column label="小计" align="center" width="110">
-        <template #default="scope">¥{{ scope.row.amount }}</template>
+        <template #default="scope">{{ moneyText(scope.row.amount) }}</template>
       </el-table-column>
     </el-table>
   </Dialog>
@@ -44,6 +44,7 @@
 
 <script setup lang="ts">
 import * as ProductOrderApi from '@/api/transport/productOrder'
+import { moneyText } from '../constants'
 import * as VehicleApi from '@/api/transport/vehicle'
 import * as ShiftApi from '@/api/transport/shift'
 import { Dialog } from '@/components/Dialog'

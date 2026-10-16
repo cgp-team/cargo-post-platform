@@ -46,7 +46,7 @@
         </el-table-column>
         <el-table-column label="产地村庄" prop="fromVillage" align="center" width="110" />
         <el-table-column label="价格" align="center" width="100">
-          <template #default="scope">¥{{ scope.row.price }}</template>
+          <template #default="scope">{{ moneyText(scope.row.price) }}</template>
         </el-table-column>
         <el-table-column label="单位" prop="unit" align="center" width="70" />
         <el-table-column label="角标" prop="badge" align="center" width="120" />
@@ -79,6 +79,7 @@
 
 <script setup lang="ts">
 import * as ProductApi from '@/api/transport/product'
+import { moneyText } from '../constants'
 import ProductForm from './ProductForm.vue'
 
 defineOptions({ name: 'TransportProduct' })

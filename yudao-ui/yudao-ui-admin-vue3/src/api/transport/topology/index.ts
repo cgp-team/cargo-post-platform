@@ -85,21 +85,7 @@ export const getTopologyByOrder = (orderId: number): Promise<OrderTopologyVO> =>
   return request.get({ url: '/transport/topology/order', params: { orderId } })
 }
 
-/** 按方案查询运输拓扑 */
-export const getTopologyByPlan = (planId: number): Promise<OrderTopologyVO> => {
-  return request.get({ url: '/transport/topology/plan', params: { planId } })
-}
 
-/** 车辆/司机时段冲突校验（手工分配前重新校验，不相信前端） */
-export const checkConflict = (params: {
-  vehicleId?: number
-  driverId?: number
-  start: string
-  end: string
-  excludeLegId?: number
-}) => {
-  return request.get({ url: '/transport/topology/conflict-check', params })
-}
 
 /** 异常重调度：只重新规划受影响的运输段（已完成段不动） */
 export const replanLeg = (legId: number, remark?: string) => {

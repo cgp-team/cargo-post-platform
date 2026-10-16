@@ -27,7 +27,5 @@ export const sendNotification = (data: NotificationVO) => {
   return request.post({ url: '/transport/notification/send', data })
 }
 
-/** 按订单查询事件时间线 */
-export const getOrderEventTimeline = (orderId: number) => {
-  return request.get({ url: '/transport/order-event/list-by-order', params: { orderId } })
-}
+// 按订单查事件时间线只有 `api/transport/orderEvent` 那一条出口（getOrderEvents）。
+// 这里原来有个同端点的别名 getOrderEventTimeline，零引用 —— 两个包装打一个端点就是两份可以各自漂移的契约（队列 #68）。

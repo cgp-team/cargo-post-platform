@@ -111,7 +111,9 @@
           <el-col :md="6" :sm="12" :xs="24">
             <div class="settle-item">
               <div class="text-gray-500 text-sm">总行驶里程(km)</div>
-              <div class="text-2xl font-bold mt-1">{{ Number(settlement.totalDistance ?? 0).toFixed(2) }}</div>
+              <!-- 同一个理由：后端空结果时把 totalDistance 置为 BigDecimal.ZERO（真零），
+                   但缺键不能由前端补成 0.00 km ⇒ 分开念 -->
+              <div class="text-2xl font-bold mt-1">{{ distanceText(settlement.totalDistance) }}</div>
             </div>
           </el-col>
           <el-col :md="6" :sm="12" :xs="24">
@@ -207,7 +209,7 @@ import {
 import { getDispatchSettlement, type DispatchSettlementRespVO } from '@/api/transport/dispatch'
 import { formatDate } from '@/utils/formatTime'
 
-import { orderTypeLabel } from '../constants'
+import { orderTypeLabel, distanceText } from '../constants'
 
 defineOptions({ name: 'TransportDashboard' })
 
@@ -264,7 +266,12 @@ const quickLinks = [
   { label: '订单管理', path: '/transport/order/list', icon: 'ep:document' }
 ]
 
-const fmtAmount = (value?: number) => Number(value ?? 0).toFixed(2)
+// 「今日营收」这一格原来写的是 `Number(value ?? 0).toFixed(2)`：缺值会被念成 0.00 元，
+// 而 0.00 是一个业务结论（今天真的没进账）。实测契约：DashboardController.sumOrderAmount 用
+//   `IFNULL(SUM(total_amount), 0)`，所以**今天**恒发数字 ⇒ 这一改不是修当前错读，是防契约漂移：
+//   将来那个键一旦不发，界面要念"没给"，不能替后端说"今天是 0 元"（队列 #68 / 台账 D-134）。
+const fmtAmount = (value?: number) =>
+  value === undefined || value === null ? '没给' : Number(value).toFixed(2)
 
 /** 订单类型分布饼图 */
 const typeChartOptions = computed<EChartsOption>(() => ({
@@ -331,6 +338,8 @@ const trendChartOptions = computed<EChartsOption>(() => ({
       type: 'line',
       yAxisIndex: 1,
       smooth: true,
+      // 趋势图这一处**保留**补零：契约里后端自己就"无数据的日期补零"（buildDailyTrend 里先塞 BigDecimal.ZERO），
+      // 折线需要每个点都有数值；这不是把缺值伪装成结论，而是照抄后端已经给的零
       data: (orderStats.value.dailyTrend ?? []).map((item) => Number(item.amount ?? 0))
     }
   ]
