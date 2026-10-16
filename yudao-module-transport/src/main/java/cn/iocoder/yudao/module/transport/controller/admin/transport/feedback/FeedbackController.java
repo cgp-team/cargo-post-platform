@@ -1,7 +1,13 @@
 package cn.iocoder.yudao.module.transport.controller.admin.transport.feedback;
 
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.feedback.vo.*;
 import cn.iocoder.yudao.module.transport.service.transport.feedback.FeedbackService;
@@ -26,6 +32,8 @@ public class FeedbackController {
     @PutMapping("/reply")
     @Operation(summary = "回复意见反馈")
     @PreAuthorize("@ss.hasPermission('transport:feedback:reply')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这条反馈正在回复中，请勿重复提交")
     public CommonResult<Boolean> reply(@Valid @RequestBody FeedbackReplyReqVO reqVO) {
         feedbackService.reply(reqVO); return success(true);
     }

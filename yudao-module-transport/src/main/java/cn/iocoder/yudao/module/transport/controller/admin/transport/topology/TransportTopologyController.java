@@ -1,6 +1,9 @@
 package cn.iocoder.yudao.module.transport.controller.admin.transport.topology;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.topology.vo.OrderTopologyRespVO;
 import cn.iocoder.yudao.module.transport.service.dispatch.TransportTopologyService;
 import cn.iocoder.yudao.module.transport.service.dispatch.LegConflictService;
@@ -69,6 +72,8 @@ public class TransportTopologyController {
     @Operation(summary = "异常重调度：只重新规划受影响的那一段（需求 §77/§108），已完成段不动")
     @Parameter(name = "legId", description = "运输段编号", required = true)
     @PreAuthorize("@ss.hasPermission('transport:topology:query')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这一段正在重调度中，请勿重复提交（重调度会换车与司机，第二次提交会再改一遍）")
     public CommonResult<TransportLegDO> replanLeg(@RequestParam("legId") Long legId,
                                                   @RequestParam(value = "remark", required = false) String remark) {
         return success(multiLegService.replanLeg(legId, remark));

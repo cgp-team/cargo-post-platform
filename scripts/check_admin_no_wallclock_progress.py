@@ -275,17 +275,18 @@ def run_self_test():
                 print("✘ K5 锚点没落：`%s` 不在真文件里 ⇒ 注入等于没注入" % anchor)
                 rc = 1
             else:
-                injected = src.replace(
-                    anchor
-                    + "\n",
-                    anchor
-                    + "\n  const timer = window.setInterval(() => {\n"
-                    + "    if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1\n"
-                    + "  }, 900)\n",
-                    1,
+                # ⚠ 行尾必须跟着**这个文件自己的**换行：Windows 工作树是 CRLF（core.autocrlf=true），
+                #   原先写死 `anchor + "\n"` ⇒ 本机整把刀静默不注入，报的是"注入后字节没变"这种看着像
+                #   代码坏了的红；CI 在 Linux 上是 LF，那边一直是绿的 —— 一把只在一台机器上有牙齿的刀不算刀。
+                nl = "\r\n" if "\r\n" in src else "\n"
+                body = (
+                    "  const timer = window.setInterval(() => {" + nl
+                    + "    if (autoProgress.value < autoStages.length - 1) autoProgress.value += 1" + nl
+                    + "  }, 900)" + nl
                 )
+                injected = src.replace(anchor + nl, anchor + nl + body, 1)
                 if injected == src:
-                    print("✘ K5 注入后字节没变")
+                    print("✘ K5 注入后字节没变（锚点 + 行尾没配上：%r）" % nl)
                     rc = 1
                 else:
                     d = os.path.join(tmp, "k5")

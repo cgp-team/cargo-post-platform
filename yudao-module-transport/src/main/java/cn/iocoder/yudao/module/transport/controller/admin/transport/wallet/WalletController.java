@@ -1,5 +1,8 @@
 package cn.iocoder.yudao.module.transport.controller.admin.transport.wallet;
 
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageParam;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
@@ -18,7 +21,9 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
+import static cn.iocoder.yudao.module.transport.enums.ErrorCodeConstants.WALLET_ADJUST_AMOUNT_EMPTY;
 
 @Tag(name = "管理后台 - 钱包管理")
 @RestController
@@ -58,10 +63,15 @@ public class WalletController {
     @PostMapping("/adjust-balance")
     @Operation(summary = "手动调整余额（运营操作）")
     @PreAuthorize("@ss.hasPermission('transport:wallet:adjust')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这笔余额调整正在处理中，请勿重复提交（重复提交会调两次钱）")
     public CommonResult<String> adjustBalance(
             @RequestParam("userId") Long userId,
             @RequestParam("amount") BigDecimal amount,
             @RequestParam(value = "reason", defaultValue = "运营调整") String reason) {
+        if (amount.compareTo(BigDecimal.ZERO) == 0) {
+            throw exception(WALLET_ADJUST_AMOUNT_EMPTY);
+        }
         if (amount.compareTo(BigDecimal.ZERO) > 0) {
             walletService.recharge(userId, amount, "balance", "admin-adjust");
         } else if (amount.compareTo(BigDecimal.ZERO) < 0) {

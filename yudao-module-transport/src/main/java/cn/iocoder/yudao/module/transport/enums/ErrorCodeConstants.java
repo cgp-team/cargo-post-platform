@@ -109,4 +109,6 @@ public interface ErrorCodeConstants {
     ErrorCode NO_AVAILABLE_RESOURCE = new ErrorCode(1_005_016_017, "当前无可调度车辆/司机（时段冲突或被占用）");
     // 订单状态机（BE-21：不允许任意跳转，如 EXCEPTION → DELIVERING）
     ErrorCode ORDER_STATUS_TRANSITION_ILLEGAL = new ErrorCode(1_005_016_018, "订单状态不允许该流转：{} → {}");
+    // 钱包手工调账：0 元这一档既不是充值也不是扣款，静默通过会让界面念"调整成功"而余额一格没动
+    ErrorCode WALLET_ADJUST_AMOUNT_EMPTY = new ErrorCode(1_005_016_019, "调整金额要填正数或负数，0 元不会改动余额（本次没有做任何调整）");
 }

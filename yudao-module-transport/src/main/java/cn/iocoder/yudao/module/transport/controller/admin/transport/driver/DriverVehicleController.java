@@ -2,6 +2,9 @@ package cn.iocoder.yudao.module.transport.controller.admin.transport.driver;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.driver.vo.DriverVehicleBindReqVO;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.driver.vo.DriverVehiclePageReqVO;
@@ -46,6 +49,8 @@ public class DriverVehicleController {
     @PostMapping("/bind")
     @Operation(summary = "绑定司机与车辆")
     @PreAuthorize("@ss.hasPermission('transport:driver:update')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这个人车绑定正在处理中，请勿重复提交")
     public CommonResult<Boolean> bind(@Valid @RequestBody DriverVehicleBindReqVO reqVO) {
         driverVehicleService.bind(reqVO);
         return success(true);

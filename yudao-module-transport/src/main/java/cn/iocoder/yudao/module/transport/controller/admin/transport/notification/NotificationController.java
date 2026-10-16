@@ -2,6 +2,9 @@ package cn.iocoder.yudao.module.transport.controller.admin.transport.notificatio
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import cn.iocoder.yudao.framework.idempotent.core.annotation.Idempotent;
+import cn.iocoder.yudao.framework.idempotent.core.keyresolver.impl.UserIdempotentKeyResolver;
+import java.util.concurrent.TimeUnit;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.notification.vo.NotificationPageReqVO;
 import cn.iocoder.yudao.module.transport.controller.admin.transport.notification.vo.NotificationRespVO;
@@ -48,6 +51,8 @@ public class NotificationController {
     @PostMapping("/send")
     @Operation(summary = "发送用户通知")
     @PreAuthorize("@ss.hasPermission('transport:notification:send')")
+    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
+            message = "这条通知正在发送中，请勿重复提交（重复提交会给用户多发一条）")
     public CommonResult<Long> send(@Valid @RequestBody NotificationSendReqVO reqVO) {
         return success(userNotificationService.send(reqVO.getUserId(), null, reqVO.getTitle(),
                 reqVO.getContent(), reqVO.getOrderId()));

@@ -31,18 +31,32 @@ jobs:
       - name: Detect changed areas
         id: detect
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
-            RANGE="origin/${{ github.base_ref }}...HEAD"
-          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            RANGE="${{ github.event.before }}..${{ github.event.after }}"
+          # 事件字段一律经 env 传入，不写进脚本正文：runner 会先把双花括号表达式替换成字面量再交给 bash，
+          #   分支名里带一个引号或分号就变成别人执行的代码（GitHub 官方点名的高危写法）。
+          #   注释里也不能留那种写法 —— 它同样在替换范围内，所以这段说明本身不提它。
+          # env 只解决"不被当脚本文本执行"；它仍是外部输入，用之前先验形状。
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            case "$BASE_REF" in
+              "" ) echo "::error::pull_request 事件却没有 base_ref（探测不能静默退成 HEAD~1）"; exit 1 ;;
+              *[!A-Za-z0-9._/-]* ) echo "::error::base_ref 含非预期字符，拒绝当参数用"; exit 1 ;;
+            esac
+            git fetch --depth=1 origin "$BASE_REF" >/dev/null 2>&1 || true
+            RANGE="origin/${BASE_REF}...HEAD"
+          elif [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ && "$AFTER_SHA" =~ ^[0-9a-f]{40}$ \
+                 && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="${BEFORE_SHA}..${AFTER_SHA}"
           else
             RANGE="HEAD~1..HEAD"
           fi
           echo "diff range: ${RANGE}"
-          CHANGED=$(git diff --name-only ${RANGE} || echo '')
+          CHANGED=$(git diff --name-only "${RANGE}" || echo '')
           echo "${CHANGED}"
           has() { printf '%s\n' "${CHANGED}" | grep -qE "$1" && echo true || echo false; }
           # 后端：任意 java 模块、构建文件、SQL
@@ -277,5 +291,10 @@ jobs:
         run: |
           python3 scripts/check_admin_money_absence.py --self-test
           python3 scripts/check_admin_money_absence.py
+      # 12 个后台写口的服务端幂等键（队列 #89 / 台账 D-136）：前端在飞锁只在同一个页签里有效
+      - name: Static check admin write endpoints carry idempotency keys
+        run: |
+          python3 scripts/check_admin_write_idempotency.py --self-test
+          python3 scripts/check_admin_write_idempotency.py
       - name: Check generated-file drift
         run: git diff --exit-code
