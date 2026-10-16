@@ -72,7 +72,7 @@ public final class AiTasks {
         requireCategories(categories);
         return SYSTEM_RULE + "\n\n任务：判断下面这条司机/用户上报最可能属于哪一类，并给依据。"
                 + "\n只能从给定分类里选一个，选不出来就答『依据不足』。"
-                + "\n输出两行，严格格式："
+                + "\n输出两行（**两个字段必须换行分隔，不要写在同一行**），严格格式："
                 + "\n分类：<所选分类原文>"
                 + "\n依据：<不超过 60 字，只引用材料里的事实>"
                 + "\n\n可选分类：" + String.join(" / ", categories)
@@ -85,7 +85,7 @@ public final class AiTasks {
             throw new IllegalArgumentException("事件描述与照片地址都要有（没有照片就不要调用这一格）");
         }
         return SYSTEM_RULE + "\n\n任务：核对这张现场照片是否<b>支撑</b>下面这段描述。"
-                + "\n输出三行，严格格式："
+                + "\n输出三行（**三个字段必须换行分隔，不要写在同一行**），严格格式："
                 + "\n结论：<支撑 / 不支撑 / 看不清>"
                 + "\n依据：<不超过 80 字，只说照片里能看见什么>"
                 + "\n缺口：<描述里提到但照片看不见的点；没有就写 无>"
@@ -131,9 +131,15 @@ public final class AiTasks {
 
     // ── 回包校验 ──────────────────────────────────────────────────────────────
 
-    private static final Pattern CLASSIFY = Pattern.compile("分类[：:]\\s*(.+)[\\r\\n]+依据[：:]\\s*(.+)");
+    /**
+     * 字段之间的分隔**接受任意空白**（换行、空格都行）。
+     * 起因：真模型实测 —— MiMo v2.6 flash 把「分类：X 依据：Y」写在**同一行**（用空格隔开），
+     * 而这里原来只认换行，于是整格被判"没按格式"、白跑一次。
+     * 标签本身（分类/依据/结论/缺口）是强分隔符，用它们定位比钉死换行可靠。
+     */
+    private static final Pattern CLASSIFY = Pattern.compile("分类[：:]\\s*(.+)\\s+依据[：:]\\s*(.+)");
     private static final Pattern PHOTO = Pattern.compile(
-            "结论[：:]\\s*(.+?)[\\r\\n]+依据[：:]\\s*(.+?)[\\r\\n]+缺口[：:]\\s*(.+)");
+            "结论[：:]\\s*(.+?)\\s+依据[：:]\\s*(.+?)\\s+缺口[：:]\\s*(.+)");
     private static final Pattern GROUP = Pattern.compile("组\\d*\\s*[:：]\\s*([0-9,，、\\s]+)[—\\-]*\\s*(.*)");
     private static final Pattern TOPIC = Pattern.compile(
             "主题[：:]\\s*(.+?)\\s*[｜|]\\s*条数[：:]\\s*(\\d+)\\s*[｜|]\\s*代表原文编号[：:]\\s*([0-9,，、\\s]+)");

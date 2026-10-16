@@ -66,6 +66,30 @@ class AiTasksTest {
         assertTrue(d.getBasis().contains("不在册"));
     }
 
+    /**
+     * **真模型实测**（2026-10-17，MiMo v2.6 flash）：它把「分类：X 依据：Y」写在**同一行**（空格隔开），
+     * 而原来只认换行 ⇒ 整格被判"没按格式"、白跑一次真调用。
+     * 于是把**分隔符**放宽成任意空白，但标签、候选集校验、"依据不足就不登记"一概不动。
+     */
+    @Test
+    void 真模型把分类与依据写在同一行时也解析得出() {
+        AiTasks.Draft d = AiTasks.parseOrderClassify(AiTasks.SCENE_ORDER_CLASSIFY,
+                "分类：道路阻断 依据：材料称路上塌方了、车过不去，属道路通行受阻，需联系处理。", CATS);
+        assertTrue(d.isParsed());
+        assertEquals("道路阻断", d.getSuggestion());
+        assertTrue(d.getBasis().contains("塌方"));
+    }
+
+    /** 同一个根因，照片那格照做：三个字段写在一行也要吃下来。 */
+    @Test
+    void 照片三段写在同一行时也解析得出() {
+        AiTasks.Draft d = AiTasks.parsePhotoSupport(AiTasks.SCENE_PHOTO_SUPPORT,
+                "结论：不支撑 依据：只见路面 缺口：未见塌方");
+        assertTrue(d.isParsed());
+        assertEquals("不支撑", d.getSuggestion());
+        assertTrue(d.getBasis().contains("未见塌方"));
+    }
+
     @Test
     void 回包不是要求的格式时判未解析而不是空建议() {
         AiTasks.Draft d = AiTasks.parsePhotoSupport(AiTasks.SCENE_PHOTO_SUPPORT, "这张照片看起来还行。");
