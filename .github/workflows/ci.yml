@@ -260,5 +260,11 @@ jobs:
         run: |
           python3 scripts/check_admin_no_wallclock_progress.py --self-test
           python3 scripts/check_admin_no_wallclock_progress.py
+      # 不可逆写口必须先给用户看见后果（队列 #67 / 台账 D-133）：这 5 个口点下去没有撤销入口，
+      # 而 controller/admin/** 那 40 个写接口零 @Idempotent ⇒ "点错了"在后端不被拦，前端确认是唯一的闸
+      - name: Static check admin irreversible writes ask first
+        run: |
+          python3 scripts/check_admin_irreversible_write_confirm.py --self-test
+          python3 scripts/check_admin_irreversible_write_confirm.py
       - name: Check generated-file drift
         run: git diff --exit-code

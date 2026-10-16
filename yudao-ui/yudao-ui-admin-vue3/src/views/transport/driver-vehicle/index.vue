@@ -139,6 +139,21 @@ const submitBind = async () => {
     message.error('请选择司机与车辆')
     return
   }
+  // 二次确认（队列 #67）：这个口不是"加一条绑定"这么简单 —— 后端 bind() 会先把
+  // 该司机现有的有效绑定、以及该车现有的有效绑定**双双置为已解绑**，再 insert 新的一条
+  // （DriverVehicleServiceImpl.bind，一司机一车 / 一车一司机）。
+  // 也就是说管理员点一次就可能拆掉另一对正在用的人车关系，而且没有撤销入口 ⇒ 必须先念出被拆的是谁。
+  const driverName = driverOptions.value.find((d) => d.id === driverId)?.name || `#${driverId}`
+  const plateNo = vehicleOptions.value.find((v) => v.id === vehicleId)?.plateNo || `#${vehicleId}`
+  try {
+    await message.confirm(
+      `确认把司机「${driverName}」与车辆「${plateNo}」绑定？` +
+        '后端会先解掉这名司机现有的车、以及这辆车现有的司机（一司机一车），原有绑定会直接变成「已解绑」，无法在这里撤销。',
+      '绑定车辆'
+    )
+  } catch (e) {
+    return // 用户取消：什么都没发生
+  }
   bindLoading.value = true
   try {
     await DriverVehicleApi.bindDriverVehicle({ driverId, vehicleId })

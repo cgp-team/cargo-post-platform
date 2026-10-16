@@ -997,6 +997,22 @@ const openReview = (row: DispatchApi.DispatchPlanVO) => {
 const submitReview = async () => {
   const valid = await reviewFormRef.value?.validate().catch(() => false)
   if (!valid) return
+  // 二次确认（队列 #67）：审核这一格两条支路都是撤不回的动作，而同页其他写口早就有确认，
+  // 这里原来是点下去直接执行（DispatchServiceImpl.reviewPlan 实测）：
+  //   通过 ⇒ 方案置「已下发」，事务提交后给方案内每个订单的用户推「运输方案已下发」、并通知司机；
+  //   驳回 ⇒ 方案置「作废」，方案内订单退回订单池等重新派单（这版方案不再存在）。
+  const approve = reviewForm.value.approve
+  try {
+    await ElMessageBox.confirm(
+      approve
+        ? `确认通过方案 #${reviewForm.value.planId}？通过即置为「已下发」，并给方案内订单的用户与司机发出通知——通知发出后撤不回。`
+        : `确认驳回方案 #${reviewForm.value.planId}？驳回即置为「作废」，方案内订单退回订单池等待重新派单。`,
+      approve ? '通过并下发' : '驳回方案',
+      { type: 'warning', confirmButtonText: approve ? '确认通过' : '确认驳回', cancelButtonText: '再看看' }
+    )
+  } catch (e) {
+    return
+  }
   reviewLoading.value = true
   try {
     await DispatchApi.reviewDispatchPlan(reviewForm.value)
@@ -1044,6 +1060,22 @@ const openCheck = async (row: DispatchApi.DispatchPlanVO) => {
 const submitCheck = async () => {
   const valid = await checkFormRef.value?.validate().catch(() => false)
   if (!valid) return
+  // 二次确认（队列 #67）：两条支路的后果不一样，句子也必须不一样（DispatchServiceImpl.departureCheck 实测）：
+  //   通过 ⇒ 方案从「已下发」转「执行中」，该车那批订单置为「已发车」；
+  //   不通过 ⇒ 只落一条「核验不通过」的记录，方案状态与订单都不动。
+  // 另外这个口每次调用都 insert 一行、后端没有幂等键 ⇒ 同一辆车重复提交会留下多条核验记录。
+  const pass = checkForm.value.pass
+  try {
+    await ElMessageBox.confirm(
+      pass
+        ? `确认发车核验通过？方案 #${checkForm.value.planId} 会转入「执行中」，该车那批订单置为「已发车」，司机侧随之开始执行。`
+        : `确认登记「发车核验不通过」？后端只落一条不通过的核验记录，方案状态与订单都不变。`,
+      pass ? '发车核验通过' : '发车核验不通过',
+      { type: 'warning', confirmButtonText: '确认提交', cancelButtonText: '再看看' }
+    )
+  } catch (e) {
+    return
+  }
   checkLoading.value = true
   try {
     await DispatchApi.checkDeparture({

@@ -160,7 +160,11 @@ def main():
     new_files = [f for f in got if f not in KNOWN_UNFIXED]
     grew = [(f, got[f], KNOWN_UNFIXED[f]) for f in got if f in KNOWN_UNFIXED and got[f] > KNOWN_UNFIXED[f]]
     shrank = [(f, got.get(f, 0), KNOWN_UNFIXED[f]) for f in KNOWN_UNFIXED if got.get(f, 0) < KNOWN_UNFIXED[f]]
-    fresh = len(new_files) + sum(a - b for a, b in grew)
+    # ⚠ 这行原来写的是 `sum(a - b for a, b in grew)` —— grew 的每一项是 (文件, 现读, 在册) 三元组，
+    #   两条解包必然 ValueError。它一直"绿"是因为这条分支从来没被执行过（没有文件涨过），
+    #   #67 把 notification 那格的读法一改才第一次走到这里 ⇒ 崩在打印之后、判定之前，
+    #   退出码 1 看着像"判红"，其实判据根本没判完。
+    fresh = len(new_files) + sum(a - b for _f, a, b in grew)
     if new_files:
         print("❌ 新出现的未达标文件（不在册，必须先修或明确登记）：%s" % "、".join(sorted(new_files)))
     for f, a, b in grew:

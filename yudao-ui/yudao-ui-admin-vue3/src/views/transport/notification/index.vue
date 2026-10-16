@@ -122,21 +122,51 @@ const sendRules = {
   title: [{ required: true, message: '请填写标题', trigger: 'blur' }]
 }
 const sendFormRef = ref()
-// 后端这个写口没有幂等键 ⇒ 请求在飞时按钮必须不可再点（:loading 会同时禁掉点击）
+// 请求在飞时按钮必须不可再点（:loading 会同时禁掉点击）。这一句为什么必须由前端来做，实测过：
+// `transport_user_notification` 上 `event_id` **没有唯一索引**（sql/mysql/transport-schema.sql），
+// 去重是服务层"先 SELECT 再 INSERT"（UserNotificationServiceImpl.send）⇒ 并发双击会两次 SELECT-miss、插两行。
 const sendLoading = ref(false)
 const submitSend = async () => {
   try { await sendFormRef.value?.validate() } catch { return } // 校验不过：字段级红字提示
   if (sendLoading.value) return
-  sendLoading.value = true
+  // 二次确认（队列 #67）：这条会进用户的消息中心，发出去撤不回
   try {
-    await NotificationApi.sendNotification(sendForm)
-    message.success('发送成功')
-    sendVisible.value = false
-    getList()
+    await message.confirm(
+      `确认给用户 #${sendForm.userId} 发送「${sendForm.title}」？通知会进入对方的消息中心，发出后无法撤回。`,
+      '发送用户通知'
+    )
   } catch (e) {
-    // 错误已由请求层提示
+    return // 用户取消：什么都没发生
+  }
+  sendLoading.value = true
+  const sentTitle = sendForm.title
+  let ackId: number | undefined
+  let sendFailed = false
+  try {
+    ackId = await NotificationApi.sendNotification(sendForm)
+  } catch (e) {
+    // 写请求本身失败：错误文案由请求层提示，这里只留一条可见分支（不叠第二条 toast，也不去回读）
+    sendFailed = true
   } finally {
     sendLoading.value = false
+  }
+  if (sendFailed) return
+  getList()
+  // "发送成功"这句原来只由 rc=200 支撑。实测契约：手工发的幂等键是
+  // `SYSTEM:USER-<用户>`（带订单才追加 `:ORDER-n`），同一个用户的**第二条不同内容**会命中
+  // selectByEvent 被当成重复事件**跳过**，接口照样返回那条旧记录的 id ⇒ 必须由回读证实这次真的落了一条新的。
+  // 回读单独一条链：读不回来就念"没验到"，绝不拿一次成功的 rc 冒充"已送达"。
+  const back = ackId ? await NotificationApi.getNotification(Number(ackId)).catch(() => undefined) : undefined
+  if (!back) {
+    message.warning('请求已提交，但这条通知没读回来（这次没验到，不等于已送达）')
+  } else if ((back.title || '') !== sentTitle) {
+    message.warning(
+      `这条没有作为新通知送达：后端按幂等键把它合成了已有的 #${ackId}（内容是「${back.title || '无标题'}」）。` +
+        '要给同一个用户发不同内容的通知，请填订单号（幂等键会带 ORDER-n）。'
+    )
+  } else {
+    message.success('发送成功，用户消息中心已读回这条')
+    sendVisible.value = false
   }
 }
 

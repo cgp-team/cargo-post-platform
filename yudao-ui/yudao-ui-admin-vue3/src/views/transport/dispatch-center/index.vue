@@ -287,13 +287,27 @@ const openTopology = () => {
 }
 
 const onReplan = async (leg: any) => {
+  // 二次确认：后端这一步会**换掉这一段当前的人车绑定**（先排除现有那对，再在所有有效绑定里找同一时段无冲突的备选）；
+  // 找不到备选时它不是"什么都没发生"——方案被置为「异常」、记一条订单异常、并通知管理员（MultiLegServiceImpl.replanLeg）。
+  // 两侧都是点下去撤不回的动作，所以必须先看后果（队列 #67 / 台账 D-133）。
+  try {
+    await message.confirm(
+      `确认重调度第 ${leg.legSequence ?? '?'} 段？后端会换掉这一段现有的人车绑定、另找同一时段无冲突的备选；` +
+        '若找不到备选，方案会被置为「异常」并通知管理员。这两步都撤不回。',
+      '重调度运输段'
+    )
+  } catch (e) {
+    return // 用户取消：什么都没发生
+  }
   try {
     await TopologyApi.replanLeg(leg.id, '调度中心手工重调度')
     message.success('重调度成功')
     const row = pool.value.find((o) => o.id === topology.value?.orderId)
     if (row) await onSelectOrder(row)
-  } catch (e) {
-    message.error('重调度失败：当前无可调度车辆/司机')
+  } catch (e: any) {
+    // 原来这里把**任何**异常一律念成「当前无可调度车辆/司机」：权限不足、段状态已被并发推进、
+    // 网络失败都会被读成"没车"，于是运营去多加车——而病根根本不是车。念异常自己的那句话。
+    message.error('重调度失败：' + (e?.msg || e?.message || '未知原因（这次没成功，不是"没有可调度车辆"）'))
   }
 }
 
