@@ -7,7 +7,15 @@
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <el-button size="small" @click="loadPool"><Icon icon="ep:refresh" />刷新</el-button>
           </div>
+          <el-alert
+            v-if="poolError"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="poolError"
+            description="表格空着是这次没读到，不是「当前没有待调度订单」；订单总数也不再引用上一次的值。" />
           <el-table
+            v-loading="poolLoading"
             :data="pool"
             highlight-current-row
             style="margin-top:8px"
@@ -36,7 +44,7 @@
         <ContentWrap title="实时地图（站点 / 车辆 / 选中订单运输链）">
           <div ref="mapRef" style="width:100%;height:300px"></div>
           <div v-if="!mapReady" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:6px">
-            地图未就绪（需后台配置百度地图 Key）；下方运输详情不受影响
+            {{ mapError || '地图未就绪（需后台配置百度地图 Key）；下方运输详情不受影响' }}
           </div>
           <div class="map-legend">
             <span><i class="dot station"></i>站点</span>
@@ -46,8 +54,18 @@
             <span><i class="dot hub"></i>换乘站</span>
           </div>
         </ContentWrap>
-        <ContentWrap title="运输详情">
-          <el-empty v-if="!topology" description="点击左侧订单池中的订单查看运输链" />
+        <ContentWrap v-loading="topologyLoading" title="运输详情">
+          <!-- 三格必须分开念：读到了 / 还没点（空）/ 点了但这次没读到（错）。
+               失败时上面那格已经清空，若这里仍念"点击左侧订单池中的订单查看"，
+               就是把"我没取到"演成"你还没点"。 -->
+          <el-alert
+            v-if="topologyError"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="topologyError"
+            description="运输链这一格现在是空的，因为这次没读到；不代表该订单没有运输链。" />
+          <el-empty v-else-if="!topology" description="点击左侧订单池中的订单查看运输链" />
           <template v-else>
             <div class="summary">
               <el-tag>订单 {{ topology.orderNo || topology.orderId }}</el-tag>
@@ -93,7 +111,14 @@
       <!-- ④ 事件时间线 -->
       <el-col :xs="24" :sm="24" :md="24" :lg="7">
         <ContentWrap title="事件时间线">
-          <el-empty v-if="!topology || !(topology.timeline || []).length" description="暂无事件" />
+          <el-alert
+            v-if="topologyError"
+            type="error"
+            :closable="false"
+            show-icon
+            title="事件流没读到"
+            description="这次查询失败 ⇒ 这里空着是「没取到」，不是「这单没有事件」。" />
+          <el-empty v-else-if="!topology || !(topology.timeline || []).length" description="暂无事件" />
           <el-timeline v-else>
             <el-timeline-item
               v-for="(t, i) in topology.timeline"
@@ -132,6 +157,12 @@ const message = useMessage()
 const router = useRouter()
 const pool = ref<any[]>([])
 const topology = ref<TopologyApi.OrderTopologyVO | null>(null)
+// WEB-26 三态分格：加载中 / 读失败（要留字）/ 真没有。失败时不清数据 = 屏幕继续念上一次的结果
+const poolLoading = ref(false)
+const poolError = ref('')
+const topologyLoading = ref(false)
+const topologyError = ref('')
+const mapError = ref('')
 const mapRef = ref<HTMLDivElement>()
 const mapReady = ref(false)
 let map: any = null
@@ -150,9 +181,21 @@ const orderStatusText = (s?: number) => (s == null ? '—' : ORDER_STATUS_LABELS
 const poolQuery = reactive({ pageNo: 1, pageSize: 20 })
 const poolTotal = ref(0)
 const loadPool = async () => {
-  const res = await DispatchApi.getDispatchPoolPage(poolQuery)
-  pool.value = res.list || []
-  poolTotal.value = Number(res.total) || 0
+  poolLoading.value = true
+  poolError.value = ''
+  try {
+    const res = await DispatchApi.getDispatchPoolPage(poolQuery)
+    pool.value = res.list || []
+    poolTotal.value = Number(res.total) || 0
+  } catch (e) {
+    // 不清就会留着上一次那批行 + 上面写着"待调度 N 单"，读成"这就是当前的池子"
+    pool.value = []
+    poolTotal.value = 0
+    poolError.value = '订单池没读到'
+    message.error(poolError.value)
+  } finally {
+    poolLoading.value = false
+  }
 }
 
 /** 当前订单运输链的覆盖物：切换订单时逐条移除，避免新旧链路叠加 */
@@ -220,8 +263,21 @@ const renderTopology = () => {
 
 const onSelectOrder = async (row: any) => {
   if (!row || !row.id) return
-  topology.value = await TopologyApi.getTopologyByOrder(row.id)
-  renderTopology()
+  // 换一单先清掉上一单的链：这里原来没有 catch，点 B 单失败时屏幕还在画 A 单的运输链，
+  // 底下那两张表也跟着念 A 单的段 —— 读的人以为看到的是刚点的那一单
+  topology.value = null
+  topologyError.value = ''
+  clearRouteOverlays()
+  topologyLoading.value = true
+  try {
+    topology.value = await TopologyApi.getTopologyByOrder(row.id)
+    renderTopology()
+  } catch (e) {
+    topologyError.value = `订单 ${row.orderNo || row.id} 的运输链没读到`
+    message.error(topologyError.value)
+  } finally {
+    topologyLoading.value = false
+  }
 }
 
 /** 跳转到"运输拓扑"页看图形化运输链（带单号直接打开） */
@@ -255,8 +311,11 @@ const initMap = async () => {
     renderBaseOverlays(data?.stations || [], vehicles || [])
     mapReady.value = true
     renderTopology()
-  } catch (e) {
+  } catch (e: any) {
     mapReady.value = false
+    // 这里既可能是 SDK 没起来/Key 没配，也可能是底图那两次读接口失败 —— 别替它编一个原因，
+    // 把异常自己那句话念出来（WEB-26：不留字的话，页面就只剩一块空白地图）
+    mapError.value = '地图没起来：' + (e?.message || e?.msg || '未知原因（这次没读到，不是这里没有点位）')
   }
 }
 

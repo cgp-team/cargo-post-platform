@@ -249,5 +249,9 @@ jobs:
       # 指向目录节点（type=1、component=NULL）不报错，只给一具空 Layout
       - name: Static check admin hardcoded routes
         run: python3 scripts/check_admin_dashboard_routes.py
+      # 读接口失败必须留"这次没读到"那一格（队列 #65 / 台账 D-130）：
+      # 数据不清 = 继续念上一次的结果；只弹 toast = 空白旁边写着"暂无"，把没取到说成没有
+      - name: Static check admin catch keeps a visible failure state
+        run: python3 scripts/check_admin_catch_leaves_data.py
       - name: Check generated-file drift
         run: git diff --exit-code

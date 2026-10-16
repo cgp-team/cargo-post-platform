@@ -6,7 +6,7 @@
           <el-input-number v-model="orderId" :min="1" controls-position="right" placeholder="运输订单编号" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="load"><Icon icon="ep:search" />查询</el-button>
+          <el-button type="primary" :loading="loading" @click="load"><Icon icon="ep:search" />查询</el-button>
         </el-form-item>
       </el-form>
       <div v-if="data" class="summary">
@@ -18,6 +18,20 @@
         <el-tag v-if="data.totalDurationMinutes">预计 {{ data.totalDurationMinutes }} 分钟</el-tag>
       </div>
       <el-alert v-if="data && data.planReason" :title="'方案说明：' + data.planReason" type="info" :closable="false" style="margin-top: 12px" />
+      <!-- WEB-26：失败与"确实没有"要分开念。整页都按 v-if="data" 渲染，
+           失败时若不清掉上一次的结果，换个单号查失败、屏幕还在画**上一个订单**的运输链 ⇒
+           这里失败就把 data 清成 null（下面的空白是"没取到"，由这条红条点名，不靠猜）。 -->
+      <el-alert
+        v-if="failed"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="failed"
+        description="本页已清空上一次的结果：下面的空白是「这次没读到」，不代表该订单没有运输链。"
+        style="margin-top: 12px" />
+      <div v-if="!loading && !failed && !orderId" class="text-gray-500" style="margin-top: 12px">
+        还没查询：输入运输订单编号后点「查询」。
+      </div>
     </ContentWrap>
 
     <ContentWrap v-if="data && (data.candidates?.length ?? 0) > 0" title="候选方案对比（智能派单不是随机分配）">
@@ -120,6 +134,8 @@ const message = useMessage()
 const route = useRoute()
 const orderId = ref<number | undefined>(undefined)
 const data = ref<TopologyApi.OrderTopologyVO | null>(null)
+const loading = ref(false)
+const failed = ref('')
 
 /** 段状态配色：已完成=绿 / 进行中=橙 / 未开始=灰 / 异常=红 */
 const legClass = (status?: number) => {
@@ -143,11 +159,20 @@ const load = async () => {
     message.warning('请输入订单编号')
     return
   }
+  if (loading.value) return
+  loading.value = true
+  failed.value = ''
+  // 先把上一次的结果清掉：整页都按 v-if="data" 渲染，不清就是
+  // "换个单号查失败，屏幕还在画上一个订单的运输链"
+  data.value = null
   try {
     data.value = await TopologyApi.getTopologyByOrder(orderId.value)
   } catch (e) {
-    // WEB-26: 失败给可见提示
-    message.error('链路查询失败，请确认订单编号后重试')
+    // WEB-26: 失败给可见提示，并且这一格要留下文字（只弹一次 toast 的话，toast 掉了页面就只剩空白）
+    failed.value = '链路查询失败，请确认订单编号后重试'
+    message.error(failed.value)
+  } finally {
+    loading.value = false
   }
 }
 
