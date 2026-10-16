@@ -7,11 +7,19 @@
 5 个不可逆口有确认框 —— 那两个层都只在**同一个浏览器页签**里有效。两个会话、两块屏、
 一个脚本、一次"请求发出去了但回执没收到"的手动重试，前端一句都挡不了。
 
-口径（为什么只钉这 12 个，不给 45 个全覆盖）：
-· 只钉「重复执行会造成业务混乱或对外噪音」的口。字典类 create（站点/车辆/司机/线路/班次/商品/公告）
-  **故意不钉**：运营连着建两条同名记录是有意的，10 秒的键会把正当操作吞掉。
-· `order-pool/collect` 这类不钉：它按 `status=8` 过滤，第二次自然 0 行 —— 服务端状态机已经是事实幂等。
+口径（为什么只钉这 8 个，不给 45 个全覆盖）：
+· 判据只有一条：**重复执行会不会多出第二份东西**。逐个读过实现才定，不看名字猜。
+· 字典类 create（站点/车辆/司机/线路/班次/商品/公告）**故意不钉**：运营连着建两条同名记录是有意的，
+  10 秒的键会把正当操作吞掉。
+· `order-pool/collect` 不钉：按 `status=8` 过滤，第二次自然 0 行。
 · PUT/DELETE 语义上重复=同结果，也不钉。
+· 有 4 个口第一版被我收进册子、读了实现才发现**写的是假话**，已撤（撤的是假理由，不是放宽判据）：
+  - `driver-vehicle/bind`：`DriverVehicleServiceImpl.bind` 先 `unbindAll(按司机)` 再 `unbindAll(按车辆)`
+    才插入 ⇒ 同参数重复的净效果还是"一对人车"，不是我以为的"两条生效中的绑定"。
+  - `dispatch/plan/review`：只允许 `PENDING` 审核，第二次被 `DISPATCH_PLAN_STATUS_ILLEGAL` 拒 ⇒ 状态机已挡。
+  - `order/allocate`：`allocateDynamic` → `AlgorithmAdapter.allocateRaw` → `algorithmClient.allocate`，
+    **整条没有落库**，它只是问算法要一个结果给界面看 ⇒ 不存在"生成第二个方案"。
+  - `feedback/reply`：一个 `updateById` 覆盖 `status/reply/replyTime` ⇒ 同参数重复=同一个值。
 
 形状坑（这本自己撞过的两条，写在这儿是为了下一轮别再撞）：
 · 注解是多行的：`@Idempotent(timeout = 10, ... ,\n        message = "...")` ⇒ 只往上数 `@` 开头的行会把
@@ -19,7 +27,7 @@
 · 按行号邻近配对会把上一个方法的注解顶给下一个方法（假阳性）。同一个原因。
 
 用法：python3 scripts/check_admin_write_idempotency.py [--self-test] [仓库根]
-退出码：0 = 在册 12 口全部带合规幂等键且对照数吻合；1 = 有缺/形状不合/在册漂移；2 = 扫描根不存在或一个写口都没数到。
+退出码：0 = 在册 8 口全部带合规幂等键且对照数吻合；1 = 有缺/形状不合/在册漂移；2 = 扫描根不存在或一个写口都没数到。
 """
 import io
 import os
@@ -29,7 +37,7 @@ import sys
 ADMIN_ROOT = os.path.join("yudao-module-transport", "src", "main", "java", "cn", "iocoder", "yudao",
                           "module", "transport", "controller", "admin")
 PIN_ADMIN_WRITES = 45          # 现读对照数：admin 写口总数，变了要同轮写清原因
-PIN_COVERED = 12               # 在册必须带幂等键的口数
+PIN_COVERED = 8                # 在册必须带幂等键的口数
 
 MAP_RE = re.compile(r"@(Post|Put|Delete|Patch)Mapping\b(?:\s*\(\s*(?:value\s*=\s*)?\"([^\"]*)\")?")
 CLS_RE = re.compile(r"@RequestMapping\(\s*\"([^\"]+)\"")
@@ -41,18 +49,14 @@ MSG_RE = re.compile(r"message\s*=\s*\"([^\"]*)\"")
 
 # 在册表：键 = "METHOD 路径"，值 = 为什么重复执行有害（这句会打进读数，不接受空着）
 MUST_COVER = {
-    "POST /transport/dispatch/allocate": "重复提交生成第二个方案，两个方案抢同一批订单",
-    "POST /transport/dispatch/plan/manual": "手工派单重复提交 = 同一批订单被派两次",
+    "POST /transport/dispatch/plan/manual": "手工派单重复提交 = 同一批订单被派两次（每次都 insert 一条方案）",
     "POST /transport/dispatch/plan/smart": "智能派单重复提交 = 两个方案 + 两轮算法",
-    "POST /transport/dispatch/plan/prefetch-road": "预热重复跑 = 重复消耗高德配额",
-    "PUT /transport/dispatch/plan/review": "审核重复提交会把两个方案都置为已下发",
-    "POST /transport/dispatch/departure-check": "发车核验重复提交会重复放行与告警",
-    "POST /transport/driver-vehicle/bind": "绑定重复提交会留下两条生效中的绑定",
-    "PUT /transport/feedback/reply": "同一条反馈被回两次，用户那边看到的是两套说法",
+    "POST /transport/dispatch/plan/prefetch-road": "预热重复跑 = 重复消耗高德配额（无状态守卫）",
+    "POST /transport/dispatch/departure-check": "发车核验每次都 departureCheckMapper.insert ⇒ 重复一次多一条核验记录",
     "POST /transport/notification/send": "通知重复提交 = 给用户多发一条，且没有撤回口",
     "POST /transport/order/create": "运单重复创建 = 两张真单，后面每一环都会各跑一遍",
-    "POST /transport/topology/replan-leg": "重调度重复提交会二次换车换司机",
-    "POST /transport/wallet/adjust-balance": "调账重复执行 = 同一笔钱调两次",
+    "POST /transport/topology/replan-leg": "重调度每次都 updateById 换车换司机（legMapper/planMapper 各一处，实读）",
+    "POST /transport/wallet/adjust-balance": "调账重复执行 = 同一笔钱调两次（无任何状态守卫，直接 recharge/consume）",
 }
 
 
@@ -225,7 +229,7 @@ def run_self_test():
                 print("✘ K0 真树 rc=%d（期望 0）" % got0)
                 rc = 1
             else:
-                print("✔ K0 真树合规（在册 12 口全带键）")
+                print("✔ K0 真树合规（在册 8 口全带键）")
         else:
             print("! K0 跳过：不在仓库根运行")
         MUST_COVER.clear()

@@ -53,8 +53,6 @@ public class DispatchController {
     @PostMapping("/allocate")
     @Operation(summary = "动态插单调度（新订单 → Candidate/Reachability/TripLock/MarginalCost → DispatchPlan）")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:smart-plan')")
-    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
-            message = "这一单正在插单调度中，请勿重复提交（重复提交会生成第二个方案）")
     public CommonResult<java.util.Map<String, Object>> allocateOrder(@RequestBody java.util.Map<String, Object> payload) {
         return success(dispatchService.allocateDynamic(payload));
     }
@@ -131,8 +129,6 @@ public class DispatchController {
     @PutMapping("/plan/review")
     @Operation(summary = "调度方案审核")
     @PreAuthorize("@ss.hasPermission('transport:dispatch:review')")
-    @Idempotent(timeout = 10, timeUnit = TimeUnit.SECONDS, keyResolver = UserIdempotentKeyResolver.class,
-            message = "这个方案正在审核，请勿重复提交")
     public CommonResult<Boolean> reviewPlan(@Valid @RequestBody DispatchPlanReviewReqVO reqVO) {
         dispatchService.reviewPlan(reqVO);
         return success(true);
