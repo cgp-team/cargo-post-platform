@@ -19,6 +19,15 @@ CI 一片绿 —— 少东西比红难发现得多，所以这一格必须静态
 退出码：0 = 没有跨文件撞号；1 = 有撞号（逐条列出）；2 = 扫描根不存在或一个候选都没数到
         （"数到 0 个"绝不能读成"没有问题"，那是判据没跑起来的形态）。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

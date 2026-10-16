@@ -21,6 +21,15 @@
         1 = 出现新文件、某文件计数上涨、或有文件降了却没改在册表（"修好了不登记"同样红）；
         2 = 扫描根不存在 / 候选数为 0。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

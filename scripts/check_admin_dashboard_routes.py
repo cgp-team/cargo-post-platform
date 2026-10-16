@@ -18,6 +18,15 @@
 用法：python3 scripts/check_admin_dashboard_routes.py
 退出码：0 = 都能落到页面上；1 = 有跳空的入口（逐条列出，并给出建议的叶子路径）；2 = 判据没跑起来。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

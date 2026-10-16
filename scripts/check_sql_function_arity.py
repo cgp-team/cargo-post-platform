@@ -23,6 +23,15 @@
     python3 scripts/check_sql_function_arity.py --root sql --root .github/workflows
 退出码：0 = 干净；1 = 有超参调用（逐条列出 文件:行）；2 = 扫描根不存在 / 读不了 / 候选数为 0 / 自测没过。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

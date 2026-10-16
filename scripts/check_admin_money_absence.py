@@ -17,6 +17,15 @@
 用法：python3 scripts/check_admin_money_absence.py [--self-test] [扫描根]
 退出码：0 = 折叠命中 0 且对照数 >0；1 = 还有折叠命中；2 = 目录不存在 / 对照数为 0。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

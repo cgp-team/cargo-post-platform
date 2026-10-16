@@ -26,6 +26,15 @@
 退出码：0 = 候选全部在册；1 = 出现新文件或计数涨跌（含"偷偷修好又不改表"）；
         2 = 扫描根不存在 / 候选数为 0 / 自检里任一 knife 没咬住。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

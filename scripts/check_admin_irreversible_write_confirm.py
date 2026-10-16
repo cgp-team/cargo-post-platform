@@ -21,6 +21,15 @@
 用法：python3 scripts/check_admin_irreversible_write_confirm.py [--self-test] [仓库根]
 退出码：0 = 全部有确认；1 = 有裸口 / 名单里的调用点消失了；2 = 扫描根不存在或 0 调用点。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re

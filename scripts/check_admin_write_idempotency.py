@@ -29,6 +29,15 @@
 用法：python3 scripts/check_admin_write_idempotency.py [--self-test] [仓库根]
 退出码：0 = 在册 8 口全部带合规幂等键且对照数吻合；1 = 有缺/形状不合/在册漂移；2 = 扫描根不存在或一个写口都没数到。
 """
+
+# 输出流强制 UTF-8（GBK 控制台上不这么做，打印中文时抛 UnicodeEncodeError，
+# rc=1 会被读成「这一本判红」，而实际是判据一次都没判）
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import os
 import re
