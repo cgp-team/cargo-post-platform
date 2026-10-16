@@ -58,7 +58,7 @@ jobs:
     # 与 deploy-dev.yml 同一台 self-hosted runner（构建与部署同机），因此这里连的就是那台机器上的 compose 网络
     runs-on: [self-hosted, cargo-post]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 守卫：默认只探测；apply 必须显式确认
         env:
