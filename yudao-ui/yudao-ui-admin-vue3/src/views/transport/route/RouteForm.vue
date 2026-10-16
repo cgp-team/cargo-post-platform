@@ -91,6 +91,7 @@ const stationList = ref<StationApi.StationVO[]>([])
 /** 经停站序（编辑态可改）：key 仅用于列表渲染稳定性 */
 const routeStations = ref<{ key: number; stationId?: number }[]>([])
 const stopsSaving = ref(false)
+const stopsError = ref('')
 let stopKeySeed = 1
 const formData = ref<any>({
   routeCode: '', routeName: '', startStationId: null, endStationId: null, distanceKm: null,
@@ -173,17 +174,23 @@ const saveStations = async () => {
     return
   }
   stopsSaving.value = true
+  stopsError.value = ''
   try {
     await RouteApi.saveRouteStations({ routeId: formData.value.id, stations })
     message.success('站序已保存（里程与计划分钟已按站点自动更新）')
     const id = formData.value.id
     if (id) {
-      const list = await RouteApi.getRouteStations(id).catch(() => [])
-      routeStations.value = (list || []).map((s) => ({ key: stopKeySeed++, stationId: s.stationId }))
+      const list = await RouteApi.getRouteStations(id).catch(() => null)
+      if (list) routeStations.value = (list || []).map((s) => ({ key: stopKeySeed++, stationId: s.stationId }))
+      else stopsError.value = '站序保存了，但重新拉取站序没读到（下面列的是保存前那版）'
       const refreshed = await RouteApi.getRoute(id).catch(() => null)
       if (refreshed) formData.value = { ...formData.value, ...refreshed }
+      else stopsError.value = (stopsError.value ? stopsError.value + '；' : '') + '重算后的里程/时长没读回来，表单里仍是保存前的数'
     }
     emit('success')
+  } catch (e: any) {
+    // 保存本身失败也要留字：不清就是「点下去没反应」，运营会再点一次
+    stopsError.value = '站序没保存成功：' + (e?.msg || e?.message || '未知原因') + '（既有站序与里程/时长都没变）'
   } finally {
     stopsSaving.value = false
   }

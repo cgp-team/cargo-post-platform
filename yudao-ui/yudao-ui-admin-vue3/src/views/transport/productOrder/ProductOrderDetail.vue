@@ -1,5 +1,13 @@
 <template>
   <Dialog title="商品订单详情" v-model="dialogVisible" width="720px">
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="loadError"
+      style="margin-bottom:12px"
+    />
     <el-descriptions :column="2" border v-loading="loading">
       <el-descriptions-item label="订单号">{{ detail.orderNo }}</el-descriptions-item>
       <el-descriptions-item label="状态">
@@ -64,8 +72,10 @@ const shiftLabelText = computed(() => {
   return s.plannedDepartureTime ? `${s.shiftCode} ${s.plannedDepartureTime}` : s.shiftCode
 })
 
+const loadError = ref('')
 const open = async (id: number) => {
   dialogVisible.value = true
+  loadError.value = ''
   loading.value = true
   try {
     detail.value = await ProductOrderApi.getProductOrder(id)
@@ -79,6 +89,9 @@ const open = async (id: number) => {
       if (veh.status === 'fulfilled') vehicleOptions.value = veh.value
       if (shift.status === 'fulfilled') shiftOptions.value = shift.value
     }
+  } catch (e: any) {
+    // 读失败时下面那格念的可能是上一次打开的那条 ⇒ 点名「这次」没读到
+    loadError.value = '这条商品订单没读到：' + (e?.msg || e?.message || '未知原因') + '（下面念的不一定是这一条的）'
   } finally { loading.value = false }
 }
 

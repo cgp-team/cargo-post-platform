@@ -196,6 +196,14 @@
 
   <!-- 订单详情：寄货全链路（用户位置 → 交接服务站 → 货物规格 → 收件信息 → 图片凭证） -->
   <Dialog v-model="detailVisible" :title="`订单详情 ${detail?.orderNo || ''}`" width="720px" v-loading="detailLoading">
+    <el-alert
+      v-if="detailError"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="detailError"
+      style="margin-bottom:12px"
+    />
     <el-descriptions v-if="detail" :column="2" border size="small">
       <el-descriptions-item label="订单类型">{{ orderTypeLabel(detail.orderType!) }}</el-descriptions-item>
       <el-descriptions-item label="订单状态">
@@ -389,6 +397,7 @@ const submitAudit = async (pass: boolean) => {
 /** 订单详情：单独拉一条（含子表全字段），复核后可直接给老师看"用户位置 → 交接站" */
 const detailVisible = ref(false)
 const detailLoading = ref(false)
+const detailError = ref('')
 const detail = ref<OrderApi.OrderVO>({})
 /** 事件流三格：events（读到的）/ eventsError（没读到的原因）/ 两者都空 = 后端确实说没有 */
 const events = ref<OrderEventApi.OrderEventVO[]>([])
@@ -412,11 +421,17 @@ const loadEvents = async (orderId: number) => {
 
 const openDetail = async (row: OrderApi.OrderVO) => {
   detail.value = row // 先用列表数据渲染，避免白屏
+  detailError.value = ''
   detailVisible.value = true
   detailLoading.value = true
   loadEvents(row.id!)
   try {
     detail.value = await OrderApi.getOrder(row.id!)
+  } catch (e: any) {
+    // 这一格特殊：失败时屏幕上**不是空白**，而是列表那一行 —— 那也是数据，但不是后端刚给的那份。
+    // 不点名就会被读成"详情就是这样"（队列 #68 / 台账 D-134）
+    detailError.value =
+      '详情没读到：' + (e?.msg || e?.message || '未知原因') + '（下面念的是列表里那一行的字段，不是后端此刻的状态）'
   } finally {
     detailLoading.value = false
   }

@@ -31,19 +31,11 @@ DEFAULT_ROOT = os.path.join("yudao-ui", "yudao-ui-admin-vue3", "src", "views", "
 # 为什么不当场全修：这 25 处里有 19 个文件是"列表页 getList 只有 try/finally、没有 catch"，
 # 那一族与队列 #68（三态并格）是同一块活，摊开改会把这个收口撑成另一轮。
 # 但**不能因为修不完就不立闸**：立成在册表之后，任何新增、任何上涨、以及"偷偷修好又不登记"都会红。
-# ⚠ 表由 24 → **11**（2026-10-16，队列 #68 批次 1 / 台账 D-134）：那 13 处列表页真的改了
-#   （catch 里清 list/total 并写 `listError`，模板补一条 `el-alert`），所以是**进展**而不是口径修正。
-#   留下的 11 处分两类：`dispatch/index.vue` 那 6 处不是列表页（详情/校验/审核各自形状不同），
-#   另外 5 处是表单/详情弹窗里的取数（OrderForm、ProductOrderDetail、RouteForm、ShiftForm、order/index 的详情）。
-KNOWN_UNFIXED = {
-    'dispatch/index.vue': 6,
-    'order/OrderForm.vue': 1,
-    'order/index.vue': 1,
-    'productOrder/ProductOrderDetail.vue': 1,
-    'route/RouteForm.vue': 1,
-    'shift/ShiftForm.vue': 1,
-}
-KNOWN_TOTAL = 11
+# ⚠ 表由 24 → **空**（2026-10-16，队列 #68 批次 1+2 / 台账 D-134）：这是**进展**，不是口径修正 ——
+#   13 个列表页与 6 处 dispatch 读口、5 处表单/详情读口全部补了"清数据 + 留一条看得见的字"。
+#   表清空之后这本闸仍然有用：候选数（现读 34 处）照样数，任何一页把出口删掉都会以"新出现的未达标文件"红回来。
+KNOWN_UNFIXED = {}
+KNOWN_TOTAL = 0
 # ⚠ 表上从 25 降到 24 不是"又修好了一格"：`dispatch/DispatchVisualDialog.vue` 那条是**判据的误报**
 #   —— 它的 catch 写的是 `legRoadFailed.value` / `nextFailed`，而 ERR_STATE 起初只认结尾 `Error|error|failed`
 #   （小写 f），没认大写 `Failed`。放宽正则后它自然出局。这种"数字变小"必须连原因一起改表，
