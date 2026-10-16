@@ -45,6 +45,14 @@ import sys
 
 ADMIN_ROOT = os.path.join("yudao-module-transport", "src", "main", "java", "cn", "iocoder", "yudao",
                           "module", "transport", "controller", "admin")
+AI_ROOT = os.path.join("yudao-module-ai-assist", "src", "main", "java", "cn", "iocoder", "yudao",
+                       "module", "aiassist", "controller", "admin")
+# 名册：模块的 admin 根 → (写口现读数, 在册必须带键数)。**每个数都必须是实跑出来的**（估的不算数，见下）。
+# 为什么要有这张名册（队列 #99 / 台账 D-141）：这本闸的扫描根以前只有 transport 一个，于是第二条线新建的
+# `yudao-module-ai-assist` 那 5 个写口**不在任何闸的视野里** —— 她自己给 saved-query 的 create 钉了
+# `@Idempotent`（形状是对的），但**那句被删掉也不会有人红**。"保护写在一处、绑定漏在另一处"是静默的，
+# 与本仓 #75 那格（声明了 xxxLoading 却没接到按钮上）同一种病。
+MODULE_ADMIN = {}
 PIN_ADMIN_WRITES = 49          # 现读对照数：admin 写口总数，变了要同轮写清原因
 # 45 → 46（2026-10-16，队列 #92）：新增 `PUT /transport/notification/mark-admin-read`
 #   （把一条管理员告警标为已处理）。这一口**故意不钉幂等键**，按上面的口径：PUT 且重复=同结果，
@@ -55,6 +63,22 @@ PIN_ADMIN_WRITES = 49          # 现读对照数：admin 写口总数，变了�
 #   三个里只有 create 钉键（属于"重复一次多一条记录"那一类，且服务层的同镇同日查重在并发下会双双通过）；
 #   update / delete 重复=同结果，按上面的口径不钉。
 PIN_COVERED = 9                # 在册必须带幂等键的口数
+
+MODULE_ADMIN[ADMIN_ROOT] = (PIN_ADMIN_WRITES, PIN_COVERED)
+# ai-assist 的两个数都是这一轮实测的（`mvn -B -pl yudao-module-ai-assist -am test` BUILD SUCCESS、19 条用例；
+# 写口用同一台提取器数）：POST /transport/ai/saved-query/create、PUT update、DELETE delete、
+# POST /transport/ai/capacity-conflict/check、POST /transport/ai/briefing/render ⇒ 写口 5。
+# 名册只钉 create 一个：check / render 是**只算不写**的口（读实现确认过：一个走约束校验返回冲突点，
+# 一个把已聚合的数据排成简报），update / delete 重复=同结果 —— 按同一口径都不钉。
+PIN_AI_WRITES, PIN_AI_COVERED = 5, 1
+MODULE_ADMIN[AI_ROOT] = (PIN_AI_WRITES, PIN_AI_COVERED)
+# 明确划成"不在本闸范围"的上游模块（现读：system 106 / infra 30 / member 16 个写口，0 个带键）。
+# 为什么不管而不是"顺手一起钉"：这三个是 RuoYi-Vue-Pro 上游重新引入的业务面（用户/角色/文件/会员），
+# 它们的写口语义不由我们定，一次升级就会变；把它们钉成对照数只会得到一台**永远红**的闸 ——
+# 而"红到没人管"的闸等于没有闸（与本仓 #74/#75 只圈 transport 域是同一条口径）。
+# 这本闸对它们的真正用处是上面那条"名册外且有写口"的红：**新出现的自研模块必须被分类**，
+# 想蒙混进 UPSTREAM_MODULES 也得留一句为什么。
+UPSTREAM_MODULES = {"yudao-module-system", "yudao-module-infra", "yudao-module-member"}
 
 MAP_RE = re.compile(r"@(Post|Put|Delete|Patch)Mapping\b(?:\s*\(\s*(?:value\s*=\s*)?\"([^\"]*)\")?")
 CLS_RE = re.compile(r"@RequestMapping\(\s*\"([^\"]+)\"")
@@ -76,7 +100,13 @@ MUST_COVER = {
     "POST /transport/wallet/adjust-balance": "调账重复执行 = 同一笔钱调两次（无任何状态守卫，直接 recharge/consume）",
     "POST /transport/town-event/create": "日历重复登记 = 同一个集日被情景提示数两遍（服务层查重按 start_date，"
                                          "两次并发提交能同时通过）",
+    # 队列 #99：这条理由是对着实现读出来的，不是照名字编的 —— createQuery 就是 `insert(entity)` 后回 id，
+    # **没有任何同名校验/唯一约束**，所以双击 = 两条同名条件（台账 D-136 里那四条"编出来的理由"就是这么被抓的）。
+    "POST /transport/ai/saved-query/create": "保存的查询条件重复提交 = 存下两条同名条件（createQuery 是裸 insert，无查重无唯一键）",
 }
+# 在册口属于哪个模块的扫描根。没有这张表，"模块还没落地"就会被判成"端点被删了"——
+# 而那种红会让人去改一个根本还没提交的文件（本轮真的差点这么发生：只推闸、不推模块时 CI 会红）。
+MUST_COVER_OWNER = {"POST /transport/ai/saved-query/create": AI_ROOT}
 
 
 def read_lines(path):
@@ -84,7 +114,7 @@ def read_lines(path):
         return f.read().replace("\r\n", "\n").split("\n")
 
 
-def scan(root):
+def scan(root, admin=None):
     """返回 (rows, bad_shape)：rows = [(key, idm|None, 文件, 行号)]，只含写口。
 
     解析法换过一次（这是这本第三次栽在"认形状"上，记在这儿）：
@@ -93,7 +123,7 @@ def scan(root):
     现在只做一件笨事：从 @XMapping 那一行**往下**找到方法签名，中间这段就是注解区；
     行号与动词都取自我看见的那一行，不再靠邻近推断。"""
     rows, bad_shape = [], []
-    base = os.path.join(root, ADMIN_ROOT)
+    base = os.path.join(root, admin or ADMIN_ROOT)
     for dirpath, _d, names in os.walk(base):
         for name in sorted(names):
             if not name.endswith("Controller.java"):
@@ -140,13 +170,17 @@ def scan(root):
     return rows, bad_shape
 
 
-def judge(rows):
-    """按口径判每条在册口；返回（违规文本列表, 现读覆盖数）。"""
+def judge(rows, demand=None):
+    """按口径判每条在册口；返回（违规文本列表, 现读覆盖数）。
+
+    `demand` 让 main 能在"某个名册模块这轮不在树里"时，把它名下的在册口**排除在本轮判决之外**
+    —— 而不是把它们判成"端点被删了"。跳过必须大声打出来（见 main），不静默。
+    """
     by_key = {}
     for key, idm, rel, lineno in rows:
         by_key.setdefault(key, []).append((idm, rel, lineno))
     out, covered = [], 0
-    for key, why in sorted(MUST_COVER.items()):
+    for key, why in sorted((demand if demand is not None else MUST_COVER).items()):
         hits = by_key.get(key)
         if not hits:
             out.append("✘ 在册口在树上找不到：%s（端点被改名/删掉了，同轮改本文件顶部的在册表）" % key)
@@ -171,6 +205,31 @@ def judge(rows):
     return out, covered
 
 
+def module_deployed(root, mod):
+    """这个模块挂没挂在 yudao-server 上（= 这台机器要不要部署它）。读 pom，不猜。"""
+    p = os.path.join(root, "yudao-server", "pom.xml")
+    if not os.path.isfile(p):
+        return False
+    text = io.open(p, encoding="utf-8", errors="replace").read()
+    return ("<artifactId>%s</artifactId>" % mod) in text
+
+
+def discover_admin_roots(root):
+    """列出树里所有 `<module>/src/.../controller/admin` 目录：名册外的模块靠它抓出来。"""
+    out = []
+    if not os.path.isdir(root):
+        return out
+    for mod in sorted(os.listdir(root)):
+        if not mod.startswith("yudao-module-"):
+            continue
+        base = os.path.join(root, mod)
+        for dirpath, _dirnames, _names in os.walk(base):
+            rel = os.path.relpath(dirpath, root)
+            if rel.endswith(os.path.join("controller", "admin")):
+                out.append((mod, rel))
+    return out
+
+
 def main(argv):
     self_test = "--self-test" in argv
     args = [a for a in argv if a != "--self-test"]
@@ -181,27 +240,74 @@ def main(argv):
     if not os.path.isdir(base):
         print("✘ 扫描根不存在：%s（不在仓库根跑要显式给路径）" % base)
         return 2
-    rows, _ = scan(root)
-    admin_writes = len(rows)
-    if admin_writes == 0:
+    bad, rows_all, skipped = [], [], []
+    for admin, roster in sorted(MODULE_ADMIN.items()):
+        pin_w, pin_c = roster
+        if admin == ADMIN_ROOT:
+            # transport 这两个数**必须在这里重读全局**：七把自检刀改的就是 PIN_ADMIN_WRITES / PIN_COVERED
+            # 这对全局（fixture 树里只有 adjust-balance 一个口）。MODULE_ADMIN 建的是导入时的快照，
+            # 不重读的话 K1–K7 会红在"对照数不符"这一格，而不是各自该钉的那一格。
+            pin_w, pin_c = PIN_ADMIN_WRITES, PIN_COVERED
+        d = os.path.join(root, admin)
+        mod = admin.split(os.sep)[0]
+        if not os.path.isdir(d):
+            # 名册里有、目录没有：**只有在这个模块已经挂到 yudao-server 上时才判红**。
+            # 不这么分就两种坏法：要么"模块还没落地"永久红（红到没人管 = 没有闸），
+            # 要么"模块被删了"被念成"少几个口而已"。挂载状态就是那台机器要不要部署它的真值。
+            if module_deployed(root, mod):
+                bad.append("✘ %s 挂在 yudao-server 的 pom 上，但扫描根找不到（%s）⇒ 部署面与扫描面不一致" % (mod, admin))
+            else:
+                print("  （%s 不在树里也没挂载 ⇒ 这一轮没有它的写口要判）" % mod)
+                skipped.append(admin)
+            continue
+        rows, _shape = scan(root, admin)
+        rows_all.extend(rows)
+        keyed = len([1 for _k, idm, _f, _l in rows if idm is not None])
+        print("[扫描] %s ⇒ 写口 %d 个（在册 %d）；自带合规幂等键 %d 个" % (mod, len(rows), pin_w, keyed))
+        if len(rows) != pin_w:
+            bad.append("✘ %s 对照数现读 %d ≠ 在册 %d：扫描面变了（新控制器/新写口/提取器坏了），"
+                       "先把差额逐条数出来再改本文件顶部的数" % (mod, len(rows), pin_w))
+        # ⚠ 每个模块只判**自己名册里那几道口**：第一版在这里对每个模块都跑了一遍全量 judge，
+        #   于是 transport 的 9 条在册口被报成"ai-assist 里找不到"、ai-assist 那条被报成"transport 里找不到"
+        #   —— 一串假红，而且红的内容与真正的洞毫无关系。在册表是按端点路径全局匹配的，只能判一次。
+        mine = {k: v for k, v in MUST_COVER.items() if any(k == rr[0] for rr in rows)}
+        want = PIN_COVERED if admin == ADMIN_ROOT else pin_c
+        if len(mine) != want:
+            bad.append("✘ %s 名册里应有 %d 个在册口，这一轮只对上 %d 个（在册表与这个模块的端点对不上，"
+                       "要么口被改名/删了，要么名册加错了模块）" % (mod, want, len(mine)))
+    # 名册外的模块：只要它有写口又没进名册，就是"保护没人管"的洞（这本闸自己的覆盖闸）
+    for mod, admin in discover_admin_roots(root):
+        if admin in MODULE_ADMIN or mod in UPSTREAM_MODULES:
+            continue
+        rows, _s = scan(root, admin)
+        if rows:
+            keyed = len([1 for _k, idm, _f, _l in rows if idm is not None])
+            bad.append("✘ %s 有 %d 个写口（其中 %d 个自带幂等键）既不在名册、也没被明确划成上游 ⇒ "
+                       "这些口的重复执行没有任何闸在管；要么加进 MODULE_ADMIN（同轮写两个实测数），"
+                       "要么把它归进 UPSTREAM_MODULES 并写清为什么不管"
+                       % (mod, len(rows), keyed))
+    if not rows_all:
         print("✘ 一个写口都没数到 ⇒ 判据没跑起来，不许读成「都合规」")
         return 2
-    bad, covered = judge(rows)
-    print("[扫描] admin 写口 %d 个（在册 %d）；带合规幂等键 %d 个" % (admin_writes, PIN_ADMIN_WRITES, covered))
-    if admin_writes != PIN_ADMIN_WRITES:
-        bad.append("✘ 对照数现读 %d ≠ 在册 %d：扫描面变了（新控制器/新写口/提取器坏了），"
-                   "先把差额逐条数出来再改本文件顶部的数" % (admin_writes, PIN_ADMIN_WRITES))
-    if covered != PIN_COVERED:
-        bad.append("✘ 带合规幂等键的在册口 %d ≠ %d" % (covered, PIN_COVERED))
-    extra = sorted({k for k, idm, _r, _l in rows if idm is not None} - set(MUST_COVER))
+    demand = {k: v for k, v in MUST_COVER.items()
+              if MUST_COVER_OWNER.get(k) not in skipped}
+    if len(demand) != len(MUST_COVER):
+        print("  （本轮因模块未落地而不判的在册口 %d 条：%s；模块一进树就恢复被判）"
+              % (len(MUST_COVER) - len(demand),
+                 "、".join(sorted(set(MUST_COVER) - set(demand)))))
+    bad_shape, covered = judge(rows_all, demand)
+    bad = bad_shape + bad
+    print("[汇总] 全仓 admin 写口 %d 个；带合规幂等键 %d 个（本轮在册应判 %d / 名册共 %d）"
+          % (len(rows_all), covered, len(demand), len(MUST_COVER)))
+    extra = sorted({k for k, idm, _r, _l in rows_all if idm is not None} - set(MUST_COVER))
     if extra:
         print("  （另有 %d 个口自带幂等键、不在册，登记供复核：%s）" % (len(extra), "、".join(extra)))
-    for b in bad:
-        print(b)
+    for b_ in bad:
+        print(b_)
     if bad:
         return 1
     print("✅ 在册 %d 个后台写口都带 UserIdempotentKeyResolver 的幂等键，键窗 10–300 秒，msg 指名后果"
-          % PIN_COVERED)
+          % len(demand))
     return 0
 
 
@@ -300,11 +406,58 @@ def run_self_test():
             rc = 1
         else:
             print("✔ K7 在册口找不到即红（防册子停留在过去）")
+        # K8 名册外的新模块有写口 ⇒ 必须红（队列 #99 的成因就是这一格以前没人判：
+        #    ai-assist 落地时这本闸只看得到 transport，那 5 个口完全在视野外）
+        d8 = os.path.join(tmp, "k8")
+        leaf8 = os.path.join(d8, ADMIN_ROOT)
+        os.makedirs(leaf8, exist_ok=True)
+        with io.open(os.path.join(leaf8, "WalletController.java"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(FX_OK)
+        new_leaf = os.path.join(d8, "yudao-module-newbiz", "src", "main", "java", "cn", "iocoder", "yudao",
+                                "module", "newbiz", "controller", "admin")
+        os.makedirs(new_leaf, exist_ok=True)
+        with io.open(os.path.join(new_leaf, "NewBizController.java"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(FX_NO_IDEM.replace("/transport/wallet", "/transport/newbiz"))
+        PIN_ADMIN_WRITES, PIN_COVERED = 1, 1
+        got8 = _run_quiet(d8)
+        out8 = _run_capture(d8)
+        if got8 != 1 or "不在名册" not in out8:
+            print("✘ K8 名册外模块有写口却 rc=%d（期望 1，且要点名「不在名册」）；读数：%s"
+                  % (got8, " ".join(out8.split())[-90:]))
+            rc = 1
+        else:
+            print("✔ K8 新模块有写口却没进名册 ⇒ 红并点名（这本闸自己的覆盖闸）")
+        # K9 名册里挂着、目录被删，但 pom 还在部署它 ⇒ 必须红（部署面与扫描面不一致）
+        d9 = os.path.join(tmp, "k9")
+        os.makedirs(os.path.join(d9, ADMIN_ROOT), exist_ok=True)
+        with io.open(os.path.join(d9, ADMIN_ROOT, "WalletController.java"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(FX_OK)
+        os.makedirs(os.path.join(d9, "yudao-server"), exist_ok=True)
+        with io.open(os.path.join(d9, "yudao-server", "pom.xml"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("<project><dependencies><dependency>"
+                    "<artifactId>%s</artifactId></dependency></dependencies></project>\n"
+                    % AI_ROOT.split(os.sep)[0])
+        got9 = _run_quiet(d9)
+        if got9 != 1:
+            print("✘ K9 pom 挂着 ai-assist 而目录不存在却 rc=%d（期望 1）" % got9)
+            rc = 1
+        else:
+            print("✔ K9 已挂载但扫描根不见了 ⇒ 红（不许把模块被删念成少几个口）")
     finally:
         MUST_COVER.clear()
         MUST_COVER.update(orig_must)
         shutil.rmtree(tmp, ignore_errors=True)
     return rc
+
+
+def _run_capture(root):
+    """把 main 打出来的字取回来（K8 那把要验"红得对不对地方"，光看 rc 不够 ——
+    rc=1 可能来自任何一条别的洞，那这一把就钉不住它声称的那一格）。"""
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        main([root])
+    return buf.getvalue()
 
 
 def _run_quiet(root):
