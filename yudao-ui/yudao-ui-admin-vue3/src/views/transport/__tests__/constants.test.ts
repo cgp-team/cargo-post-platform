@@ -38,7 +38,9 @@ import {
   vehicleStatusLabel,
   type TagType,
   moneyText,
-  distanceText
+  distanceText,
+  eventPhotoState
+
 } from '../constants'
 
 /**
@@ -223,5 +225,22 @@ describe('moneyText / distanceText（缺值不折叠成 0）', () => {
   it('单位只在调用方念一次（表头已写 km 的格子不再追加）', () => {
     expect(distanceText(3.5, 'km')).toBe('3.50 km')
     expect(distanceText(3.5)).toBe('3.50')
+  })
+})
+
+// ── 事件现场照片的三态（队列 #60 / 台账 D-135）：没有 / 读不出 / 有地址 ──
+describe('eventPhotoState（extraData 里的现场照片）', () => {
+  it('没有 extraData 就是"没有附件"，不报"读不出"', () => {
+    expect(eventPhotoState(undefined)).toEqual({ url: '', unreadable: false })
+    expect(eventPhotoState('')).toEqual({ url: '', unreadable: false })
+  })
+  it('合法 JSON 但没有 photoUrl 键：算"没有附件"，不算读不出（别的事件也往这一格写别的键）', () => {
+    expect(eventPhotoState('{"foo":1}')).toEqual({ url: '', unreadable: false })
+  })
+  it('photoUrl 是个串就念出来（后台要点开看）', () => {
+    expect(eventPhotoState('{"photoUrl":"https://x/a.jpg"}').url).toBe('https://x/a.jpg')
+  })
+  it('JSON 坏了必须明说"读不出"，不能塌成"这单没拍照"', () => {
+    expect(eventPhotoState('{"photoUrl":')).toEqual({ url: '', unreadable: true })
   })
 })

@@ -153,6 +153,25 @@ export const moneyText = (v?: number | string | null): string => {
 }
 
 /** 里程同理；单位交给调用方（有的表头里已经写了 (km)，不要在两处各念一遍） */
+/**
+ * 订单事件的现场照片（队列 #60 / 台账 D-135）。
+ * 后端把司机上报异常时那张照片记在 `transport_order_event.extra_data`（列类型 text，
+ * 注释原文就是"扩展数据JSON"），地址放在 `photoUrl` 键上。
+ * 三格分开念：没有附件 / 这一格读不出（JSON 坏了）/ 有地址。
+ * 把"读不出"塌成"没有"就是替后端宣布了一个它没给的结论。
+ */
+export const eventPhotoState = (
+  extraData?: string | null
+): { url: string; unreadable: boolean } => {
+  if (extraData === undefined || extraData === null || extraData === '') return { url: '', unreadable: false }
+  try {
+    const parsed = JSON.parse(extraData) as { photoUrl?: unknown }
+    return { url: typeof parsed?.photoUrl === 'string' ? parsed.photoUrl : '', unreadable: false }
+  } catch (e) {
+    return { url: '', unreadable: true }
+  }
+}
+
 export const distanceText = (v?: number | string | null, unit = ''): string => {
   if (v === undefined || v === null || v === '') return '没给'
   const n = Number(v)

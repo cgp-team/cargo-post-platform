@@ -273,6 +273,19 @@
           <span class="font-bold">{{ ev.eventTypeName || ev.eventType || '后端没给类型名' }}</span>
           <span v-if="ev.operator" class="text-gray-500"> · {{ ev.operator }}</span>
           <div v-if="ev.detail" class="text-gray-600">{{ ev.detail }}</div>
+          <!-- 司机上报异常时那张现场照片：记在事件的 extraData.photoUrl（队列 #60）。
+               有就画、没有就不画、读不出要明说 —— 不留"看着像没有附件"的第三种解释 -->
+          <el-image
+            v-if="eventPhotoState(ev.extraData).url"
+            :src="eventPhotoState(ev.extraData).url"
+            :preview-src-list="[eventPhotoState(ev.extraData).url]"
+            preview-teleported
+            fit="cover"
+            style="width:96px;height:96px;margin-top:6px;border-radius:6px"
+          />
+          <span v-else-if="eventPhotoState(ev.extraData).unreadable" class="text-gray-500">
+            附件读不出：这一格 extraData 不是合法 JSON
+          </span>
         </el-timeline-item>
       </el-timeline>
       <!-- 还在飞的时候不许念"后端说没有"：那等于替后端宣布了一个它还没给的结论 -->
@@ -296,7 +309,8 @@ import {
   orderStatusTag,
   serviceModeLabel,
   serviceModeTag,
-  reviewStatusLabel
+  reviewStatusLabel,
+  eventPhotoState
 } from '../constants'
 import OrderForm from './OrderForm.vue'
 import { useStationDictStore } from '@/store/modules/stationDict'

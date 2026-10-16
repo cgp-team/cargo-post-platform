@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.module.transport.service.transport.driver;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 import cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -1526,18 +1527,27 @@ public class DriverAppServiceImpl implements DriverAppService {
                 handoverService.confirmHandover(handover.getId(), driver.getId(), reqVO.getPhotoUrl());
             }
             case "complete" -> completeLeg(leg);
-            case "exception" -> reportLegException(leg, reqVO.getRemark());
+            case "exception" -> reportLegException(leg, reqVO.getRemark(), reqVO.getPhotoUrl());
             default -> throw exception(BAD_REQUEST);
         }
     }
 
     /** 司机上报异常（车辆故障/道路中断等，需求 §108）：段置异常 + 订单置异常 + 后台告警 */
-    private void reportLegException(TransportLegDO leg, String remark) {
+    /**
+     * 段异常上报（队列 #60 / 台账 D-135）。
+     * ⚠ 司机带上来的现场照片此前**整条链路都没接**：`AppDriverLegActionReqVO` 有 `photoUrl`，
+     *   而这里只把 `remark` 交给本方法 ⇒ 请求里的地址被丢弃，事后无凭证可查。
+     *   存储位置不落新列：订单事件本来就有 `extra_data`（`text`，注释写的就是"扩展数据JSON"，
+     *   且 `OrderEventRespVO.extraData` 已经回给后台），照片地址就记在那一格的 `photoUrl` 键上 ——
+     *   与 `DispatchServiceImpl` 把弃单写进 `unassigned_orders` 是同一套做法（`JSONUtil.toJsonStr`）。
+     */
+    private void reportLegException(TransportLegDO leg, String remark, String photoUrl) {
         multiLegService.forceLegStatus(leg.getId(), TransportLegStatusEnum.EXCEPTION,
                 remark != null ? remark : "司机上报异常");
         updateOrderStatus(leg.getOrderId(), TransportOrderStatusEnum.EXCEPTION);
-        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION,
-                "第 " + leg.getLegSequence() + " 段异常：" + (remark != null ? remark : "司机上报"));
+        String detail = "第 " + leg.getLegSequence() + " 段异常：" + (remark != null ? remark : "司机上报");
+        orderEventService.record(leg.getOrderId(), TransportOrderEventTypeEnum.ORDER_EXCEPTION, detail,
+                StrUtil.isBlank(photoUrl) ? null : JSONUtil.toJsonStr(Map.of("photoUrl", photoUrl)));
         userNotificationService.sendToAdmin(TransportOrderEventTypeEnum.ORDER_EXCEPTION,
                 cn.iocoder.yudao.module.transport.enums.notification.NotificationLevelEnum.EXCEPTION,
                 "运输段异常", "订单 " + leg.getOrderId() + " 第 " + leg.getLegSequence()
