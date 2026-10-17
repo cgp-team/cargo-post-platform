@@ -109,13 +109,20 @@ jobs:
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
               echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
+              ALL_READS="${ALL_READS}${label}=现${out}/期望${want}; "
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
               echo "::error title=DBSTATE::${label} 查询本身失败"
+              ALL_READS="${ALL_READS}${label}=查询失败; "
               QUERY_ERRORS=$((QUERY_ERRORS + 1))
             fi
           }
           QUERY_ERRORS=0
+          # 全部读数另外汇成**一条**注解发出去：这台 runner 每步只留前 10 条 `::notice`（GitHub 的硬上限），
+          # 探针一多，排在后面的几十格在 API 里就读不到了 —— D-148 那次 apply 红了一格却三条诊断通道全断
+          # （日志空 zip、artifact BlobNotFound、注解截到 10 条），只能靠推断交差。
+          # 产物那条路在这台机器上依旧不通 ⇒ 汇总注解是目前唯一还能机器读的通道。
+          ALL_READS=""
           emit_summary() { # 读数是给人看的，不该只活在一个传不上去的产物里
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               { echo "### 库结构读数（$(date -u +%FT%TZ)）"; echo '```'; cat "${REPORT}" 2>/dev/null; echo '```'; } >> "${GITHUB_STEP_SUMMARY}"
@@ -158,7 +165,16 @@ jobs:
           # V056 那两格在 check 模式也打印读数（只读诊断）：apply 之前应是 0/1，apply 之后才是 1/0
           probe "云管理员新号cargoadmin" 1 "SELECT COUNT(*) FROM system_users WHERE username='cargoadmin' AND deleted = b'0'"
           probe "云管理员旧号cargo_admin" 0 "SELECT COUNT(*) FROM system_users WHERE username='cargo_admin' AND deleted = b'0'"
+          # V057 那五格在 check 模式也打印（只读诊断）：apply 之前应是 0/0/0/0/24
+          # （最后那格 24 = 现在 `/transport` 下带组件的叶子数，按 sql/ 里的菜单树现数出来的），
+          # apply 之后才是 7/7/27/11/8 —— 没有这条，点 apply 之前我对云上导航面是盲的
+          probe "七个工作台叶V057" 7 "SELECT COUNT(*) FROM system_menu WHERE id BETWEEN 7160 AND 7166 AND deleted = b'0'"
+          probe "超管拿到七个工作台V057" 7 "SELECT COUNT(DISTINCT menu_id) FROM system_role_menu WHERE role_id = 1 AND menu_id BETWEEN 7160 AND 7166 AND deleted = b'0'"
+          probe "被折叠的27叶已收起V057" 27 "SELECT COUNT(*) FROM system_menu WHERE id IN (6811,6821,6831,6841,6845,6861,6914,6871,6935,6934,6878,6879,6851,6891,6881,6930,6910,6932,6901,6940,6950,6920,7110,7120,7130,7140,7150) AND visible = b'0' AND deleted = b'0'"
+          probe "抽空的11目录已收起V057" 11 "SELECT COUNT(*) FROM system_menu WHERE id IN (6810,6820,6830,6840,6850,6860,6870,6877,6880,6890,6900) AND visible = b'0' AND deleted = b'0'"
+          probe "侧栏可见transport叶V057" 8 "SELECT COUNT(*) FROM system_menu WHERE parent_id = 6800 AND type = 2 AND visible = b'1' AND deleted = b'0'"
           echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
+          echo "::notice title=DBSTATE-ALL::$(printf '%s' "${ALL_READS}" | tr -d '\n' | cut -c1-3800)"
           emit_summary
           [ "${QUERY_ERRORS}" = 0 ] || { echo "::error::${QUERY_ERRORS} 条探测查询本身失败 ⇒ 这段判据跑不动，不许把'跑不了'读成'库是好的'"; exit 1; }
 
@@ -238,13 +254,17 @@ jobs:
             if out=$("${MYSQL_EXEC[@]}" "${DB_NAME}" -N -B -e "${sql}" 2>&1); then
               printf '%-28s 现=%-5s 期望=%s\n' "${label}" "${out}" "${want}" | tee -a "${REPORT}"
               echo "::notice title=DBSTATE::${label} 现=${out} 期望=${want}"
+              ALL_READS="${ALL_READS}${label}=现${out}/期望${want}; "
               [ "${out}" = "${want}" ] || MISSING=$((MISSING + 1))
             else
               printf '%-28s 查询本身失败：%s\n' "${label}" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-220)" | tee -a "${REPORT}"
               echo "::error title=DBSTATE::${label} 查询本身失败"
+              ALL_READS="${ALL_READS}${label}=查询失败; "
               MISSING=$((MISSING + 1))
             fi
           }
+          # 同 check 步：每步注解上限 10 条 ⇒ 全部读数再汇成**一条**发出去（D-148 那条"看不见"的机器可读通道）
+          ALL_READS=""
           probe_strict "执行回流三列V029/V030" 3 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME IN ('actual_arrival_time','actual_finish_time')) OR (TABLE_NAME='transport_dispatch_plan' AND COLUMN_NAME='unassigned_orders'))"
           probe_strict "钱包三表V028" 3 "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('transport_wallet_account','transport_wallet_transaction','transport_pay_order')"
           probe_strict "揽收点四列V033" 4 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME IN ('contact_name','contact_mobile','business_hours','ecommerce_flag')"
@@ -287,8 +307,11 @@ jobs:
           probe_strict "被折叠的27叶已收起V057" 27 "SELECT COUNT(*) FROM system_menu WHERE id IN (6811,6821,6831,6841,6845,6861,6914,6871,6935,6934,6878,6879,6851,6891,6881,6930,6910,6932,6901,6940,6950,6920,7110,7120,7130,7140,7150) AND visible = b'0' AND deleted = b'0'"
           probe_strict "抽空的11目录已收起V057" 11 "SELECT COUNT(*) FROM system_menu WHERE id IN (6810,6820,6830,6840,6850,6860,6870,6877,6880,6890,6900) AND visible = b'0' AND deleted = b'0'"
           probe_strict "侧栏可见transport叶V057" 8 "SELECT COUNT(*) FROM system_menu WHERE parent_id = 6800 AND type = 2 AND visible = b'1' AND deleted = b'0'"
+          # 这条必须在"判红就 exit"之前发：红的时候才最需要读数（D-148 那次 apply 红了一格，
+          # 而日志是空 zip、artifact BlobNotFound、逐格注解被 10 条上限截掉 ⇒ 哪一格红只能靠推断）
+          echo "::notice title=DBSTATE-ALL::$(printf '%s' "${ALL_READS}" | tr -d '\n' | cut -c1-3800)"
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
-          echo "OK: 32 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
+          echo "OK: 39 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
       - name: 归档探测读数（无论成败都留凭证）
         if: always()
