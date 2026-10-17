@@ -155,6 +155,9 @@ jobs:
           probe "调用日志角色授权V054" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:invocation-log:query' AND rm.role_id=1"
           probe "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
+          # V056 那两格在 check 模式也打印读数（只读诊断）：apply 之前应是 0/1，apply 之后才是 1/0
+          probe "云管理员新号cargoadmin" 1 "SELECT COUNT(*) FROM system_users WHERE username='cargoadmin' AND deleted = b'0'"
+          probe "云管理员旧号cargo_admin" 0 "SELECT COUNT(*) FROM system_users WHERE username='cargo_admin' AND deleted = b'0'"
           echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
           emit_summary
           [ "${QUERY_ERRORS}" = 0 ] || { echo "::error::${QUERY_ERRORS} 条探测查询本身失败 ⇒ 这段判据跑不动，不许把'跑不了'读成'库是好的'"; exit 1; }
