@@ -243,7 +243,10 @@ jobs:
           probe "抽空的11目录已收起V057" 11 "SELECT COUNT(*) FROM system_menu WHERE id IN (6810,6820,6830,6840,6850,6860,6870,6877,6880,6890,6900) AND visible = b'0' AND deleted = b'0'"
           probe "侧栏可见transport叶V057" 8 "SELECT COUNT(*) FROM system_menu WHERE parent_id = 6800 AND type = 2 AND visible = b'1' AND deleted = b'0'"
           echo "[小结] 查询本身失败 ${QUERY_ERRORS} 条" | tee -a "${REPORT}"
-          echo "::notice title=DBSTATE-ALL::$(printf '%s' "${ALL_READS}" | tr -d '\n' | cut -c1-3800)"
+          # 读数交给后面独立的一步发：实测（run 38994651948）**每一步只留前 10 条注解** ——
+          # 39 格探针发 39 条 notice，API 里只回来最早的 10 条；把汇总放在同一步的最后，它就是第 40 条，永远取不到。
+          # 独立成步之后它是那一步的第 1 条注解，必然在册。
+          printf '%s' "${ALL_READS}" > "${RUNNER_TEMP:-.}/all_reads_probe.txt" 2>/dev/null || true
           emit_summary
           [ "${QUERY_ERRORS}" = 0 ] || { echo "::error::${QUERY_ERRORS} 条探测查询本身失败 ⇒ 这段判据跑不动，不许把'跑不了'读成'库是好的'"; exit 1; }
 
@@ -376,11 +379,30 @@ jobs:
           probe_strict "被折叠的27叶已收起V057" 27 "SELECT COUNT(*) FROM system_menu WHERE id IN (6811,6821,6831,6841,6845,6861,6914,6871,6935,6934,6878,6879,6851,6891,6881,6930,6910,6932,6901,6940,6950,6920,7110,7120,7130,7140,7150) AND visible = b'0' AND deleted = b'0'"
           probe_strict "抽空的11目录已收起V057" 11 "SELECT COUNT(*) FROM system_menu WHERE id IN (6810,6820,6830,6840,6850,6860,6870,6877,6880,6890,6900) AND visible = b'0' AND deleted = b'0'"
           probe_strict "侧栏可见transport叶V057" 8 "SELECT COUNT(*) FROM system_menu WHERE parent_id = 6800 AND type = 2 AND visible = b'1' AND deleted = b'0'"
-          # 这条必须在"判红就 exit"之前发：红的时候才最需要读数（D-148 那次 apply 红了一格，
-          # 而日志是空 zip、artifact BlobNotFound、逐格注解被 10 条上限截掉 ⇒ 哪一格红只能靠推断）
-          echo "::notice title=DBSTATE-ALL::$(printf '%s' "${ALL_READS}" | tr -d '\n' | cut -c1-3800)"
+          # 这条必须在"判红就 exit"之前**落盘**：红的时候才最需要读数（D-148 那次 apply 红了一格，
+          # 而日志是空 zip、artifact BlobNotFound、逐格注解被每步 10 条上限截掉 ⇒ 哪一格红只能靠推断）。
+          # 发注解交给后面独立的一步 —— 实测同一步里第 11 条起就不存了。
+          printf '%s' "${ALL_READS}" > "${RUNNER_TEMP:-.}/all_reads_verify.txt" 2>/dev/null || true
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
           echo "OK: 39 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
+
+      - name: "DBSTATE 汇总读数（独立一步：同一步只留前 10 条注解）"
+        if: always()
+        run: |
+          # 每一步的注解上限是 10 条（实测 run 38994651948：39 格探针发了 39 条 notice，
+          # check-runs/{id}/annotations 只回来最早那 10 条）。所以汇总必须**单独占一步**，
+          # 它是那一步的第 1 条注解 ⇒ 一定取得到；`if: always()` 保证探针步红的时候也发。
+          T="${RUNNER_TEMP:-.}"
+          sent=0
+          for f in all_reads_probe all_reads_verify; do
+            p="${T}/${f}.txt"
+            [ -f "${p}" ] || continue
+            echo "::notice title=DBSTATE-ALL-${f}::$(tr -d '\r\n' < "${p}" | cut -c1-3600)"
+            sent=$((sent + 1))
+          done
+          if [ "${sent}" = 0 ]; then
+            echo "::warning title=DBSTATE-ALL::没有任何汇总文件 ⇒ 前面两个读数步都没跑到（不是「读数都对了」）"
+          fi
 
       - name: 归档探测读数（无论成败都留凭证）
         if: always()
