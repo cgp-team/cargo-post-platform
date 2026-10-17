@@ -39,8 +39,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WF = os.path.join(ROOT, ".github", "workflows", "db-migrate-guarded.yml")
 LOCAL_YAML = os.path.join(ROOT, "yudao-server", "src", "main", "resources", "application-local.yaml")
 SCRATCH = "buspost_mig_idem_check"
-EXPECT_WHITELIST = 16   # V029 不在册（那份迁移被明确排除）；V056 起 2026-10-17 加入
-EXPECT_PROBES = 34   # V056 加了 2 格（云管理员新号/旧号）
+EXPECT_WHITELIST = 17   # V029 不在册（那份迁移被明确排除）；V057 起 2026-10-17 加入
+EXPECT_PROBES = 39   # V056 加 2 格（云管理员新号/旧号）、V057 加 5 格（七叶/超管授权/27 收起/11 目录/侧栏 8）
 
 BASELINE = [
     "sql/mysql/ruoyi-vue-pro.sql",

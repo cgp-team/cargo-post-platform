@@ -192,7 +192,8 @@ jobs:
                    sql/incremental/V052__ai_saved_query.sql \
                    sql/incremental/V053__ai_capability_menu.sql \
                    sql/incremental/V054__ai_invocation_log.sql                    sql/incremental/V055__ai_task_menu.sql \
-                   sql/incremental/V056__cloud_admin_username_alnum.sql; do
+                   sql/incremental/V056__cloud_admin_username_alnum.sql \
+                   sql/incremental/V057__admin_workbench_menu.sql; do
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
@@ -224,10 +225,12 @@ jobs:
           MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
-          # 32 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
+          # 39 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
           # 六格、本轮把计价那两格换成"按权限 2 + 6940 + 6941 + 6930 归属"四格，再补 V053/V054 的
-          # 5 格、去掉事件日历 3 格换 7100 目录 2 格 ⇒ 数要跟着实跑改，否则屏幕上念的格数和真正判的格数
-          # 就是两个答案（台账 D-133）。
+          # 5 格、去掉事件日历 3 格换 7100 目录 2 格；V056 加 2 格（云管理员新号/旧号）、
+          # V057 加 5 格（七个工作台叶、27 个收起的叶、11 个抽空目录、侧栏可见叶 8、超管授权 7）
+          # ⇒ 数要跟着实跑改，否则屏幕上念的格数和真正判的格数
+          # 就是两个答案（台账 D-133）。第 16 本判据 `EXPECT_PROBES` 认的是同一个数。
           echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
           MISSING=0
           probe_strict() {
@@ -278,6 +281,12 @@ jobs:
           # 带下划线的 `cargo_admin` 会在鉴权之前就被 400 挡掉 ⇒ 文档给用户的账号一次都登不进去）
           probe_strict "云管理员新号cargoadmin" 1 "SELECT COUNT(*) FROM system_users WHERE username='cargoadmin' AND deleted = b'0'"
           probe_strict "云管理员旧号已改名" 0 "SELECT COUNT(*) FROM system_users WHERE username='cargo_admin' AND deleted = b'0'"
+          # V057：导航集成。这五格判的是"合并只动了导航层，没动权限"这件事（队列 #104/#105）
+          probe_strict "七个工作台叶V057" 7 "SELECT COUNT(*) FROM system_menu WHERE id BETWEEN 7160 AND 7166 AND deleted = b'0'"
+          probe_strict "超管拿到七个工作台V057" 7 "SELECT COUNT(DISTINCT menu_id) FROM system_role_menu WHERE role_id = 1 AND menu_id BETWEEN 7160 AND 7166 AND deleted = b'0'"
+          probe_strict "被折叠的27叶已收起V057" 27 "SELECT COUNT(*) FROM system_menu WHERE id IN (6811,6821,6831,6841,6845,6861,6914,6871,6935,6934,6878,6879,6851,6891,6881,6930,6910,6932,6901,6940,6950,6920,7110,7120,7130,7140,7150) AND visible = b'0' AND deleted = b'0'"
+          probe_strict "抽空的11目录已收起V057" 11 "SELECT COUNT(*) FROM system_menu WHERE id IN (6810,6820,6830,6840,6850,6860,6870,6877,6880,6890,6900) AND visible = b'0' AND deleted = b'0'"
+          probe_strict "侧栏可见transport叶V057" 8 "SELECT COUNT(*) FROM system_menu WHERE parent_id = 6800 AND type = 2 AND visible = b'1' AND deleted = b'0'"
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
           echo "OK: 32 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
