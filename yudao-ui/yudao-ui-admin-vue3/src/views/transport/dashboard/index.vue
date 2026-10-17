@@ -184,7 +184,7 @@
           </template>
           <el-row :gutter="12">
             <el-col :md="4" :sm="8" :xs="12" v-for="item in quickLinks" :key="item.label" class="mb-12px">
-              <el-button class="w-full" @click="$router.push(item.path)">
+              <el-button class="w-full" @click="$router.push({ path: item.path, query: { tab: item.tab } })">
                 <Icon :icon="item.icon" class="mr-4px" />
                 {{ item.label }}
               </el-button>
@@ -254,16 +254,17 @@ const initSettleRange = () => {
 }
 
 const quickLinks = [
-  { label: '实时监控', path: '/transport/monitoring/map', icon: 'ep:map-location' },
-  // 六个管理入口必须指到**带组件的叶子**（`system_menu` 里 type=2）：
-  // `/transport/station` 那一档是目录节点（type=1、component=NULL），指过去只有一具空 Layout，
-  // 页面不报错、也不弹提示 —— 六个按钮六个空。真正的叶子 path 在菜单里是 `.../list`。
-  { label: '站点管理', path: '/transport/station/list', icon: 'ep:location' },
-  { label: '车辆管理', path: '/transport/vehicle/list', icon: 'ep:van' },
-  { label: '线路管理', path: '/transport/route/list', icon: 'ep:guide' },
-  { label: '司机管理', path: '/transport/driver/list', icon: 'ep:user' },
-  { label: '班次管理', path: '/transport/shift/list', icon: 'ep:clock' },
-  { label: '订单管理', path: '/transport/order/list', icon: 'ep:document' }
+  // 入口指到**工作台壳叶**（type=2、带组件），再用 `tab` 选中其中那一格。
+  // 两条老口径不作废：① 不许指目录节点（type=1、component=NULL），那一档点下去只有一具空 Layout，
+  // 六个按钮六个空（队列 #63）；② 被折叠的旧叶子（`/transport/station/list` 那些）只是
+  // `visible=0` 撤掉侧边栏入口，路由照样生成 —— 所以改指工作台不会打断任何既有深链（队列 #104）。
+  { label: '实时监控', path: '/transport/live-monitor', tab: 'map', icon: 'ep:map-location' },
+  { label: '站点管理', path: '/transport/capacity', tab: 'station', icon: 'ep:location' },
+  { label: '车辆管理', path: '/transport/capacity', tab: 'vehicle', icon: 'ep:van' },
+  { label: '线路管理', path: '/transport/capacity', tab: 'route', icon: 'ep:guide' },
+  { label: '司机管理', path: '/transport/capacity', tab: 'driver', icon: 'ep:user' },
+  { label: '班次管理', path: '/transport/capacity', tab: 'shift', icon: 'ep:clock' },
+  { label: '订单管理', path: '/transport/freight', tab: 'order', icon: 'ep:document' }
 ]
 
 // 「今日营收」这一格原来写的是 `Number(value ?? 0).toFixed(2)`：缺值会被念成 0.00 元，

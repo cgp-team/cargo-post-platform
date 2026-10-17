@@ -280,10 +280,19 @@ const onSelectOrder = async (row: any) => {
   }
 }
 
-/** 跳转到"运输拓扑"页看图形化运输链（带单号直接打开） */
+/**
+ * 跳到"运输拓扑"那一格看图形化运输链（带单号直接打开）。
+ * 目标从 `/transport/topology` 换成调度工作台的 `?tab=topology`：旧叶子还在（只是撤了侧边栏入口），
+ * 但两处入口给的是同一张图，跳到这里才不会让人以为有两个拓扑页。
+ * 拓扑页在 `onMounted` 里读的是 `route.query.orderId` —— 挂进壳里之后它拿到的是本壳这条路由，
+ * 参数照样读得到，所以这一跳不需要拓扑页配合改。
+ */
 const openTopology = () => {
   if (!topology.value?.orderId) return
-  router.push({ path: '/transport/topology', query: { orderId: topology.value.orderId } })
+  router.push({
+    path: '/transport/dispatch-desk',
+    query: { tab: 'topology', orderId: topology.value.orderId }
+  })
 }
 
 const onReplan = async (leg: any) => {

@@ -379,3 +379,85 @@ town-event（**UI 建成**：杨柳镇/赶集/2026-10-17）。
 **读数**：vitest `4→5` 文件 / `54→59` 用例；SFC 扫 68 只 0 失败；`vue-tsc` 0 错；eslint 0 error（7 条既有 warning）；
 `build:prod` rc=0（`dist-prod` **373→377**，assist 与 FAB 文案都在产物里）；15 本静态闸全 `rc=0`
 （页面计数 43→45 = 本轮新增两个 `.vue`，写按钮 21 不变）。
+
+### 13.9 · Web 端审计与导航集成（2026-10-17 上午，队列 #103–#105）
+
+用户的话是"我感觉页面有点多能不能集成一下"。审计先于动手，而**审计第一步就抓到自己的判据在低读**：
+
+| 读数 | 修前 | 修后 |
+|---|---|---|
+| `check_admin_dashboard_routes.py` 数到的 `system_menu` 行 | 68 | **94** |
+| 它认得的"可跳转叶子" | 21 | **37** |
+| 真实面（按两种 SQL 形状都数） | 页面叶子 **30**（transport 24 + `/ai` 5 + 会员 1）、目录 14、按钮 43 | — |
+
+根因：那本的正则把行首锚死了（`^\s*\(?\s*(\d{3,6})…`），于是只认 `VALUES (…)` 的单行形状；
+幂等迁移那种 `INSERT INTO … SELECT 7100, 'AI 辅助', …` **是折行写的**，整片没进集合 ⇒
+**`/ai/**` 五个页面对判据完全隐形**，钱包/计价规则/事件日历三个也是。它念"叶子 21 个"，真实是 30 个。
+第 12 本 `check_menu_id_collisions.py` 早就两种形状都认（它头部就写着"两处都覆盖到才叫判过"），
+第 11 本没有 —— 同一仓里的两本闸口径不齐。修法：按**语句**展平后再扫；
+并显式排除 `ruoyi-vue-pro.sql`（上游全量 schema，旧版因锚行首恰好一条都没读进来，
+这本一直在数本业务线的菜单面 —— 现在把这句话说在纸面上，不再靠正则的巧合）。
+这本此前**没有 `--self-test`**（其余各本都有）；补了五把刀，其中 K2/K3 是一对形状刀：
+K2「只有 `INSERT … SELECT` 形状的叶 ⇒ 认得，判绿」必须绿，K3「把那条去掉 ⇒ 必须红」证明 K2 的绿不是空转。
+
+**集成的形状**（三条口径，都是读代码定下来的，不是审美）：
+- **原页面一行不改**，以子组件挂进 tab 壳。`WorkbenchShell` 刻意不再包 `ContentWrap`：
+  各页自己带卡片和标题，再包一层就是两张卡两个标题。`lazy` 是必需的 —— 这些页都在 `onMounted` 拉列表，
+  一次挂七格 = 七个并发请求，而用户一次只看一格。
+- **旧叶不删、只 `visible = b'0'`**：`src/utils/routerHelper.ts:92` 是 `hidden: !route.visible` ⇒
+  隐藏只撤侧边栏入口，路由照样生成，`/transport/station/list` 这类既有深链一条不断；
+  回退不需要重放脚本，一条 `UPDATE … SET visible = b'1'`。
+- **被抽空的目录必须一起藏**：`layout/components/Menu/src/helper.ts:43` 在可见子节点为 0 时合成
+  `onlyOneChild = {…parent, noShowingChildren: true}` ⇒ 这一档渲染成**可点的单条**，点过去是
+  `type=1 / component=NULL` 的空 Layout —— 正是队列 #63 判红过的形状。只藏叶不藏目录，
+  等于把"六个按钮六个空"换成"十一个侧栏条目点了都白屏"。
+- **新叶 permission 一律留空，授权从被折叠的子叶去重继承** ⇒ 没有人因为这次合并多权或少权；
+  容器若要一个新权限位，就得给所有角色补发一次，那账号能看见的格反而和合并前不一致。
+  逐格筛用 `checkPermi` + `v-if` 而不是 `v-hasPermi`：`directives/permission/hasPermi.ts:8-21`
+  只在挂载时判一次、失败就 `removeChild`，且 `el-tab-pane` 的标签头由 `el-tabs` 依 props 生成 ——
+  删内容节点会留下空的 tab 头。仓内正确先例在 `views/infra/job/index.vue:140` 与
+  `views/system/user/index.vue:137`（用 `checkPermi` 做 `v-if/:disabled`）。
+
+30 个入口收成 **8 条侧栏 + 1 条 AI**：运力资源(7 格) / 调度(3) / 在途监控(2) / 货运与商品(4) /
+通知与反馈(3) / 规则与账务(3) / AI 工作台(5)，运营概览与智慧大屏保持独立（后者是全屏面，不是操作面）。
+看板 7 个快捷入口与调度中心的"看运输链"一跳都改成 `{path: 工作台, query: {tab: 那一格}}`。
+
+**V057 与它的探针**：`sql/incremental/V057__admin_workbench_menu.sql`（菜单 7160–7166，
+第 16 本实测：白名单 16→**17** 支、探针 34→**39** 格，**连跑两遍零行漂移**，39/39 对得上）。
+五格新探针钉的是"合并只动了导航层，没动权限"：七叶=7、超管拿到七叶=7、27 个旧叶已收起=27、
+11 个抽空目录已收起=11、侧栏可见 transport 叶=8。
+
+**浏览器点验（本机真栈：一次性库 + 后端 48080 + vite 5173 + Redis 6390，V057 已 apply 到一次性库）**：
+- 侧栏实测就是那 8 条，一条空目录都没留；
+- `?tab=` 深链成立：`/transport/capacity?tab=vehicle` 直接开在车辆那一格（7 格 tab 齐、列表出数）；
+- 逐组点过：调度（订单池真出 20+ 行，`待入池/已入池`）、在途监控（今日班次卡）、
+  货运与商品（货物交接）、通知与反馈（意见反馈）、规则与账务（事件日历）、AI 工作台（调用日志）；
+- tab 条 sticky 已生效（`getComputedStyle` 现读 `position=sticky / z-index=3`）；
+- **悬浮助手真跑通**：点开 → 填"村口的桥限高了，货车过不去，20 件快递压在揽收点" → 问一次分类
+  ⇒ 草稿 **`道路阻断`** + 依据句 + 那句"本页不写任何业务数据"；
+  同轮 `ai_invocation_log` 12→**13**（`order-semantic-classify | ok | 325 tokens`），
+  `transport_order` 前后都是 **766** ⇒ 草稿确实没有落进业务表。
+
+**五个需要模型的口对 MiMo（`mimo-v2.6-flash`）的真读数**：分类 / 归并 / 聚类 / 润色 四格
+`ready=true 且 parsed=true`（润色那格 `数字保留=true`，底稿表里的 4/120/3/87/207/12 一个没丢）；
+照片支撑度在没配 `buspost.ai.vision-model` 时 `ready=false` 并给原因
+（"没配时这一格不出结论，避免只看文字猜照片"）—— 没有拿模板话冒充结论。
+情景提示那一格走规则、不走模型：日历空的那天 `basis` 明说"没读到生效事件…平台不替这一格下结论"，
+有事件的 2026-10-17 出"杨柳镇：赶集"。
+
+**取数时踩到的一个环境坑（值得留着）**：`sql/promo/*.sql` 的 INSERT 写的是 `tenant_id = 0`，
+而 `transport_vehicle` / `transport_station` 这些 DO 继承 `TenantBaseDO` ⇒ 查询按租户过滤，
+`admin`（tenant_id=1）进去看全是空表，会被误读成"页面坏了"。本机点验前先灌 promo 再把
+`transport_* / member_*` 的 `tenant_id` 归到 1（只在一次性库里做）。
+
+**全量凭证（同轮实测）**：28 条静态闸命令（含新加的 `check_admin_dashboard_routes --self-test`）全 `rc=0`；
+SFC 扫 **251** 只 `.vue` 0 失败；`vue-tsc --noEmit` `rc=0`；`build:prod` `rc=0`（`dist-prod` 290 个 js，
+`capacity/dispatch-desk/live-monitor/rules-accounts` 这些路由串在产物里）；vitest **5 文件 / 59 用例** 全过；
+eslint 0 error（7 条既有 warning）。
+
+**这一格还欠着的**：① 云端 `mode=apply` V057 尚未执行（合并 ≠ 写库，见 §13.8 那条纪律）；
+② 云后台仍 `NOT VERIFIED IN BROWSER`（要用户拉一次滑块；本机点验不等于云上点验）；
+③ **像素级美化没验**：本机的浏览器面只有 534px 且截图面不可用（`visibilityState=hidden`），
+能测的是结构与计算样式（图表 canvas 431×280/320、无横向溢出、sticky 生效），
+不能测的是配色与观感 —— 那一格要么由用户看屏，要么等有可见视口再判，**不许凭手感说"好看了"**。
+
