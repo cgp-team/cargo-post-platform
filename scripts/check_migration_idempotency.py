@@ -10,15 +10,15 @@
   1. 开一次性库 → 照 `sql/mysql/` 的基线建好（与云上同一套 DDL）；
   2. 白名单跑第 1 遍，逐表精确 COUNT(*) 拍照；
   3. 白名单跑第 2 遍，再拍照 —— **任何一张表行数变了就是不幂等**（脚本失败另算）；
-  4. 把工作流里那 32 格 `probe_strict` 的原句在这个库上跑一遍，逐格对期望值
+  4. 把工作流里那 34 格 `probe_strict` 的原句在这个库上跑一遍，逐格对期望值
      ⇒ 顺带验了"探针写的是不是它以为在验的那件事"；
   5. DROP 一次性库。
 
 判据口径：
-  rc=0 两遍都干净、零漂移、32 格全对；
+  rc=0 两遍都干净、零漂移、34 格全对；
   rc=1 有脚本失败 / 有行数漂移 / 有探针对不上（红因逐条打印）；
   rc=2 **拒判**：找不到 mysql 客户端、连不上、读不到口令、基线文件缺失、
-       或从工作流里抽出来的白名单/探针数目与在册不符（15/32）—— 抽不到就不许报绿。
+       或从工作流里抽出来的白名单/探针数目与在册不符（16/34）—— 抽不到就不许报绿。
 
 本轮立案的实测（2026-10-16）：改之前第 2 遍 V037 直接 `ERROR 1061 Duplicate key name
 'idx_town_lookup'` 中断，`system_role_menu` 466 → 481（+15 行），6 格探针从 1 变 2。
@@ -39,8 +39,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WF = os.path.join(ROOT, ".github", "workflows", "db-migrate-guarded.yml")
 LOCAL_YAML = os.path.join(ROOT, "yudao-server", "src", "main", "resources", "application-local.yaml")
 SCRATCH = "buspost_mig_idem_check"
-EXPECT_WHITELIST = 15   # V029 不在册（那份迁移被明确排除）
-EXPECT_PROBES = 32
+EXPECT_WHITELIST = 16   # V029 不在册（那份迁移被明确排除）；V056 起 2026-10-17 加入
+EXPECT_PROBES = 34   # V056 加了 2 格（云管理员新号/旧号）
 
 BASELINE = [
     "sql/mysql/ruoyi-vue-pro.sql",
@@ -49,6 +49,9 @@ BASELINE = [
     "sql/mysql/transport-menu.sql",
     "sql/mysql/transport-multi-leg-menu.sql",
     "sql/mysql/cleanup-upstream-menus.sql",
+    # 云账号初始化：`docs/部署操作手册.md` 里那条把它打进云库（V001 会建 `cargo_admin`），
+    # 少了它 V056 的改名就空转、`cargoadmin` 那格探针永远数不到 1（第 16 本判据实测抓过这个洞）
+    "sql/cloud/V001__cloud_accounts_init.sql",
 ]
 
 

@@ -188,7 +188,8 @@ jobs:
                    sql/incremental/V051__ai_capacity_conflict_menu.sql \
                    sql/incremental/V052__ai_saved_query.sql \
                    sql/incremental/V053__ai_capability_menu.sql \
-                   sql/incremental/V054__ai_invocation_log.sql                    sql/incremental/V055__ai_task_menu.sql; do
+                   sql/incremental/V054__ai_invocation_log.sql                    sql/incremental/V055__ai_task_menu.sql \
+                   sql/incremental/V056__cloud_admin_username_alnum.sql; do
             # 显式 utf8mb4：容器内 mysql CLI 默认 character_set_client=latin1，
             # 不指定会把 UTF-8 脚本按 latin1 误读，中文列注释双重编码入库（那种坏是静默的）
             echo "Applying ${f} ..."
@@ -270,6 +271,10 @@ jobs:
           probe_strict "调用日志角色授权V054" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:invocation-log:query' AND rm.role_id=1"
           probe_strict "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe_strict "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
+          # V056：云管理员账号必须是纯数字字母（`AuthLoginReqVO` 上游 `^[a-zA-Z0-9]{4,30}$`，
+          # 带下划线的 `cargo_admin` 会在鉴权之前就被 400 挡掉 ⇒ 文档给用户的账号一次都登不进去）
+          probe_strict "云管理员新号cargoadmin" 1 "SELECT COUNT(*) FROM system_users WHERE username='cargoadmin' AND deleted = b'0'"
+          probe_strict "云管理员旧号已改名" 0 "SELECT COUNT(*) FROM system_users WHERE username='cargo_admin' AND deleted = b'0'"
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
           echo "OK: 32 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
