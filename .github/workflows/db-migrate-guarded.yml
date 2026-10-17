@@ -58,7 +58,76 @@ jobs:
     # 与 deploy-dev.yml 同一台 self-hosted runner（构建与部署同机），因此这里连的就是那台机器上的 compose 网络
     runs-on: [self-hosted, cargo-post]
     steps:
-      - uses: actions/checkout@v7
+      # ⚠ 这台 self-hosted runner 用 `actions/checkout` 是**碰运气**的：2026-10-17 连着两次
+      #   （run 38993433484 / 38993831556）都红在 `Run actions/checkout@v7` 这一步，而同机同时间窗的
+      #   `deploy-dev.yml` 一直是绿的 —— 差别不在网络"那一会儿好那一会儿坏"，在于 deploy-dev **根本不用**
+      #   actions/checkout（它那一步叫 "Checkout (racing parallel tarball)"）；而 `ci.yml` 的 checkout 绿
+      #   是因为它跑在 GitHub 托管 runner 上。上一轮把这件事记成"网络抖动"是不完整的归因（D-148），
+      #   真正的判据是：**用不用 actions/checkout**，与 v4/v7 无关（两个版本都在这台机器上红过）。
+      # 处置：主路仍走 actions/checkout（成功时最省事），失败时**落到 deploy-dev 那套已验证的竞速下载**，
+      #   而不是让整支迁移作业因为"拿不到源码"而红 —— apply 的白名单与探针全在 `sql/` 里，读不到文件=什么都没判。
+      - name: Checkout (actions/checkout，红则落到下面的竞速下载)
+        id: co
+        uses: actions/checkout@v7
+        continue-on-error: true
+
+      - name: "Checkout (fallback: racing parallel tarball —— 与 deploy-dev.yml 同一套)"
+        if: steps.co.outcome != 'success'
+        env:
+          REPO: ${{ github.repository }}
+          REF_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::warning title=checkout::actions/checkout 在这台 runner 上红了，落到竞速下载（服务器直连 github 每连接约 25KB/s 且随机被重置）"
+          cd "$GITHUB_WORKSPACE"
+          URL="https://api.github.com/repos/${REPO}/tarball/${REF_SHA}"
+          WORK=$(mktemp -d /tmp/checkout-XXXXXX)
+          trap 'rm -rf "${WORK}"' EXIT
+          DEADLINE=$(( $(date +%s) + 1800 ))
+
+          download_one() {
+            local i=$1
+            curl -sfL --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+              -H "Authorization: token ${CHECKOUT_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -o "${WORK}/part${i}.tgz" "${URL}" \
+              && gzip -t "${WORK}/part${i}.tgz" 2>/dev/null
+          }
+
+          winner=""
+          round=0
+          while [[ -z "${winner}" && $(date +%s) -lt ${DEADLINE} ]]; do
+            round=$((round + 1))
+            echo "=== race round ${round}: 8 streams ==="
+            pids=""
+            for i in $(seq 1 8); do
+              ( download_one $i && touch "${WORK}/part${i}.ok" ) &
+              pids="${pids} $!"
+            done
+            while [[ -z "${winner}" ]]; do
+              winner=$(ls "${WORK}"/part*.ok 2>/dev/null | sed -n 1p || true)
+              [[ -n "${winner}" ]] && break
+              alive=0
+              for p in ${pids}; do kill -0 "$p" 2>/dev/null && alive=$((alive+1)); done
+              [[ ${alive} -eq 0 ]] && break
+              [[ $(date +%s) -ge ${DEADLINE} ]] && break
+              sleep 10
+            done
+            for p in ${pids}; do kill "$p" 2>/dev/null || true; done
+            wait ${pids} 2>/dev/null || true
+          done
+
+          if [[ -z "${winner}" ]]; then
+            echo "::error::30 分钟内没能完整下到 tarball ⇒ 这支迁移作业拿不到 sql/，不跑（不是"迁移失败"，是"没跑"）"
+            exit 1
+          fi
+
+          tgz="${winner%.ok}.tgz"
+          echo "winner: ${tgz} ($(stat -c%s "${tgz}") bytes), extracting..."
+          find . -mindepth 1 -delete
+          tar -xzf "${tgz}" --strip-components=1
+          echo "Checkout (racing tarball) succeeded on round ${round}"
 
       - name: 守卫：默认只探测；apply 必须显式确认
         env:
