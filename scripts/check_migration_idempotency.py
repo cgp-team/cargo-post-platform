@@ -40,7 +40,8 @@ WF = os.path.join(ROOT, ".github", "workflows", "db-migrate-guarded.yml")
 LOCAL_YAML = os.path.join(ROOT, "yudao-server", "src", "main", "resources", "application-local.yaml")
 SCRATCH = "buspost_mig_idem_check"
 EXPECT_WHITELIST = 17   # V029 不在册（那份迁移被明确排除）；V057 起 2026-10-17 加入
-EXPECT_PROBES = 39   # V056 加 2 格（云管理员新号/旧号）、V057 加 5 格（七叶/超管授权/27 收起/11 目录/侧栏 8）
+EXPECT_PROBES = 38   # V057 加 5 格；2026-10-17 apply 实测把 `cargoadmin=1` 那格挪出必数集合（真因：V001 从没在这张库执行过，
+# V056 是改名、造不出本来就没有的号）⇒ 38，那一格改由只读 check 步打印
 
 BASELINE = [
     "sql/mysql/ruoyi-vue-pro.sql",

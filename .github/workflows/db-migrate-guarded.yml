@@ -313,10 +313,14 @@ jobs:
           MYSQL_EXEC=("${COMPOSE[@]}" exec -T -e MYSQL_PWD="${DB_PASSWORD}" mysql mysql --default-character-set=utf8mb4 -u root)
           REPORT="${RUNNER_TEMP:-.}/db_state_report.txt"
 
-          # 39 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
+          # 38 格 = 本步 probe_strict 的行数（不是"九格"那个旧账面：上游加了 V033/V034/V035 的
           # 六格、本轮把计价那两格换成"按权限 2 + 6940 + 6941 + 6930 归属"四格，再补 V053/V054 的
           # 5 格、去掉事件日历 3 格换 7100 目录 2 格；V056 加 2 格（云管理员新号/旧号）、
-          # V057 加 5 格（七个工作台叶、27 个收起的叶、11 个抽空目录、侧栏可见叶 8、超管授权 7）
+          # V057 加 5 格（七个工作台叶、27 个收起的叶、11 个抽空目录、侧栏可见叶 8、超管授权 7）；
+          # 2026-10-17 apply 实测（run 38996520420）之后**去掉 1 格**：`cargoadmin=1` 挪出必数集合。
+          # 不是改松凑绿 —— 同轮两格读数把根因钉死了：`cargo_admin` 与 `cargoadmin` **都是 0**，
+          # 两个名字都不在这张库上，真因是 V001 从没在这张云库执行过（它不在 apply 白名单里）；
+          # 而 V056 只做"把已存在的号改名"，它造不出一个本来就没有的号。那一格改由只读 check 步打印。
           # ⇒ 数要跟着实跑改，否则屏幕上念的格数和真正判的格数
           # 就是两个答案（台账 D-133）。第 16 本判据 `EXPECT_PROBES` 认的是同一个数。
           echo "--- 落地核对：apply 之后每一格都必须数满 ---" | tee -a "${REPORT}"
@@ -369,10 +373,16 @@ jobs:
           probe_strict "调用日志角色授权V054" 1 "SELECT COUNT(*) FROM system_role_menu rm JOIN system_menu m ON m.id=rm.menu_id WHERE m.permission='transport:ai:invocation-log:query' AND rm.role_id=1"
           probe_strict "V030注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_dispatch_plan_item' AND COLUMN_NAME='actual_arrival_time' AND COLUMN_COMMENT NOT LIKE '%司机完成装车%'"
           probe_strict "V033注释中文原样应为0" 0 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='transport_station' AND COLUMN_NAME='contact_name' AND COLUMN_COMMENT NOT LIKE '%揽收点联系人%'"
-          # V056：云管理员账号必须是纯数字字母（`AuthLoginReqVO` 上游 `^[a-zA-Z0-9]{4,30}$`，
-          # 带下划线的 `cargo_admin` 会在鉴权之前就被 400 挡掉 ⇒ 文档给用户的账号一次都登不进去）
-          probe_strict "云管理员新号cargoadmin" 1 "SELECT COUNT(*) FROM system_users WHERE username='cargoadmin' AND deleted = b'0'"
+          # V056：这一格判的是**真不变量** —— 库里不该有带下划线的管理员号（登录接口 `^[a-zA-Z0-9]{4,30}$`
+          # 会在鉴权之前把它 400 掉，用户按文档那个号一次都登不进去）。改名语句本身就是为这条服务的。
           probe_strict "云管理员旧号已改名" 0 "SELECT COUNT(*) FROM system_users WHERE username='cargo_admin' AND deleted = b'0'"
+          # ⚠ `cargoadmin` 那一格**从 apply 的必数集合里挪走了**，不是改松判据凑绿：
+          #   2026-10-17 apply 实测（run 38996520420，39 格全量读数已能读回）里 V057 五格全数满，
+          #   唯一红的是 `cargoadmin 现0/期望1` —— 同轮 `cargo_admin` 也读 0，两个名字都不在这张库上，
+          #   真因是 `sql/cloud/V001__cloud_accounts_init.sql` 从没在这张库执行过（它不在 apply 白名单里），
+          #   而 V056 是"把已存在的号改名"，它造不出一个本来就没有的号。
+          #   ⇒ 那一格改到**只读 check 步打印**（见上面的 probe），apply 不再因为它判红；
+          #     要不要在云上开这个号是人的决定（默认口令 + 公网），已写进 `docs/部署操作手册.md` 那段更正。
           # V057：导航集成。这五格判的是"合并只动了导航层，没动权限"这件事（队列 #104/#105）
           probe_strict "七个工作台叶V057" 7 "SELECT COUNT(*) FROM system_menu WHERE id BETWEEN 7160 AND 7166 AND deleted = b'0'"
           probe_strict "超管拿到七个工作台V057" 7 "SELECT COUNT(DISTINCT menu_id) FROM system_role_menu WHERE role_id = 1 AND menu_id BETWEEN 7160 AND 7166 AND deleted = b'0'"
@@ -384,7 +394,7 @@ jobs:
           # 发注解交给后面独立的一步 —— 实测同一步里第 11 条起就不存了。
           printf '%s' "${ALL_READS}" > "${RUNNER_TEMP:-.}/all_reads_verify.txt" 2>/dev/null || true
           [ "${MISSING}" = 0 ] || { echo "::error::${MISSING} 格没数满：迁移没落到这张库上，别当已完成（send/stations 与 bus/nearby 还会回 500）"; exit 1; }
-          echo "OK: 39 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
+          echo "OK: 38 格全数满，注释按 utf8mb4 原样入库" | tee -a "${REPORT}"
 
       - name: "DBSTATE 汇总读数（独立一步：同一步只留前 10 条注解）"
         if: always()
