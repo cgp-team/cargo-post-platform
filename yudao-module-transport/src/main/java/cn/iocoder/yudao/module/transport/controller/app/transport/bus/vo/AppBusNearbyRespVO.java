@@ -86,6 +86,9 @@ public class AppBusNearbyRespVO {
         @Schema(description = "班次编码")
         private String shiftCode;
 
+        @Schema(description = "线路编号（按线路名回查监控地图数据；查不到为 null，前端据此不给可点态）")
+        private Long routeId;
+
         @Schema(description = "线路名称")
         private String routeName;
 
@@ -154,6 +157,10 @@ public class AppBusNearbyRespVO {
     @Schema(description = "附近站点关联线路")
     @Data
     public static class NearbyLine {
+
+        @Schema(description = "线路编号：项目自建线路给得出（来自监控地图数据的线路 id）；"
+                + "现实公交（高德那一路）今天给不出，就是 null，前端据此不给\"看这条线\"的可点态")
+        private Long routeId;
 
         @Schema(description = "线路名称")
         private String routeName;

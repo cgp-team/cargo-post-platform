@@ -16,6 +16,10 @@ public class AppBusRespVO {
     @Schema(description = "班次编码（如 SH001）")
     private String shiftCode;
 
+    @Schema(description = "线路编号：后端按线路名回查监控地图数据得到（与 startStation/endStation 同一个 join）。"
+            + "查不到就是 null —— 前端据此不给\"看这条线\"的可点态，不许拿线路名自己编一个编号")
+    private Long routeId;
+
     @Schema(description = "线路名称")
     private String routeName;
 
