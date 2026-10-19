@@ -73,6 +73,7 @@ class AppBusServiceImplTest {
         // 地图数据：线路起点/终点
         MonitoringMapDataRespVO mapData = new MonitoringMapDataRespVO();
         MonitoringMapDataRespVO.Route route = new MonitoringMapDataRespVO.Route();
+        route.setId(41L);
         route.setRouteName("县城—青山镇线");
         MonitoringMapDataRespVO.Point start = new MonitoringMapDataRespVO.Point();
         start.setStationName("县城客运中心");
@@ -93,12 +94,53 @@ class AppBusServiceImplTest {
         assertEquals(7L, vo.getBusId());
         assertEquals("川A·5201", vo.getPlateNo());
         assertEquals("SH001", vo.getShiftCode());
+        // 线路编号：车辆只带 routeName，编号是后端按名字回查监控地图数据得到的（#110）。
+        // 前端拿它跳线路详情 —— 以前只能自己按名字回查，名字一错就点不进地图。
+        assertEquals(41L, vo.getRouteId());
         assertEquals("县城客运中心", vo.getStartStation());
         assertEquals("青山镇站", vo.getEndStation());
         assertEquals(1, vo.getStatus());
         assertEquals("红花村站", vo.getNextStation());
         assertEquals(30, vo.getEtaMinutes());
         assertEquals(40, vo.getProgress());
+    }
+
+    /**
+     * #110：线路名回查不上监控地图数据时，<b>编号与起终点一起不给</b>。
+     *
+     * 钉的是"同生同灭"这一条，不是"给不给得出编号"：join 上了三样一起给、join 不上三样一起 null。
+     * 半截形状（有起终点却没有编号）会长出一张看着完整、点了没反应的卡片 ——
+     * 那正是这条链路以前在真机上的表现（审计 §69）。
+     */
+    @Test
+    void realtimeBuses_routeIdAndStations_areGivenTogetherOrNotAtAll() {
+        MonitoringVehicleRespVO vehicle = new MonitoringVehicleRespVO();
+        vehicle.setVehicleId(8L);
+        vehicle.setShiftCode("SH009");
+        vehicle.setRouteName("查无此线");     // 监控地图数据里没有这条线
+        vehicle.setStatus(1);
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(vehicle));
+
+        MonitoringMapDataRespVO.Route other = new MonitoringMapDataRespVO.Route();
+        other.setId(99L);
+        other.setRouteName("县城—青山镇线");
+        MonitoringMapDataRespVO.Point start = new MonitoringMapDataRespVO.Point();
+        start.setStationName("县城客运中心");
+        other.setPoints(List.of(start));
+        MonitoringMapDataRespVO mapData = new MonitoringMapDataRespVO();
+        mapData.setRoutes(List.of(other));
+        when(monitoringService.getMapData()).thenReturn(mapData);
+        when(shiftMapper.selectList()).thenReturn(List.of());
+
+        List<AppBusRespVO> buses = appBusService.getRealtimeBuses();
+
+        assertEquals(1, buses.size());
+        AppBusRespVO vo = buses.get(0);
+        assertNull(vo.getRouteId());
+        assertNull(vo.getStartStation());
+        assertNull(vo.getEndStation());
+        // 名字仍然要给：前端拿它显示卡片标题，只是"看这条线"那一跳不能给
+        assertEquals("查无此线", vo.getRouteName());
     }
 
     @Test
@@ -302,6 +344,32 @@ class AppBusServiceImplTest {
         assertNotNull(resp.getNearestStation());
         assertEquals("红花村站", resp.getNearestStation().getName());
         assertEquals(AppBusNearbyRespVO.SOURCE_REAL, resp.getDataSource());
+    }
+
+    /**
+     * #110：{@code /bus/nearby} 的车辆卡片与项目自建线路都要带 {@code routeId}，
+     * 且两处的编号必须<b>是同一个值</b>（同一个 join 的产物，不是两次各自查名）。
+     *
+     * 反面对照：现实公交（高德那一路）今天给不出编号 —— 那条支路留 null，
+     * 由前端据此不给可点态，不许拿线路名编一个假编号顶上。
+     */
+    @Test
+    void nearby_vehicleAndProjectLine_carryTheSameRouteId() {
+        when(stationMapper.selectList()).thenReturn(List.of(
+                station(1L, "红花村站", 104.005, 30.0)));
+        MonitoringMapDataRespVO.Route route = route("R001",
+                List.of(point(1L, "红花村站", 104.005, 30.0), point(2L, "远山站", 104.5, 30.4)));
+        route.setId(77L);
+        when(monitoringService.getMapData()).thenReturn(mapData(route));
+        when(monitoringService.getRealtimeVehicles()).thenReturn(List.of(
+                vehicle(10L, 1, 104.006, 30.0, "SH001", "R001", "远山站", "REAL")));
+
+        AppBusNearbyRespVO resp = appBusService.getNearbyBuses(USER_LAT, USER_LON, 5000.0, null);
+
+        assertEquals(1, resp.getBuses().size());
+        assertEquals(77L, resp.getBuses().get(0).getRouteId());
+        assertFalse(resp.getLines().isEmpty(), "这一屏没有线路可给，下面那条断言就是空的");
+        assertEquals(77L, resp.getLines().get(0).getRouteId());
     }
 
     @Test

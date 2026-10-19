@@ -108,6 +108,9 @@ public class AppBusServiceImpl implements AppBusService {
                     vo.setRouteName(v.getRouteName());
                     MonitoringMapDataRespVO.Route route = v.getRouteName() == null ? null
                             : routeByName.get(v.getRouteName());
+                    // 线路编号与起终点是**同一个 join** 的产物：join 上了三样一起给，join 不上三样一起 null。
+                    // 分开给就会出现"有起终点却没有编号"那种卡片——看着完整、点了没反应。
+                    vo.setRouteId(route == null ? null : route.getId());
                     if (route != null && route.getPoints() != null && !route.getPoints().isEmpty()) {
                         vo.setStartStation(route.getPoints().get(0).getStationName());
                         vo.setEndStation(route.getPoints().get(route.getPoints().size() - 1).getStationName());
@@ -409,6 +412,8 @@ public class AppBusServiceImpl implements AppBusService {
             bus.setShiftCode(v.getShiftCode());
             bus.setRouteName(v.getRouteName());
             MonitoringMapDataRespVO.Route route = routeByName.get(v.getRouteName());
+            // 与上面那一路同一条规矩：编号与起终点同生同灭（见 AppBusRespVO.routeId 的注释）
+            bus.setRouteId(route == null ? null : route.getId());
             if (route != null && route.getPoints() != null && !route.getPoints().isEmpty()) {
                 bus.setStartStation(route.getPoints().get(0).getStationName());
                 bus.setEndStation(route.getPoints().get(route.getPoints().size() - 1).getStationName());
@@ -446,6 +451,9 @@ public class AppBusServiceImpl implements AppBusService {
                 }
                 for (TransitProvider.TransitLine line : provider.searchNearbyLines(latitude, longitude, radM)) {
                     AppBusNearbyRespVO.NearbyLine item = new AppBusNearbyRespVO.NearbyLine();
+                    // 现实公交（高德那一路）的 TransitLine 里根本没有编号这一维 ⇒ 只能留 null。
+                    // 前端据此不给可点态；要补这一格得先在高德线路查询里把 id 带回来（另开一格，不假装已做）。
+                    item.setRouteId(null);
                     item.setRouteName(line.routeName());
                     item.setStartStation(line.startStation());
                     item.setEndStation(line.endStation());
@@ -607,6 +615,7 @@ public class AppBusServiceImpl implements AppBusService {
                 .filter(r -> nearbyRouteNames.contains(r.getRouteName()))
                 .map(r -> {
                     AppBusNearbyRespVO.NearbyLine line = new AppBusNearbyRespVO.NearbyLine();
+                    line.setRouteId(r.getId());
                     line.setRouteName(r.getRouteName());
                     List<MonitoringMapDataRespVO.Point> pts = r.getPoints() == null ? List.of() : r.getPoints();
                     line.setStartStation(pts.isEmpty() ? null : pts.get(0).getStationName());
